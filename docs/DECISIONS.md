@@ -2238,3 +2238,49 @@ Before vibecoding begins, the following are considered locked:
 **From this point onward, the implementation agent should treat this file as the engineering decision boundary.**
 
 Any deviation must be explicit, justified, documented, and reflected in the affected architecture/tests.
+# 74. Source Discrepancy: Supplied PDF is BNSS, not BNS (2026-08-30)
+
+The assignment-supplied file `data/raw/BNS_bare_act_2023.pdf` was inspected
+(sha256 `5e60e2afe30d0fe7eca4f8126301146b76c86a444e690581f81eb564843517fe`,
+249 pages). Page 1 reads "THE BHARATIYA NAGARIK SURAKSHA SANHITA, 2023 / NO. 46
+OF 2023 / An Act to consolidate and amend the law relating to Criminal
+Procedure" — this is **BNSS** (criminal procedure), not the required **BNS**
+(substantive penal law, No. 45 of 2023, 358 sections). The file name does not
+match its contents.
+
+Decision (per project owner, pending clarification from DhronAI):
+
+- Do NOT download or substitute any other legal PDF (SRC-002/SRC-003).
+- Do NOT rename or redefine the current file as BNS; the assignment corpus
+  remains BNS. Final BNS corpus validation is **BLOCKED** until the correct
+  source is confirmed.
+- The BNSS PDF is used strictly as a temporary development fixture: it shares
+  the Gazette layout (marginal notes, chrome, printed page numbers), so it
+  exercises the real ingestion pipeline while the correct source is awaited.
+- The pipeline is spec-driven (`CorpusSpec`): swapping in the real BNS PDF and
+  rerunning `scripts/ingest.py --spec bns` requires no application-code
+  changes. The pipeline rejects the BNSS file under the BNS spec
+  (content-based act-title validation, never filename).
+
+# 75. Ingestion Heuristics (2026-08-30)
+
+- **Hyphenated line wraps (A1-034):** a trailing hyphen before a
+  lowercase-continuation line is merged, *keeping the hyphen*. Removing it
+  would alter statutory wording ("Sub-registrar" → "Subregistrar"), which
+  legal-integrity rules forbid.
+- **Marginal-note titles (A1-033/A1-036):** Gazette marginal notes surface in
+  the text layer as short note-like lines interleaved after sentence-terminal
+  lines or at page tail. Clusters (final line ending ".") are associated in
+  order with untitled sections; pure citation clusters ("1 of 1871.") are
+  dropped. Uncertain associations set `title_confident=False` /
+  `needs_review=True` and emit warnings — never silently guessed.
+- **Overlap strategy (A1-029):** no arbitrary character overlap (D-020).
+  Split chunks carry full parent metadata (act/chapter/section/pages) as
+  context; oversized units without a subsection boundary stay whole with a
+  warning.
+- **Cross-references (A1-037/038):** detected at ingestion, stored as
+  normalized strings in `references[]`; resolution deferred to query time
+  (D-021).
+- **Embedding/index seams:** `EmbeddingProvider` and `ChunkIndex` protocols
+  are the Phase 3 integration points (BGE + Qdrant wired, deterministic JSONL
+  sink default).

@@ -52,15 +52,15 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| SRC-001 | MUST | Use Bharatiya Nyaya Sanhita, 2023 as primary corpus | BNS is the primary legal retrieval corpus | TODO |
-| SRC-002 | MUST | Use the official bare-act PDF specified by the assignment | The exact supplied PDF is used | TODO |
-| SRC-003 | MUST | Do not substitute a differently paginated copy | No alternate BNS PDF is used | TODO |
+| SRC-001 | MUST | Use Bharatiya Nyaya Sanhita, 2023 as primary corpus | BNS is the primary legal retrieval corpus | BLOCKED |
+| SRC-002 | MUST | Use the official bare-act PDF specified by the assignment | The exact supplied PDF is used | BLOCKED |
+| SRC-003 | MUST | Do not substitute a differently paginated copy | No alternate BNS PDF is used | BLOCKED |
 | SRC-004 | MUST | Use pages 190–249 as the expected forms range | Forms extraction initially targets pages 190–249 | TODO |
 | SRC-005 | MUST | Treat the actual page contents as authoritative for form parsing | Parser detects what is actually on each page | TODO |
 | SRC-006 | MUST | Do not assume the form pages solely from statute identity | Parser is content-driven rather than statute-name-driven | TODO |
-| SRC-007 | MUST | Document any disagreement between observed and expected forms range | Discrepancy is recorded in `DECISIONS.md` | TODO |
-| SRC-008 | MUST | Keep source PDF out of Git | Raw PDF is gitignored | TODO |
-| SRC-009 | MUST | Make source retrieval/ingestion reproducible | Bootstrap/ingestion process obtains/processes the source deterministically | TODO |
+| SRC-007 | MUST | Document any disagreement between observed and expected forms range | Discrepancy is recorded in `DECISIONS.md` | DONE |
+| SRC-008 | MUST | Keep source PDF out of Git | Raw PDF is gitignored | DONE |
+| SRC-009 | MUST | Make source retrieval/ingestion reproducible | Bootstrap/ingestion process obtains/processes the source deterministically | DONE |
 
 ---
 
@@ -70,44 +70,44 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| A1-001 | MUST | Do not use naive `RecursiveCharacterTextSplitter(chunk_size=512)` as the statutory chunking strategy | Chunking understands statutory structure | TODO |
-| A1-002 | MUST | Extract structured statutory metadata per chunk | Required metadata is present in stored chunks | TODO |
-| A1-003 | MUST | Preserve `act` | Chunk contains act name | TODO |
-| A1-004 | MUST | Preserve `act_short` | Chunk contains `BNS` | TODO |
-| A1-005 | MUST | Preserve `chapter` | Chapter identifier is retained | TODO |
-| A1-006 | MUST | Preserve `chapter_title` | Chapter title is retained | TODO |
-| A1-007 | MUST | Preserve `section_number` | Section number is retained | TODO |
-| A1-008 | MUST | Preserve `section_title` | Section title is retained | TODO |
-| A1-009 | MUST | Preserve `subsection` where applicable | Subsection metadata is retained | TODO |
-| A1-010 | MUST | Preserve `clause` where applicable | Clause metadata is retained | TODO |
-| A1-011 | MUST | Preserve chunk `text` | Actual chunk text is retained | TODO |
-| A1-012 | MUST | Preserve `has_illustration` | Boolean/appropriate indicator is stored | TODO |
-| A1-013 | MUST | Preserve `has_proviso` | Boolean/appropriate indicator is stored | TODO |
-| A1-014 | MUST | Preserve `has_exception` | Boolean/appropriate indicator is stored | TODO |
-| A1-015 | MUST | Preserve `page_start` | Source starting page is stored | TODO |
-| A1-016 | MUST | Preserve `page_end` | Source ending page is stored | TODO |
-| A1-017 | MUST | Generate a stable `chunk_id` | Each chunk has a unique deterministic identifier | TODO |
-| A1-018 | MUST | Preserve `source_uri` | Source reference is stored | TODO |
-| A1-019 | MUST | Preserve `ingested_at` | Ingestion timestamp is stored | TODO |
-| A1-020 | MUST | Treat a legal section as the atomic chunking unit | Short sections remain whole | TODO |
-| A1-021 | MUST | Never split a section shorter than maximum chunk size | Short section remains one chunk | TODO |
-| A1-022 | MUST | Split long sections only at subsection/clause boundaries | Long section boundaries follow legal structure | TODO |
-| A1-023 | MUST | Never split long statutory text mid-sentence | No sentence is broken merely for chunk size | TODO |
-| A1-024 | MUST | Keep provisos attached to parent section | Retrieved chunk containing proviso retains parent section context | TODO |
-| A1-025 | MUST | Keep exceptions attached to parent section | Retrieved exception remains attached | TODO |
-| A1-026 | MUST | Keep explanations attached to parent section | Explanation remains attached | TODO |
-| A1-027 | MUST | Keep illustrations attached to parent section | Illustration remains attached | TODO |
-| A1-028 | MUST | Avoid orphaned legal components | No proviso/exception/explanation/illustration becomes an independent misleading retrieval unit | TODO |
-| A1-029 | DECISION | Choose an overlap strategy | Strategy is implemented and justified in `DECISIONS.md` | TODO |
-| A1-030 | MUST | Handle running headers | Headers do not contaminate legal chunk text | TODO |
-| A1-031 | MUST | Handle running footers | Footers do not contaminate legal chunk text | TODO |
-| A1-032 | MUST | Handle page numbers | Page numbers do not contaminate legal content | TODO |
-| A1-033 | MUST | Handle marginal notes | Marginal notes are correctly handled | TODO |
-| A1-034 | MUST | Handle hyphenated line breaks | Broken words across PDF lines are reconstructed appropriately | TODO |
-| A1-035 | MUST | Handle two-column layout if present | Text order remains correct if source uses columns | TODO |
-| A1-036 | MUST | Correctly associate section numbers with section titles | Section metadata pairing is correct | TODO |
-| A1-037 | MUST | Detect cross-references inside statutory text | References such as `section 2(11)` are identified | TODO |
-| A1-038 | MUST | Store cross-references in a `references` array | Chunk metadata contains detected references | TODO |
+| A1-001 | MUST | Do not use naive `RecursiveCharacterTextSplitter(chunk_size=512)` as the statutory chunking strategy | Chunking understands statutory structure | DONE |
+| A1-002 | MUST | Extract structured statutory metadata per chunk | Required metadata is present in stored chunks | DONE |
+| A1-003 | MUST | Preserve `act` | Chunk contains act name | DONE |
+| A1-004 | MUST | Preserve `act_short` | Chunk contains `BNS` | DONE |
+| A1-005 | MUST | Preserve `chapter` | Chapter identifier is retained | DONE |
+| A1-006 | MUST | Preserve `chapter_title` | Chapter title is retained | DONE |
+| A1-007 | MUST | Preserve `section_number` | Section number is retained | DONE |
+| A1-008 | MUST | Preserve `section_title` | Section title is retained | DONE |
+| A1-009 | MUST | Preserve `subsection` where applicable | Subsection metadata is retained | DONE |
+| A1-010 | MUST | Preserve `clause` where applicable | Clause metadata is retained | DONE |
+| A1-011 | MUST | Preserve chunk `text` | Actual chunk text is retained | DONE |
+| A1-012 | MUST | Preserve `has_illustration` | Boolean/appropriate indicator is stored | DONE |
+| A1-013 | MUST | Preserve `has_proviso` | Boolean/appropriate indicator is stored | DONE |
+| A1-014 | MUST | Preserve `has_exception` | Boolean/appropriate indicator is stored | DONE |
+| A1-015 | MUST | Preserve `page_start` | Source starting page is stored | DONE |
+| A1-016 | MUST | Preserve `page_end` | Source ending page is stored | DONE |
+| A1-017 | MUST | Generate a stable `chunk_id` | Each chunk has a unique deterministic identifier | DONE |
+| A1-018 | MUST | Preserve `source_uri` | Source reference is stored | DONE |
+| A1-019 | MUST | Preserve `ingested_at` | Ingestion timestamp is stored | DONE |
+| A1-020 | MUST | Treat a legal section as the atomic chunking unit | Short sections remain whole | DONE |
+| A1-021 | MUST | Never split a section shorter than maximum chunk size | Short section remains one chunk | DONE |
+| A1-022 | MUST | Split long sections only at subsection/clause boundaries | Long section boundaries follow legal structure | DONE |
+| A1-023 | MUST | Never split long statutory text mid-sentence | No sentence is broken merely for chunk size | DONE |
+| A1-024 | MUST | Keep provisos attached to parent section | Retrieved chunk containing proviso retains parent section context | DONE |
+| A1-025 | MUST | Keep exceptions attached to parent section | Retrieved exception remains attached | DONE |
+| A1-026 | MUST | Keep explanations attached to parent section | Explanation remains attached | DONE |
+| A1-027 | MUST | Keep illustrations attached to parent section | Illustration remains attached | DONE |
+| A1-028 | MUST | Avoid orphaned legal components | No proviso/exception/explanation/illustration becomes an independent misleading retrieval unit | DONE |
+| A1-029 | DECISION | Choose an overlap strategy | Strategy is implemented and justified in `DECISIONS.md` | DONE |
+| A1-030 | MUST | Handle running headers | Headers do not contaminate legal chunk text | DONE |
+| A1-031 | MUST | Handle running footers | Footers do not contaminate legal chunk text | DONE |
+| A1-032 | MUST | Handle page numbers | Page numbers do not contaminate legal content | DONE |
+| A1-033 | MUST | Handle marginal notes | Marginal notes are correctly handled | DONE |
+| A1-034 | MUST | Handle hyphenated line breaks | Broken words across PDF lines are reconstructed appropriately | DONE |
+| A1-035 | MUST | Handle two-column layout if present | Text order remains correct if source uses columns | DONE (source is single-column; N/A) |
+| A1-036 | MUST | Correctly associate section numbers with section titles | Section metadata pairing is correct | DONE |
+| A1-037 | MUST | Detect cross-references inside statutory text | References such as `section 2(11)` are identified | DONE |
+| A1-038 | MUST | Store cross-references in a `references` array | Chunk metadata contains detected references | DONE |
 | A1-039 | BONUS | Resolve cross-references at query time | Related referenced sections can be resolved during retrieval | TODO |
 
 ## A2. Embeddings
@@ -317,10 +317,10 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| D-001 | MUST | Use FastAPI/Python or NestJS/Express/Node | Backend uses an allowed framework | TODO |
-| D-002 | MUST | Backend is asynchronous | Async request/processing model is used where required | TODO |
-| D-003 | MUST | Backend is typed | Type annotations/type checking are used | TODO |
-| D-004 | MUST | Backend API is documented | OpenAPI documentation is available | TODO |
+| D-001 | MUST | Use FastAPI/Python or NestJS/Express/Node | Backend uses an allowed framework | DONE |
+| D-002 | MUST | Backend is asynchronous | Async request/processing model is used where required | DONE |
+| D-003 | MUST | Backend is typed | Type annotations/type checking are used | DONE |
+| D-004 | MUST | Backend API is documented | OpenAPI documentation is available | DONE |
 
 ## Required Endpoints
 
@@ -349,11 +349,11 @@
 | D-025 | MUST | `POST /api/v1/feedback` exists | Feedback endpoint works | TODO |
 | D-026 | MUST | Feedback supports thumbs up/down | Vote is persisted | TODO |
 | D-027 | MUST | Feedback supports optional text | Optional comment is persisted | TODO |
-| D-028 | MUST | `GET /api/v1/health` exists | Liveness endpoint responds | TODO |
-| D-029 | MUST | `GET /api/v1/health/ready` exists | Readiness endpoint responds | TODO |
-| D-030 | MUST | Readiness checks vector DB | Vector DB dependency is checked | TODO |
-| D-031 | MUST | Readiness checks model | Model/provider readiness is checked | TODO |
-| D-032 | MUST | Readiness checks storage | Storage readiness is checked | TODO |
+| D-028 | MUST | `GET /api/v1/health` exists | Liveness endpoint responds | DONE |
+| D-029 | MUST | `GET /api/v1/health/ready` exists | Readiness endpoint responds | DONE |
+| D-030 | MUST | Readiness checks vector DB | Vector DB dependency is checked | PARTIAL |
+| D-031 | MUST | Readiness checks model | Model/provider readiness is checked | PARTIAL |
+| D-032 | MUST | Readiness checks storage | Storage readiness is checked | PARTIAL |
 | D-033 | MUST | `GET /api/v1/metrics` exists | Endpoint responds | TODO |
 | D-034 | MUST | Metrics endpoint uses Prometheus format | Metrics can be scraped | TODO |
 
@@ -392,11 +392,11 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| D-051 | MUST | Use structured JSON logs | Logs are machine-readable JSON | TODO |
-| D-052 | MUST | Generate request ID | Each request has an identifier | TODO |
+| D-051 | MUST | Use structured JSON logs | Logs are machine-readable JSON | DONE |
+| D-052 | MUST | Generate request ID | Each request has an identifier | DONE |
 | D-053 | MUST | Propagate request ID through retrieval | Retrieval logs retain request ID | TODO |
 | D-054 | MUST | Propagate request ID through generation | Generation logs retain request ID | TODO |
-| D-055 | MUST | Make OpenAPI docs work at `/docs` | `/docs` loads usable API documentation | TODO |
+| D-055 | MUST | Make OpenAPI docs work at `/docs` | `/docs` loads usable API documentation | DONE |
 
 ---
 
@@ -433,9 +433,9 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| LLM-001 | DECISION | Choose an LLM provider | Provider is documented | TODO |
-| LLM-002 | MUST | Put LLM provider behind an interface | Application calls an abstraction rather than hardcoded provider implementation | TODO |
-| LLM-003 | MUST | Provider must be swappable by environment variable | Provider can be changed through configuration | TODO |
+| LLM-001 | DECISION | Choose an LLM provider | Provider is documented | PARTIAL |
+| LLM-002 | MUST | Put LLM provider behind an interface | Application calls an abstraction rather than hardcoded provider implementation | DONE |
+| LLM-003 | MUST | Provider must be swappable by environment variable | Provider can be changed through configuration | DONE |
 | LLM-004 | MUST | Document free-tier execution path | Reviewer can run without paid API access where applicable | TODO |
 | LLM-005 | MUST | Include Ollama path | Reviewer can evaluate without your API key | TODO |
 
@@ -508,9 +508,9 @@
 | SEC-002 | MUST | Never commit API keys | Repository contains no keys | TODO |
 | SEC-003 | MUST | Never commit credentials | Repository contains no credentials | TODO |
 | SEC-004 | MUST | Treat committed secret as release blocker | Submission is not made while secret exists | TODO |
-| SEC-005 | MUST | Provide complete `.env.example` | All variables are listed | TODO |
+| SEC-005 | MUST | Provide complete `.env.example` | All variables are listed | DONE |
 | SEC-006 | MUST | Document purpose of every env variable | Variable table is complete | TODO |
-| SEC-007 | MUST | Provide safe default for every env variable where applicable | Defaults do not expose secrets | TODO |
+| SEC-007 | MUST | Provide safe default for every env variable where applicable | Defaults do not expose secrets | DONE |
 | SEC-008 | MUST | Store CI secrets in GitHub Secrets | Workflow does not hardcode secrets | TODO |
 | SEC-009 | MUST | Store Vercel secrets in project env vars | Secrets are not committed | TODO |
 | SEC-010 | MUST | If a secret is accidentally committed, rotate it | Credential is invalidated/replaced | TODO |
@@ -583,16 +583,16 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| T-001 | MUST | Use an appropriate test framework | pytest/vitest or suitable equivalent is configured | TODO |
-| T-002 | MUST | Unit-test section boundary preservation | Test fails if chunker crosses required boundaries | TODO |
-| T-003 | MUST | Unit-test proviso attachment | Test verifies proviso remains with parent section | TODO |
+| T-001 | MUST | Use an appropriate test framework | pytest/vitest or suitable equivalent is configured | DONE |
+| T-002 | MUST | Unit-test section boundary preservation | Test fails if chunker crosses required boundaries | DONE |
+| T-003 | MUST | Unit-test proviso attachment | Test verifies proviso remains with parent section | DONE |
 | T-004 | MUST | Unit-test slugifier punctuation handling | Fixture covers punctuation | TODO |
 | T-005 | MUST | Unit-test forms title extraction | Fixture verifies correct title | TODO |
 | T-006 | MUST | Integration-test vector DB round-trip | Write/index/retrieve path works | TODO |
-| T-007 | MUST | API-test every endpoint | Required endpoints have tests | TODO |
-| T-008 | MUST | API tests cover happy paths | Valid requests succeed | TODO |
+| T-007 | MUST | API-test every endpoint | Required endpoints have tests | PARTIAL |
+| T-008 | MUST | API tests cover happy paths | Valid requests succeed | DONE |
 | T-009 | MUST | API tests cover auth/ownership failure | Unauthorized document access is rejected | TODO |
-| T-010 | MUST | API tests cover validation failure | Invalid inputs produce expected errors | TODO |
+| T-010 | MUST | API tests cover validation failure | Invalid inputs produce expected errors | DONE |
 | T-011 | MUST | Run a small retrieval assertion set from golden file in CI | CI executes retrieval assertions | TODO |
 | T-012 | MUST | Provide one end-to-end test | Test covers upload → ready → query → cited answer | TODO |
 
@@ -603,15 +603,15 @@
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
 | R-001 | MUST | Provide `frontend/` | React application exists there | TODO |
-| R-002 | MUST | Provide `backend/app/api/` | API routers live there | TODO |
-| R-003 | MUST | Provide `backend/app/core/` | Config/security/dependencies live there | TODO |
+| R-002 | MUST | Provide `backend/app/api/` | API routers live there | DONE |
+| R-003 | MUST | Provide `backend/app/core/` | Config/security/dependencies live there | DONE |
 | R-004 | MUST | Provide `backend/app/ingestion/` | PDF parsing and structure-aware chunking live there | TODO |
 | R-005 | MUST | Provide `backend/app/forms/` | Forms pages 190–249 pipeline lives there | TODO |
 | R-006 | MUST | Provide `backend/app/retrieval/` | Hybrid search/rerank/routing live there | TODO |
 | R-007 | MUST | Provide `backend/app/llm/` | Provider abstraction/prompts/guards live there | TODO |
 | R-008 | MUST | Provide `backend/app/workers/` | Async ingestion jobs live there | TODO |
-| R-009 | MUST | Provide `backend/app/main.py` | Application entry point exists | TODO |
-| R-010 | MUST | Provide `backend/tests/` | Backend tests live there | TODO |
+| R-009 | MUST | Provide `backend/app/main.py` | Application entry point exists | DONE |
+| R-010 | MUST | Provide `backend/tests/` | Backend tests live there | DONE |
 | R-011 | MUST | Provide `eval/golden_set.jsonl` | Golden dataset exists | TODO |
 | R-012 | MUST | Provide `eval/run_eval.py` | Evaluation runner exists | TODO |
 | R-013 | MUST | Provide `eval/results/` | Evaluation results are stored | TODO |
@@ -624,7 +624,7 @@
 | R-020 | MUST | Provide `scripts/extract_forms.py` | Forms extraction script exists | TODO |
 | R-021 | MUST | Provide `.github/workflows/` | CI workflows exist | TODO |
 | R-022 | MUST | Provide `docker-compose.yml` | Compose definition exists | TODO |
-| R-023 | MUST | Provide `.env.example` | Environment template exists | TODO |
+| R-023 | MUST | Provide `.env.example` | Environment template exists | DONE |
 | R-024 | MUST | Provide `README.md` | README exists | TODO |
 | R-025 | MUST | Provide `ARCHITECTURE.md` | Architecture document exists | TODO |
 | R-026 | MUST | Provide `DECISIONS.md` | Decision log exists | TODO |

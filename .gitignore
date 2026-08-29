@@ -17,6 +17,12 @@ dist/
 *.sqlite
 *.sqlite3
 
+# Source PDFs and ingestion artifacts (R-014/R-015, SRC-008): large binaries,
+# reproducible from source, and the raw corpus must never enter Git history.
+data/raw/
+data/forms/
+data/processed/
+
 # Models / generated artifacts
 *.safetensors
 *.bin
@@ -26,3 +32,4 @@ dist/
 # Environment
 .env
 .venv/
+.codescout/credentials.json

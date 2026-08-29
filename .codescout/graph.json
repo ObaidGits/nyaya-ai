@@ -1,0 +1,416 @@
+{
+  "schemaVersion": "2.2.0",
+  "nodes": {
+    "AGENTS.md": {
+      "file": "AGENTS.md",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "CLAUDE.md": {
+      "file": "CLAUDE.md",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "README.md": {
+      "file": "README.md",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/app/__init__.py": {
+      "file": "backend/app/__init__.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/app/api/__init__.py": {
+      "file": "backend/app/api/__init__.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [
+        "backend/app/api/v1/__init__.py"
+      ],
+      "edges": []
+    },
+    "backend/app/api/deps.py": {
+      "file": "backend/app/api/deps.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [
+        "backend/app/api/v1/health.py"
+      ],
+      "edges": []
+    },
+    "backend/app/api/v1/__init__.py": {
+      "file": "backend/app/api/v1/__init__.py",
+      "imports": [
+        "backend/app/api/__init__.py"
+      ],
+      "exports": [],
+      "dependents": [
+        "backend/app/api/v1/router.py"
+      ],
+      "edges": []
+    },
+    "backend/app/api/v1/health.py": {
+      "file": "backend/app/api/v1/health.py",
+      "imports": [
+        "backend/app/api/deps.py",
+        "backend/app/core/health.py"
+      ],
+      "exports": [],
+      "dependents": [
+        "backend/app/api/v1/router.py"
+      ],
+      "edges": []
+    },
+    "backend/app/api/v1/router.py": {
+      "file": "backend/app/api/v1/router.py",
+      "imports": [
+        "backend/app/api/v1/__init__.py",
+        "backend/app/api/v1/health.py"
+      ],
+      "exports": [],
+      "dependents": [
+        "backend/app/main.py"
+      ],
+      "edges": []
+    },
+    "backend/app/core/__init__.py": {
+      "file": "backend/app/core/__init__.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/app/core/config.py": {
+      "file": "backend/app/core/config.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [
+        "backend/app/core/health.py",
+        "backend/app/core/logging.py",
+        "backend/app/main.py",
+        "backend/tests/test_config.py"
+      ],
+      "edges": []
+    },
+    "backend/app/core/errors.py": {
+      "file": "backend/app/core/errors.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [
+        "backend/app/main.py",
+        "backend/tests/test_errors.py"
+      ],
+      "edges": []
+    },
+    "backend/app/core/health.py": {
+      "file": "backend/app/core/health.py",
+      "imports": [
+        "backend/app/core/config.py"
+      ],
+      "exports": [],
+      "dependents": [
+        "backend/app/api/v1/health.py"
+      ],
+      "edges": []
+    },
+    "backend/app/core/logging.py": {
+      "file": "backend/app/core/logging.py",
+      "imports": [
+        "backend/app/core/config.py"
+      ],
+      "exports": [],
+      "dependents": [
+        "backend/app/main.py",
+        "backend/tests/test_logging.py"
+      ],
+      "edges": []
+    },
+    "backend/app/core/request_id.py": {
+      "file": "backend/app/core/request_id.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [
+        "backend/app/main.py",
+        "backend/tests/test_request_id.py"
+      ],
+      "edges": []
+    },
+    "backend/app/domain/__init__.py": {
+      "file": "backend/app/domain/__init__.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/app/domain/models.py": {
+      "file": "backend/app/domain/models.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [
+        "backend/tests/test_domain.py"
+      ],
+      "edges": []
+    },
+    "backend/app/forms/__init__.py": {
+      "file": "backend/app/forms/__init__.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/app/ingestion/__init__.py": {
+      "file": "backend/app/ingestion/__init__.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/app/llm/__init__.py": {
+      "file": "backend/app/llm/__init__.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/app/llm/base.py": {
+      "file": "backend/app/llm/base.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [
+        "backend/app/llm/registry.py",
+        "backend/tests/test_llm.py"
+      ],
+      "edges": []
+    },
+    "backend/app/llm/registry.py": {
+      "file": "backend/app/llm/registry.py",
+      "imports": [
+        "backend/app/llm/base.py"
+      ],
+      "exports": [],
+      "dependents": [
+        "backend/tests/test_llm.py"
+      ],
+      "edges": []
+    },
+    "backend/app/main.py": {
+      "file": "backend/app/main.py",
+      "imports": [
+        "backend/app/api/v1/router.py",
+        "backend/app/core/config.py",
+        "backend/app/core/errors.py",
+        "backend/app/core/logging.py",
+        "backend/app/core/request_id.py"
+      ],
+      "exports": [],
+      "dependents": [
+        "backend/tests/test_app.py"
+      ],
+      "edges": []
+    },
+    "backend/app/retrieval/__init__.py": {
+      "file": "backend/app/retrieval/__init__.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/app/workers/__init__.py": {
+      "file": "backend/app/workers/__init__.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/tests/conftest.py": {
+      "file": "backend/tests/conftest.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/tests/test_app.py": {
+      "file": "backend/tests/test_app.py",
+      "imports": [
+        "backend/app/main.py"
+      ],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/tests/test_config.py": {
+      "file": "backend/tests/test_config.py",
+      "imports": [
+        "backend/app/core/config.py"
+      ],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/tests/test_domain.py": {
+      "file": "backend/tests/test_domain.py",
+      "imports": [
+        "backend/app/domain/models.py"
+      ],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/tests/test_errors.py": {
+      "file": "backend/tests/test_errors.py",
+      "imports": [
+        "backend/app/core/errors.py"
+      ],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/tests/test_health.py": {
+      "file": "backend/tests/test_health.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/tests/test_llm.py": {
+      "file": "backend/tests/test_llm.py",
+      "imports": [
+        "backend/app/llm/base.py",
+        "backend/app/llm/registry.py"
+      ],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/tests/test_logging.py": {
+      "file": "backend/tests/test_logging.py",
+      "imports": [
+        "backend/app/core/logging.py"
+      ],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "backend/tests/test_request_id.py": {
+      "file": "backend/tests/test_request_id.py",
+      "imports": [
+        "backend/app/core/request_id.py"
+      ],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "docs/AI_RULES.md": {
+      "file": "docs/AI_RULES.md",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "docs/ARCHITECTURE.md": {
+      "file": "docs/ARCHITECTURE.md",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "docs/DECISIONS.md": {
+      "file": "docs/DECISIONS.md",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "docs/IMPLEMENTATION_PLAN.md": {
+      "file": "docs/IMPLEMENTATION_PLAN.md",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "docs/PRD.md": {
+      "file": "docs/PRD.md",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "docs/REQUIREMENTS.md": {
+      "file": "docs/REQUIREMENTS.md",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "eval/run_eval.py": {
+      "file": "eval/run_eval.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "frontend/README.md": {
+      "file": "frontend/README.md",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "frontend/eslint.config.js": {
+      "file": "frontend/eslint.config.js",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "frontend/src/App.tsx": {
+      "file": "frontend/src/App.tsx",
+      "imports": [],
+      "exports": [],
+      "dependents": [
+        "frontend/src/main.tsx"
+      ],
+      "edges": []
+    },
+    "frontend/src/main.tsx": {
+      "file": "frontend/src/main.tsx",
+      "imports": [
+        "frontend/src/App.tsx"
+      ],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "frontend/vite.config.ts": {
+      "file": "frontend/vite.config.ts",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "scripts/extract_forms.py": {
+      "file": "scripts/extract_forms.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    },
+    "scripts/ingest.py": {
+      "file": "scripts/ingest.py",
+      "imports": [],
+      "exports": [],
+      "dependents": [],
+      "edges": []
+    }
+  },
+  "edges": []
+}
