@@ -61,6 +61,10 @@
 | SRC-007 | MUST | Document any disagreement between observed and expected forms range | Discrepancy is recorded in `DECISIONS.md` | DONE |
 | SRC-008 | MUST | Keep source PDF out of Git | Raw PDF is gitignored | DONE |
 | SRC-009 | MUST | Make source retrieval/ingestion reproducible | Bootstrap/ingestion process obtains/processes the source deterministically | DONE |
+| SRC-010 | MUST | Validate the supplied source by content before treating ingestion as authoritative | A source whose detected act title/structure does not match the expected corpus is rejected; filename is never evidence | DONE |
+| SRC-011 | MUST | Record corpus identity and source version in ingestion/index metadata | Every chunk carries corpus identity; a source manifest records SHA-256, page count, detected act title, ingested_at | DONE |
+| SRC-012 | MUST | Keep the authoritative corpus replaceable and re-ingestible without application-code changes | Replacing the source PDF and re-running ingestion re-indexes the corpus; no code change is required | DONE |
+| SRC-013 | MUST | Retrieval operates against the active configured corpus, not hardcoded statute assumptions | Retrieval derives corpus identity from chunk/index metadata of the indexed corpus | DONE |
 
 ---
 
@@ -114,39 +118,39 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| A2-001 | MUST | Use an open-weight embedding model run by the project | Embeddings execute locally/self-hosted | TODO |
-| A2-002 | MUST | Do not use OpenAI embeddings | Retrieval embeddings do not use OpenAI | TODO |
-| A2-003 | MUST | Do not use Cohere embeddings | Retrieval embeddings do not use Cohere | TODO |
-| A2-004 | MUST | Do not use Voyage embeddings | Retrieval embeddings do not use Voyage | TODO |
-| A2-005 | DECISION | Select an embedding model | Selected model is documented | TODO |
-| A2-006 | MUST | Document embedding dimensions | README/DECISIONS records dimensions | TODO |
-| A2-007 | MUST | Document maximum sequence length | README/DECISIONS records limit | TODO |
-| A2-008 | MUST | Document required query/passage prefixes if applicable | Correct prefix behavior is recorded | TODO |
-| A2-009 | MUST | Apply model-required query/passage prefixes correctly | Retrieval uses correct prefix convention when model requires it | TODO |
-| A2-010 | MUST | Document normalization behavior | Normalization choice is recorded | TODO |
-| A2-011 | MUST | Batch embedding operations | Embeddings are generated in batches | TODO |
-| A2-012 | MUST | Log embedding throughput | Throughput is observable in logs/metrics | TODO |
-| A2-013 | MUST | Make full-act cold-start embedding a one-time job | Full corpus is not embedded on every container boot | TODO |
+| A2-001 | MUST | Use an open-weight embedding model run by the project | Embeddings execute locally/self-hosted | DONE |
+| A2-002 | MUST | Do not use OpenAI embeddings | Retrieval embeddings do not use OpenAI | DONE |
+| A2-003 | MUST | Do not use Cohere embeddings | Retrieval embeddings do not use Cohere | DONE |
+| A2-004 | MUST | Do not use Voyage embeddings | Retrieval embeddings do not use Voyage | DONE |
+| A2-005 | DECISION | Select an embedding model | Selected model is documented | DONE |
+| A2-006 | MUST | Document embedding dimensions | README/DECISIONS records dimensions | DONE |
+| A2-007 | MUST | Document maximum sequence length | README/DECISIONS records limit | DONE |
+| A2-008 | MUST | Document required query/passage prefixes if applicable | Correct prefix behavior is recorded | DONE |
+| A2-009 | MUST | Apply model-required query/passage prefixes correctly | Retrieval uses correct prefix convention when model requires it | DONE |
+| A2-010 | MUST | Document normalization behavior | Normalization choice is recorded | DONE |
+| A2-011 | MUST | Batch embedding operations | Embeddings are generated in batches | DONE |
+| A2-012 | MUST | Log embedding throughput | Throughput is observable in logs/metrics | DONE |
+| A2-013 | MUST | Make full-act cold-start embedding a one-time job | Full corpus is not embedded on every container boot | DONE |
 
 ## A3. Vector Store & Retrieval
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
 | A3-001 | MUST | Use a vector DB that can run in Docker | Vector DB is containerized | TODO |
-| A3-002 | DECISION | Select vector DB from allowed choices | Selection is documented | TODO |
-| A3-003 | MUST | Implement dense retrieval | Dense search returns relevant chunks | TODO |
-| A3-004 | MUST | Implement sparse/BM25/full-text retrieval | Sparse/exact retrieval is available | TODO |
-| A3-005 | MUST | Combine dense and sparse retrieval | Both retrieval signals participate in final retrieval | TODO |
-| A3-006 | MUST | Fuse hybrid retrieval results | Fusion mechanism is implemented | TODO |
-| A3-007 | DECISION | Select/justify fusion method | Method is documented; RRF is acceptable | TODO |
-| A3-008 | MUST | Support chapter metadata filtering | Query can restrict retrieval to a chapter | TODO |
-| A3-009 | MUST | Support act metadata filtering | Query can restrict retrieval to an act | TODO |
-| A3-010 | MUST | Support specific-section filtering | Query can restrict retrieval to a section | TODO |
+| A3-002 | DECISION | Select vector DB from allowed choices | Selection is documented | DONE |
+| A3-003 | MUST | Implement dense retrieval | Dense search returns relevant chunks | DONE |
+| A3-004 | MUST | Implement sparse/BM25/full-text retrieval | Sparse/exact retrieval is available | DONE |
+| A3-005 | MUST | Combine dense and sparse retrieval | Both retrieval signals participate in final retrieval | DONE |
+| A3-006 | MUST | Fuse hybrid retrieval results | Fusion mechanism is implemented | DONE |
+| A3-007 | DECISION | Select/justify fusion method | Method is documented; RRF is acceptable | DONE |
+| A3-008 | MUST | Support chapter metadata filtering | Query can restrict retrieval to a chapter | DONE |
+| A3-009 | MUST | Support act metadata filtering | Query can restrict retrieval to an act | DONE |
+| A3-010 | MUST | Support specific-section filtering | Query can restrict retrieval to a section | DONE |
 | A3-011 | BONUS | Implement cross-encoder reranking of top-k | Top-k candidates can be reranked | TODO |
-| A3-012 | MUST | Detect direct section-number intent | Queries such as `section 103 BNS` are detected | TODO |
-| A3-013 | MUST | Direct lookup returns requested section deterministically | Section lookup does not depend solely on cosine similarity | TODO |
-| A3-014 | MUST | Direct lookup bypasses or boosts normal retrieval as appropriate | Exact identifier path has deterministic precedence | TODO |
-| A3-015 | MUST | Explain retrieval routing approach | Routing strategy is documented | TODO |
+| A3-012 | MUST | Detect direct section-number intent | Queries such as `section 103 BNS` are detected | DONE |
+| A3-013 | MUST | Direct lookup returns requested section deterministically | Section lookup does not depend solely on cosine similarity | DONE |
+| A3-014 | MUST | Direct lookup bypasses or boosts normal retrieval as appropriate | Exact identifier path has deterministic precedence | DONE |
+| A3-015 | MUST | Explain retrieval routing approach | Routing strategy is documented | DONE |
 
 ## A4. Citation Contract
 

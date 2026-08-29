@@ -77,6 +77,16 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-base-en-v1.5"
     embedding_batch_size: int = Field(default=32, gt=0)
 
+    # --- Retrieval (DECISIONS.md D-014/D-015; ARCHITECTURE §11/§15) --------
+    # Initial tunable values, not assignment claims; golden-set evaluation
+    # may adjust them (D-015).
+    retrieval_dense_top_k: int = Field(default=20, gt=0)
+    retrieval_sparse_top_k: int = Field(default=20, gt=0)
+    retrieval_rrf_k: int = Field(default=60, gt=0)
+    # Evidence sufficiency threshold in [0, 1]; 0 disables refusal. Tunable,
+    # never a hidden final answer-quality claim (ARCHITECTURE §15).
+    retrieval_confidence_threshold: float = Field(default=0.1, ge=0.0, le=1.0)
+
     # --- Storage (DECISIONS.md D-029) --------------------------------------
     storage_dir: str = "./storage"
 

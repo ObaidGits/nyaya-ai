@@ -407,6 +407,44 @@ data/raw/
 
 and must not be committed to Git.
 
+## 6.1.1 Replaceable, Validated Corpus
+
+The authoritative legal corpus is **replaceable and re-ingestible**:
+
+- The corpus is defined by a configuration-level corpus spec (expected act
+  identity, structural invariants), never by application code or filenames.
+- **Source validation is mandatory**: a supplied PDF must pass content-based
+  validation (detected act title + structural invariants) against the
+  expected corpus spec *before* it is treated as the authoritative corpus.
+  The filename is never evidence of corpus identity. A source that does not
+  match is rejected, not ingested under a wrong label.
+- **Corpus identity/version is recorded in ingestion and index metadata**:
+  each chunk carries the corpus identity (act name, act short code) and the
+  source identity (SHA-256, page count, detected act title, `ingested_at`)
+  so any answer can be traced to the exact source document version.
+- **Retrieval operates against the configured active corpus**, not a
+  hardcoded statute assumption: retrieval reads whatever validated corpus
+  the ingestion pipeline indexed, with corpus identity coming from chunk
+  metadata.
+- **Replacing the source requires re-ingestion and re-indexing only** —
+  supply the new source PDF, re-run ingestion, rebuild the indexes. No
+  application-code change is required merely because the source document is
+  replaced.
+
+Current status: the assignment-required corpus is BNS. The currently
+supplied PDF was content-validated and found to contain BNSS; it is used
+only as a temporary development corpus until the correct BNS source is
+confirmed (see DECISIONS.md). This does not change the assignment
+requirement, and BNSS must never be relabeled or reinterpreted as BNS.
+
+## 6.1.2 Separation from User Documents
+
+The authoritative legal corpus and user-uploaded documents are separate
+data domains with separate index namespaces (`bns_chunks` vs
+`user_document_chunks`), separate ingestion paths, and separate retrieval
+routes (§14, §20–§23). User uploads never enter the authoritative corpus
+and can never be confused with statutory authority.
+
 ## 6.2 Ingestion
 
 ```mermaid
@@ -619,6 +657,12 @@ Embeddings are batched and throughput is logged.
 # 11. Hybrid Retrieval Architecture
 
 Hybrid retrieval is mandatory.
+
+Statute retrieval operates against the **configured active corpus** (§6.1.1):
+dense, sparse, and deterministic lookup all read the currently indexed,
+validated corpus and derive corpus identity from chunk metadata — never from
+a hardcoded BNS/BNSS assumption in retrieval code. Replacing the corpus
+source means re-ingestion and re-indexing, not retrieval-code changes.
 
 The system combines:
 

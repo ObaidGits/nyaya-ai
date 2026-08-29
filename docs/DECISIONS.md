@@ -2284,3 +2284,86 @@ Decision (per project owner, pending clarification from DhronAI):
 - **Embedding/index seams:** `EmbeddingProvider` and `ChunkIndex` protocols
   are the Phase 3 integration points (BGE + Qdrant wired, deterministic JSONL
   sink default).
+
+# 76. Phase 3 Retrieval (2026-08-30)
+
+## Embedding runtime record (A2-006..A2-010, D-011)
+
+```text
+Model: BAAI/bge-base-en-v1.5 (self-hosted via sentence-transformers, D-012)
+Dimensions: 768
+Maximum sequence length: 512 (verified against the model's config.json)
+Query prefix: "Represent this sentence for searching relevant passages: "
+Passage prefix: none (chunks embedded raw)
+Normalization: L2-normalized vectors (normalize_embeddings=True)
+```
+
+OpenAI/Cohere/Voyage embeddings are not used anywhere (A2-002..A2-004).
+
+## Retrieval architecture
+
+- Dense: `DenseRetriever` protocol; `QdrantDenseRetriever` (production,
+  payload-side metadata filters per D-018) and `CosineDenseIndex`
+  (in-process, dependency-free) share the same contract.
+- Sparse: in-process Okapi BM25 (`Bm25SparseIndex`, k1=1.5, b=0.75) with a
+  legal-aware tokenizer that preserves identifiers ("103(1)"). Per D-013 the
+  exact backend is an implementation detail behind `SparseRetriever`.
+- Fusion: RRF (D-014) with k=60; candidate pools dense=20 / sparse=20 (D-015
+  initial values, tunable via config `retrieval_*` settings).
+- Direct section lookup (D-017): regex intent detection runs BEFORE hybrid
+  retrieval; exact identifiers resolve deterministically, with precedence
+  over similarity (A3-014). If the user's act label does not match the
+  indexed corpus act_short, lookup retries without the act restriction.
+- Routing (A3-015): keyword-based statute/document/combined classification
+  (`classify_route`). The DOCUMENT route is an explicit honest stub until
+  Phase 5 — it returns insufficient evidence with a reason string, never a
+  fake statute answer.
+- Confidence (ARCHITECTURE §15): normalized RRF score of the top result
+  (theoretical max = first rank in both lists). Threshold is configuration
+  (`retrieval_confidence_threshold`, initial 0.1), measurable and tunable —
+  not a hidden final-quality claim.
+- Cross-encoder reranking: deferred per D-016 (A3-011 remains TODO).
+
+## Dev-corpus caveat
+
+All retrieval integration tests run against the temporary BNSS dev corpus
+(`data/processed/bnss-dev_chunks.jsonl`). Final BNS retrieval quality is
+BLOCKED until the correct BNS source PDF arrives; swapping the source and
+re-running ingestion + retrieval requires no application-code changes.
+
+# 77. Replaceable, Validated Legal Corpus (2026-08-30)
+
+## Why corpus replacement is supported
+
+The assignment requires the Bharatiya Nyaya Sanhita (BNS) as the
+authoritative corpus. The currently supplied PDF was content-validated and
+contains the Bharatiya Nagarik Suraksha Sanhita (BNSS) instead, and a
+clarification/correct source has been requested from DhronAI. Rather than
+freeze development or silently treat the wrong document as authoritative,
+the corpus is handled as a **replaceable, re-ingestible, validated input**:
+
+- Corpus identity is defined by a corpus spec (expected act identity and
+  structural invariants), not by filename or application code.
+- Every supplied source is content-validated before ingestion is treated as
+  authoritative; a mismatching source is rejected, never ingested under a
+  wrong label.
+- Chunk/index metadata records corpus identity and source identity
+  (SHA-256, page count, detected act title, ingested_at) so every answer is
+  traceable to an exact source version.
+- Replacing the source PDF requires only re-running ingestion and
+  re-indexing — no application-code changes.
+
+## Status of the two documents
+
+- **BNS remains the assignment-required corpus.** The product requirement,
+  assignment scope, and all requirement IDs are unchanged: BNS is the
+  authoritative corpus for the final submission.
+- **BNSS is only the current temporary development corpus.** The supplied
+  BNSS PDF exercises the pipeline end-to-end while the correct BNS source
+  is pending. It is never exposed as BNS.
+- **BNSS is not reinterpreted as BNS** and no additional legal corpora are
+  introduced; the corpus spec mechanism exists solely so the correct source
+  can replace the temporary one, not to broaden the corpus set.
+
+Final verification that the authoritative corpus is the required BNS source
+remains BLOCKED until DhronAI confirms the correct source document.

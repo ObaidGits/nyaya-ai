@@ -461,13 +461,54 @@ Create representative fixtures for:
 - page boundary,
 - PDF cleanup cases.
 
+### 2.12 Source validation
+
+Before any source is treated as the authoritative corpus:
+
+- validate the source **by content** (detected act title, structural
+  invariants such as section count/ordering) against the expected corpus,
+- never rely on the filename as evidence of corpus identity,
+- reject a source that does not match the expected corpus — do not ingest
+  it under a wrong label.
+
+This requirement exists because the supplied PDF was found to contain BNSS
+rather than the required BNS (see DECISIONS.md); development continues
+against a temporary development corpus without changing the assignment
+requirement.
+
+### 2.13 Corpus identity and version metadata
+
+Record corpus identity and source identity in ingestion/index metadata:
+
+- corpus identity (act name, act short code) on every chunk,
+- source identity (SHA-256, page count, detected act title, `ingested_at`)
+  in a source manifest,
+
+so every retrieval result and citation is traceable to an exact source
+document version.
+
+### 2.14 Replaceable, re-ingestible corpus
+
+The source is replaceable without application-code changes:
+
+- the corpus is defined by a configuration-level corpus spec, not hardcoded
+  PDF assumptions,
+- replacing the source PDF requires only re-running ingestion and
+  re-indexing (deterministic, reproducible),
+- temporary development corpora (e.g. the BNSS fixture) must never be
+  relabeled or reinterpreted as BNS.
+
 ## Tests
 
 Unit tests must prove structural behavior rather than merely non-empty output.
 
 ## Exit criteria
 
-The BNS corpus is parsed deterministically, metadata is correct, legal structure is preserved, and the ingestion output is ready for indexing.
+The active corpus is parsed deterministically after passing content-based
+source validation, corpus and source identity are recorded in metadata,
+legal structure is preserved, the ingestion output is ready for indexing,
+and replacing the source requires re-ingestion only — no application-code
+changes.
 
 ---
 
@@ -476,6 +517,13 @@ The BNS corpus is parsed deterministically, metadata is correct, legal structure
 ## Objective
 
 Build the required retrieval system independently from generation.
+
+Retrieval operates against the **active validated corpus** (Phase 2 tasks
+2.12–2.14): dense retrieval, sparse retrieval, and deterministic section
+lookup all read the corpus the ingestion pipeline indexed, and corpus
+identity comes from chunk/index metadata — never from a hardcoded
+BNS/BNSS assumption in retrieval code. Swapping the corpus source means
+re-running ingestion and re-indexing, not changing retrieval code.
 
 ## References
 
@@ -624,7 +672,9 @@ Create retrieval fixtures for:
 
 ## Exit criteria
 
-Hybrid retrieval returns measurable, structured evidence with deterministic section lookup and correct metadata.
+Hybrid retrieval returns measurable, structured evidence with deterministic
+section lookup and correct metadata, operating against the active validated
+corpus without hardcoded corpus assumptions.
 
 ---
 
