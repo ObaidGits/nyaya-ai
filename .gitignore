@@ -1,0 +1,28 @@
+.venv/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+
+# Local data
+*.db
+*.sqlite
+*.sqlite3
+
+# Models / generated artifacts
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Environment
+.env
+.venv/

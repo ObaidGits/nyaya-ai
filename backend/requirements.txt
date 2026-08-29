@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+sqlalchemy
+asyncpg
+alembic
+qdrant-client
+sentence-transformers
+pymupdf
+python-multipart
+redis
+arq
+httpx
+sse-starlette
+slowapi
