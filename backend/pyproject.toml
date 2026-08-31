@@ -34,7 +34,16 @@ warn_unused_ignores = false
 
 # Optional speech modules — see above.
 [[tool.mypy.overrides]]
-module = ["soundfile", "torchaudio", "parler_tts"]
+module = [
+    "soundfile",
+    "torchaudio",
+    "parler_tts",
+    # Same treatment for the heavy ML deps: present in the Docker image and
+    # the local venv, absent in the CI mypy environment.
+    "torch",
+    "transformers",
+    "sentence_transformers",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

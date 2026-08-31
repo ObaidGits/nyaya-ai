@@ -90,10 +90,13 @@ jobs:
         with:
           fetch-depth: 0 # scan full history (SEC-001, REJ-001..REJ-003)
 
+      # Pinned gitleaks binary, not gitleaks-action: the action wrapper
+      # exited 1 on this repo despite reporting "no leaks found"
+      # (run 33381634652). Direct CLI is deterministic.
       - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz -C /tmp
+          /tmp/gitleaks detect --source . --redact --exit-code 1
 
   docker:
     name: Docker build, scan & GHCR push
