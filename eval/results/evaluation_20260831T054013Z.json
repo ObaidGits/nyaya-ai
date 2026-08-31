@@ -1,0 +1,41 @@
+{
+  "golden_set": "/media/obaid/SSD/my-files/shared/nyay/eval/golden_set.jsonl",
+  "corpus": "/media/obaid/SSD/my-files/shared/nyay/data/processed/bnss-dev_chunks.jsonl",
+  "deterministic": true,
+  "llm_mode": false,
+  "configurations": [
+    {
+      "config": "dense_only",
+      "cases": 29,
+      "failed_cases": 0,
+      "failures": [],
+      "recall_at_5": 0.3103448275862069,
+      "recall_at_10": 0.3448275862068966,
+      "mrr": 0.31417624521072796,
+      "citation_accuracy": null,
+      "refusal_correctness": 0.7931034482758621,
+      "document_hit_rate": 1.0,
+      "retrieval_latency_p50": 0.00893647299380973,
+      "retrieval_latency_p95": 0.009807570982957259,
+      "generation_latency_p50": null,
+      "generation_latency_p95": null
+    },
+    {
+      "config": "hybrid",
+      "cases": 29,
+      "failed_cases": 0,
+      "failures": [],
+      "recall_at_5": 0.4482758620689655,
+      "recall_at_10": 0.6206896551724138,
+      "mrr": 0.39458128078817734,
+      "citation_accuracy": null,
+      "refusal_correctness": 0.7931034482758621,
+      "document_hit_rate": 1.0,
+      "retrieval_latency_p50": 0.012805929989553988,
+      "retrieval_latency_p95": 0.013564759981818497,
+      "generation_latency_p50": null,
+      "generation_latency_p95": null
+    }
+  ],
+  "executed_at": "2026-08-31T05:40:13.969098+00:00"
+}

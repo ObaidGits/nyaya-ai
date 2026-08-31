@@ -33,3 +33,10 @@ data/processed/
 .env
 .venv/
 .codescout/credentials.json
+.codescout/
+storage/
+backend/.coverage
+
+# Local deployment logs (transient build output)
+deploy.log
+.gemini/

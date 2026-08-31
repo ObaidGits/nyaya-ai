@@ -78,6 +78,17 @@ However, the assignment explicitly warns that the linked PDF is a combined/annot
 
 The forms extractor is **content-driven**, with pages 190–249 as the assignment-defined processing range.
 
+### Observed outcome (Phase 6 run against the current development fixture)
+
+Running `scripts/extract_forms.py` over `data/raw/BNS_bare_act_2023.pdf`
+(the BNSS development fixture pending the real BNS source) finds the Second
+Schedule forms on pages 190–249: **58 forms**, form numbers 1–58, with one
+multi-page form (Form 33 "CHARGES", pages 222–224). The observed range
+matches the expected range, so no discrepancy exists to record. Titles are
+recorded exactly as the text layer prints them; the Gazette's broken
+intra-word spacing (e.g. "PROCLAMA TION") is preserved in manifest titles
+rather than silently corrected, and normalised only in filenames.
+
 ---
 
 ## D-003 — Structure-Aware Legal Chunking
@@ -2367,3 +2378,640 @@ the corpus is handled as a **replaceable, re-ingestible, validated input**:
 
 Final verification that the authoritative corpus is the required BNS source
 remains BLOCKED until DhronAI confirms the correct source document.
+
+# 78. Confidence Threshold Left at 0.1 — Calibration Evidence (2026-08-30, §8.7)
+
+## Measurement
+
+The Phase 8 golden set (29 cases, 6 out-of-scope) was used to calibrate the
+retrieval confidence gate. Refusal correctness scored **0.793** for both
+configurations: all 23 in-scope questions are answered (no false refusals),
+but 5 of 6 out-of-scope questions are **not refused**.
+
+## Why no threshold fixes this
+
+Confidence is computed as the top RRF score normalized by the maximum
+single-retriever score (rank-overlap based). It measures retriever *agreement*,
+not semantic relevance, so an out-of-scope query that one retriever ranks
+confidently still produces high confidence — observed values ranged
+0.5–0.98 on out-of-scope questions. A direct probe of the HashingEmbedder
+cosine similarities showed out-of-scope queries at 0.44–0.56 versus
+0.33–0.37 for in-scope queries — the distributions overlap and invert, so no
+threshold (or score-based reranking of it) separates them with the current
+deterministic dev embedding setup. Raising the threshold only converts
+correct answers into false refusals.
+
+## Decision
+
+Keep `RETRIEVAL_CONFIDENCE_THRESHOLD=0.1` (protects genuine false refusals)
+and report refusal correctness honestly as 0.793 on the dev corpus.
+Recalibration — expected to use absolute semantic similarity from a real
+embedding model (BGE) — is deferred until the BNS corpus replaces the
+temporary BNSS dev corpus and the production embedder is wired in.
+
+# 79. Query-Cost Model (2026-08-30, §8.10)
+
+Estimated cost per query = (input tokens / 1000 × `LLM_COST_PER_1K_INPUT_TOKENS`)
++ (output tokens / 1000 × `LLM_COST_PER_1K_OUTPUT_TOKENS`), matching the
+assignment formula (tokens × provider rate). Token counts come from provider
+usage fields (Ollama `prompt_eval_count` / `eval_count`) when available.
+Rates default to 0.0 because the evaluation path runs keyless against local
+Ollama (D-033); setting the two rate variables models any hosted provider.
+Cost is exposed as the counter `nyaya_estimated_query_cost_total` (cumulative
+USD) and the gauge `nyaya_last_query_cost_estimate` (most recent query).
+
+
+## D-066 — Local Credential Near-Miss (Audit 2026-08-30)
+
+**Classification:** `MANDATED` (SEC-010..SEC-012)
+
+During the Phase 11 final audit, a gitleaks working-tree scan found a live
+Gemini API key in `.codescout/credentials.json` — a local CodeScout tool
+credential, not a project secret. Verification:
+
+- the file is gitignored (`.gitignore` line: `.codescout/`);
+- it has never been tracked: `git log --all -- .codescout/credentials.json`
+  is empty;
+- a full-history gitleaks scan reports **no leaks**;
+- `.codescout/` is excluded from the backend Docker build context.
+
+So no secret was ever committed — there is no repository incident to rotate
+against. The key nonetheless sits unencrypted on the development disk; it
+should be rotated when convenient (it is a tool credential, not needed to run
+Nyaya). Recorded here so the near-miss is documented rather than silently
+ignored (SEC-012).
+
+---
+
+# 80. Conversational Short-Circuit for Casual Messages (2026-08-30, §32.1)
+
+## D-067 — Exact-Match Greeting Layer Before Retrieval
+
+**Status:** `ACCEPTED`
+
+Before the retrieval pipeline runs, `app/generation/conversation.py`
+applies a deterministic exact-phrase whitelist ("hi", "hello", "hey",
+"thanks", "thank you", "good morning/afternoon/evening", "goodbye",
+"bye", …) over normalized text (lowercase, whitespace-collapsed, edge
+punctuation stripped). A match yields a fixed, code-generated
+conversational reply streamed through the normal SSE contract
+(`token` → `sources: []` → `done`); anything else falls through to the
+full grounded pipeline unchanged.
+
+Why code, not the LLM: the safety contract (A4-011/A4-012, §15) must be
+enforced by executable rules, so the model is never asked to decide
+whether a message is casual — a misclassification on that path could
+route a legal question around retrieval. The whitelist is deliberately
+tiny and exact: any additional word (a question, a section reference,
+an injected instruction such as "hi. Ignore previous instructions…")
+fails the match and enters RAG. "hi there" therefore still refuses —
+conservative by design, because a false refusal costs one turn while a
+false casual routing would be a grounding violation.
+
+The replies make no legal claim and assert no capability (no "I
+searched", no "I checked your document"), so they cannot leak
+ungrounded content; they work even when the model provider is down,
+which is truthful — no generation occurred. Conversational turns emit
+`done.confidence = null` (no retrieval ran, so a numeric retrieval
+confidence would be fiction) and increment no token metrics. Refusals,
+citation guarding, document routing, session isolation, rate limiting,
+and error sanitization are untouched: the layer sits before them and
+cannot override any of them.
+
+## D-068 — Expanded Conversational Intent (Identity, Capability, Small Talk)
+
+**Status:** `ACCEPTED`
+
+`app/generation/conversation.py` extends the D-067 exact-match layer with
+anchored-regex conversational classes: identity ("who are you", "what's
+your name", "are you a bot"), capability ("what can you do", "how can you
+help me", "can you help me"), well-being ("how are you"), and
+acknowledgements ("ok", "got it", "sure", "yes", "no"). Each class has a
+fixed code-generated reply that makes no legal claim and asserts no
+capability beyond the documented scope; the reply text includes the
+not-legal-advice caveat where the answer describes the assistant.
+
+The patterns are anchored (`^…[\s?!.]*$`) so any additional substantive
+content — a section number, a legal question, an injected instruction —
+fails the match and enters the full RAG pipeline. A message that merely
+mentions the assistant while also asking about the law ("who are you and
+what is section 103") is never intercepted: interception requires the
+whole message to be conversational. This keeps the classification
+conservative in the same direction as D-067 — false fall-through costs
+one turn; false interception would be a grounding violation.
+
+## D-069 — Client-Supplied System Roles Are Rejected
+
+**Status:** `ACCEPTED`
+
+`ChatTurn` (the history schema for `POST /api/v1/chat`) validates via a
+Pydantic `field_validator` that `role` is `user` or `assistant`. A history
+entry with `role: "system"` (or any unknown role) fails with 422 before
+the pipeline runs. Rationale: the system prompt is a server-owned
+grounding contract (A4-*); letting a client inject or shadow it via
+history would allow prompt-level override of the citation rules. The
+`MessageRole` enum itself still contains `system` because the server
+constructs system messages internally for the provider; only client input
+is restricted.
+
+## D-070 — User-Document Citations Are Validated Like Statute Citations
+
+**Status:** `ACCEPTED`
+
+The citation guard recognizes `[Document <id> p.<page>]` citations
+(A5-008) and validates them against the session's retrieved
+`DocumentHit`s: the document id must be present in the retrieval results,
+and a cited page must fall within some hit's `page_start..page_end`
+range. Invalid document citations remove their sentence, exactly like
+invalid statute citations. The source drawer (`sources`) emits
+`user_document` entries only for documents the sanitized answer actually
+cites, so an uncited but retrieved document never leaks into the source
+list.
+
+## D-071 — Act-Mismatch Guard for Alias Queries
+
+**Status:** `ACCEPTED`
+
+When a section-intent query names an Act (e.g. "section 103 of BNS") and
+the deterministic lookup finds no chunk for that (act, section) pair, the
+retrieval service retries the bare section number **only when the indexed
+corpus consists of a single Act** — there the user's label is an alias for
+the one indexed authority. In a multi-Act corpus a missing Act is a hard
+miss: the query refuses with an explicit reason ("act X not present in
+the indexed corpus") rather than silently falling back to a different
+Act's section of the same number, which would misattribute the law.
+
+## D-072 — Layered Citation Validation (Existence → Granularity → Relevance)
+
+**Status:** `ACCEPTED`
+
+The citation guard enforces three sequential layers, all executable code
+(ARCHITECTURE §18-§19, A4-016):
+
+1. **Existence** — cited (act, section) must appear in the retrieved
+   evidence. Otherwise the sentence is removed entirely: stripping only
+   the citation would leave an unsupported legal claim.
+2. **Granularity** — a subsection citation `[BNS s.103(1)]` must match a
+   retrieved chunk of that exact subsection, or a whole-section chunk
+   whose verbatim text contains the subsection marker. A section number
+   existing without subsection coverage is a granularity failure and the
+   sentence is removed.
+3. **Relevance** — the sentence must share at least one content token
+   (non-stopword) with the cited chunk. A citation attached to a
+   self-referential sentence ("I am an AI…"), a content-free sentence
+   ("Section 103 [TS s.103]."), or a sentence with zero lexical overlap
+   with the cited text is decorative: the label is stripped and the
+   sentence kept only when it makes no legal claim, otherwise removed.
+
+Additionally, citation-free sentences that make prose section claims
+("section 999 of BNS says…") are checked against the evidence: supported
+claims pass, unsupported ones are removed with their sentence. Source
+entries are minted only from citations that survived all layers, so the
+source drawer cannot vouch for a stripped citation.
+
+## D-073 — Document-Route Confidence Gate
+
+**Status:** `ACCEPTED`
+
+Document-route retrieval (queries about the user's uploaded documents)
+applies its own confidence gate, distinct from the statute gate: the top
+document hit's cosine score must meet
+`document_retrieval_confidence_threshold` (default 0.05, configurable via
+settings, wired through app construction and the chat fallback path).
+Below the threshold the answer refuses with reason "document retrieval
+confidence below threshold" — no LLM call, no citations — mirroring the
+statute-side rule that weak evidence must refuse rather than guess
+(§15). A statute corpus miss therefore cannot be papered over by
+low-quality document hits and vice versa.
+
+The default is calibrated to the score scale, not copied from the statute
+threshold: the statute gate consumes RRF-normalized confidence (0.1 of a
+theoretical max of 1.0), while the document gate consumes a raw
+HashingEmbedder cosine, where a *genuinely matching* chunk of a short
+notice scores ~0.08. A 0.1 default would refuse correct document answers
+(a false-refusal regression observed in the document chat E2E test);
+0.05 keeps every real match (measured top-hit cosine 0.08) while still
+rejecting near-zero junk overlap. Both gates remain independently
+tunable in settings.
+
+## D-074 — Truthful Readiness, Refusal, and Empty-Response Handling
+
+**Status:** `ACCEPTED`
+
+Four observability/truthfulness fixes:
+
+- **Model presence in readiness** (D-033): `ModelProviderCheck` for
+  Ollama now fetches `/api/tags` and verifies the configured model (or
+  the default `llama3.1:8b` when unset) is actually pulled, matching on
+  exact name or `model:`-tag prefix. A reachable server without the
+  model is a FAIL — "brain active" must mean the configured brain, not
+  any server. Unreachable servers, HTTP ≥400, and invalid JSON are
+  FAILs; a `model=None` config degrades to transport-only OK.
+- **Model-emitted refusal text**: when the model itself outputs the
+  refusal string, the outcome is normalized to `refused=True` with
+  `REFUSALS.inc()` — API state and telemetry report the truth instead of
+  counting a refusal as a grounded answer.
+- **Empty provider responses** raise `EmptyGenerationError` (surfaced as
+  503 `LLM_EMPTY_RESPONSE`) after one regeneration attempt; they are
+  provider failures, never blank answers.
+- **Empty-after-validation** (every sentence stripped by the guard)
+  yields the specification refusal with reason
+  `empty_answer_after_validation`, and `generation_complete` logs
+  `answer_length`, citation counts (valid/invalid/irrelevant),
+  documents cited, and model — enough to audit partial answers and
+  citation stripping rates without logging answer text.
+
+## D-075 — Bare Section Numbers Route Deterministically
+
+**Status:** `ACCEPTED`
+
+"What does 103 say?" now takes the deterministic section-lookup path
+(A3-012/A3-014) instead of falling into hybrid retrieval. A 1-3 digit
+bare number is treated as a section reference only when it is not:
+
+- a quantity — followed by a unit word ("30 days", "7 years", "500
+  rupees", "2 lakh"),
+- a non-statute identifier — preceded by case/no/page/pg/form/fir/
+  chapter/part/schedule/annexure/article/clause/sub/sl/serial
+  ("case no. 42", "page 12", "article 21"), or
+- part of a decimal or IP-style number ("7.5 lakh", "169.254.169.254").
+
+The subsection form ("Explain 103(1)") is recognized via a trailing
+`(?!\w)` lookahead (a `\b` boundary fails after the closing paren).
+Anything ambiguous still falls through to hybrid retrieval, so the
+failure mode of a missed pattern is the pre-existing behavior, never a
+wrong deterministic answer.
+
+## D-076 — Document Chunk Ids Encode 1-Based Pages
+
+**Status:** `ACCEPTED`
+
+`_parse_chunk_id` rebuilds a `DocumentHit`'s page range from the chunk
+id (`<document_id>-p0001-000`), so the number in the id must be the same
+1-based page the chunk's `page_start`/`page_end` metadata carries. The
+document chunker was encoding the 0-based `PageText.index` instead, so a
+first-page chunk parsed back as page 0 and every `[Document X p.1]`
+citation failed the citation guard's page-range check — the document
+chat pipeline answered every first-page question with the refusal, even
+though retrieval, evidence, and generation were all correct.
+
+Fix: the chunker now encodes `page.index + 1` in the id. Ids remain
+deterministic and idempotent for re-ingestion; the id, the metadata,
+and the human-readable citation now all agree on the page number.
+Regression test:
+`tests/documents/test_documents.py::test_chunk_id_page_encoding_matches_page_metadata`
+plus the end-to-end
+`test_chat_answers_document_questions_from_session_documents`.
+
+## D-077 — Multilingual Indian Language Support (Bonus, Non-Weakening)
+
+**Status:** `ACCEPTED`
+
+Bonus accessibility feature. Twelve answer languages — English plus
+Hindi, Bengali, Marathi, Gujarati, Tamil, Telugu, Kannada, Malayalam,
+Punjabi, Odia, Assamese — selected in the frontend (Auto detect default,
+manual override) and carried in the chat request's `language` field
+(`"auto"` or a code; absent field is byte-identical to the pre-feature
+English workflow).
+
+**Non-negotiable constraint:** the language layer *wraps* the pipeline;
+it never bypasses grounding, citations, refusal, the confidence gate,
+prompt-injection defenses, or session isolation. Design consequences:
+
+1. **Detection** — deterministic Unicode-script detection by default
+   (zero dependencies, instant, explainable). Devanagari resolves to
+   Hindi and Bengali script to Assamese only when Assamese-specific
+   characters (ৰ/ৱ) appear; a manual selector choice always overrides.
+   Optional fastText backend (`language_detection_backend="fasttext"`,
+   lid.176.bin ~130 MB, CC BY-SA 4.0) distinguishes hi/mr and bn/as
+   lexically — not installed by default so normal deployment needs no
+   model downloads.
+
+2. **One corpus, no translated copies** — the authoritative English
+   statute corpus is unchanged. A non-English query is translated to
+   English by a strict translate-only LLM call (default: the existing
+   local Ollama provider; optional documented IndicTrans2 seam, ~2.4 GB,
+   MIT, GPU recommended) and the translation is used ONLY for route
+   detection and retrieval. It never becomes evidence, never reaches the
+   generation prompt, and is never shown to the user. Translation
+   failure fails closed: retrieval with the original message finds
+   nothing and the pipeline refuses.
+
+3. **Generation in the answer language** — the user's ORIGINAL question
+   is kept in the generation prompt; the answer language is a
+   code-controlled system-prompt instruction that pins citation labels
+   ("never translate, reorder, or alter [BNS s.103] …").
+
+4. **Refusal stays code-controlled** — the specification refusal exists
+   as a fixed translated string per language
+   (`app.language.service.REFUSAL_RESPONSES`), emitted by code at the
+   confidence gate, never model-generated. A model that echoes any
+   language's refusal text is normalized to `refused=True`.
+
+5. **Citation guard stays authoritative across scripts** — existence,
+   subsection granularity, self-reference, content-free, and prose
+   (unsupported section claim) checks apply unchanged to Indic answers.
+   The one structurally impossible check cross-script is lexical
+   relevance (Hindi sentence vs English chunk tokens). Bridged, not
+   dropped: statute citations pass only when the sentence names the
+   cited section number (digit forms normalized, so धारा १०৩ ≡ 103);
+   document citations keep existence + page-range validation and their
+   waived lexical check is counted in `CitationCheck.relevance_waived`,
+   never silent. This waiver is the single reported deviation and is
+   strictly narrower than the English rule (it removes nothing the
+   English path would keep).
+
+6. **Small talk short-circuits in-language with no LLM call** — Indic
+   exact-match social formulas and anchored identity/capability
+   questions reuse the D-067/D-068 contract with fixed translated
+   product copy. Legal, ambiguous, and injection-style messages in any
+   language fall through to the grounded pipeline.
+
+7. **Indic intent routing** — "धारा 103" (and Bengali digit forms) take
+   the deterministic section-lookup path; Indic document nouns (दस्तावेज़,
+   दস্তাবেজ, ஆவண, …) route to the document side, fail-closed without a
+   session.
+
+Frontend: `LanguageSelector` in the chat header (native `<select>`:
+keyboard-navigable, screen-reader labeled), preference persisted in
+`localStorage` under `nyaya.language`, sent as the `language` field.
+No paid APIs, no cloud translation services.
+
+## D-079 — Speech Input/Output (STT + TTS, Bonus, Non-Weakening)
+
+Voice is an input/output layer only. It never retrieves, generates,
+cites, translates the corpus, or bypasses any gate: transcription
+returns text to the composer for user review (never auto-submitted),
+and synthesis speaks only the supplied assistant text.
+
+1. **Provider seam, independently configurable** —
+   `SPEECH_STT_PROVIDER` (default `indicconformer`, the AI4Bharat
+   IndicConformer 600M multilingual CTC model with per-language
+   adapters; `whisper` is the public-weights fallback when Hub gating
+   blocks the IndicConformer download) and `SPEECH_TTS_PROVIDER`
+   (default `parler-tts`, AI4Bharat Indic Parler-TTS). No paid or
+   cloud speech APIs. Model weights load lazily on first use; the API
+   boots without torch and speech requests fail closed
+   (503 SPEECH_PROVIDER_UNAVAILABLE) until weights exist.
+
+2. **Devices are separate** (`SPEECH_STT_DEVICE` / `SPEECH_TTS_DEVICE`,
+   `auto|cuda|cpu`) because both models must not sit permanently on a
+   6 GB-class GPU; the live stack runs STT on CPU while Ollama owns the
+   GPU.
+
+3. **Endpoints** — `POST /api/v1/speech/transcribe` (multipart audio,
+   bounded chunked read, MIME allow-list, size cap, optional `language`
+   query param, session + rate limit, returns `{text, language}` only)
+   and `POST /api/v1/speech/synthesize` (JSON `{text, language}`; the
+   language must be concrete — `auto` is rejected; unsupported
+   languages fail clearly with 422 and never fall back to another
+   language). Both use the standard error envelope; tracebacks and
+   internal paths never leave the server.
+
+4. **Answer language drives TTS** — the chat `done` event now carries
+   `language` (the language actually used, additive contract), and the
+   Listen button synthesizes in that language rather than a client-side
+   guess.
+
+5. **Hub gating reality** — all AI4Bharat speech weights (IndicConformer
+   and Indic Parler-TTS) are licence-gated on Hugging Face. Deployments
+   accept the licence and authenticate (`HF_TOKEN`) to use the defaults;
+   the public-weights Whisper (STT) and parler-tts-mini-v1 (TTS,
+   English-grade) alternatives keep the feature fully local without any
+   account. Auto language detection scores IndicConformer adapters
+   acoustically; Whisper detects natively.
+
+6. **Frontend** — mic button in the composer (MediaRecorder, elapsed
+   timer, stop control, `aria-live` status, permission/unsupported/
+   failure messages) inserting the transcript for review; Listen button
+   on assistant messages (loading, play/stop, duplicate-request guard,
+   clean errors). Neither alters text or citations, and neither
+   auto-submits.
+
+**Amendment (2026-08-31, Docker + UX hardening):** The backend Docker image now
+installs the speech layer (`requirements-speech.txt`: CPU torch, transformers,
+soundfile, parler_tts) and compose pins public-weights defaults (whisper-small
+STT, parler-tts-mini-v1 TTS, devices cpu, HF weights in the `hf_cache` named
+volume) — the containerized stack transcribes/synthesizes out of the box
+instead of failing closed 503. Frontend speech errors/status moved to floating
+toasts (`lib/toast.ts` + `ToastHost`) so the composer never shifts, and the mic
+button shows a live AnalyserNode equalizer (`RecordingBars`) while recording.
+
+## D-080 — Admin Settings & Configuration Console (Bonus, Non-Weakening)
+
+**Status:** Accepted 2026-08-31 · **Non-weakening:** adds operator
+configuration only; every safety guarantee (grounding, citation validation,
+refusal, confidence gate, prompt-injection protection, session isolation,
+document isolation, rate limiting) remains architectural and non-configurable.
+
+### Design
+
+1. **Auth** — `ADMIN_USERNAME`/`ADMIN_PASSWORD` from env only; the console is
+   `503 ADMIN_DISABLED` until both are set (never hardcoded creds). Sessions
+   are HMAC-SHA256-signed expiring cookies (`HttpOnly`, `SameSite=Lax`,
+   `secure` in production), 8-hour TTL, constant-time credential compare.
+   Mutating endpoints additionally require the custom `X-Nyaya-Admin` header —
+   a cross-origin form POST cannot set it, which is the CSRF defense.
+
+2. **Persistence & precedence** — `AdminSettingsStore` persists whitelisted
+   settings to `ADMIN_SETTINGS_PATH` as JSON with `0600` permissions
+   (atomic tmp+rename). Precedence: env/defaults → persisted admin config →
+   runtime overrides. Env-provided secrets always win over console-persisted
+   ones, so deployment secrets are never silently replaced. Secrets are
+   persisted server-side only, masked as `"set" | ""` in every API response,
+   never logged, and never sent to the frontend.
+
+3. **LLM providers** — the existing registry gained `openai`, `gemini`, `grok`,
+   `openrouter`, and `openai-compatible` alongside keyless local `ollama`
+   (still the default). All implement the common provider interface
+   (generate/stream/metadata/health_check) and normalize errors to
+   `503 LLM_PROVIDER_UNAVAILABLE` with no key or provider internals in
+   messages.
+
+4. **Editable surface (judgment calls)** — `EDITABLE_FIELDS` is a whitelist:
+   LLM config, language detection backend, speech provider/model/device,
+   retrieval top-k and the confidence threshold, rate limits, and
+   `chat_history_max_turns`. The confidence threshold is exposed as an
+   *operational* knob (operators may raise it to refuse more aggressively)
+   but no field can disable grounding, citations, refusal, or injection
+   protection — those do not exist as settings at all. Multilingual
+   grounding/citation cannot be disabled either; only the detection backend
+   is configurable.
+
+5. **Corpus replacement** — reuses the existing ingestion pipeline with
+   `CorpusSpec.bns()`: upload → content-based validation (BNSS is rejected as
+   BNS; filename, user-supplied act name, and extension are never trusted) →
+   extraction → parsing → chunking → embedding → artifact build →
+   verification retrieval query → atomic state swap. Any failure preserves
+   the existing active corpus and deletes the failed artifact. The manifest
+   (act, SHA-256, pages, sections, chunks, timestamp) is persisted and shown
+   in the console.
+
+6. **Memory** — the architecture is client-side conversation history sent per
+   request and capped server-side (`chat_history_max_turns`); there is no
+   persistent server-side memory, and none was invented. History is untrusted
+   context, never legal authority. The console documents this and exposes
+   only the history cap; clearing conversations is a client action.
+
+7. **System status** — real probes only: PostgreSQL (asyncpg connect), Redis
+   (PING), Qdrant (`/healthz`), active LLM provider (`health_check`), corpus
+   manifest, worker (queue depth or "not_configured" in memory mode). States
+   are exactly what the probe saw (`ok` / `unavailable` / `error` /
+   `not_configured`) — nothing is hardcoded "Connected".
+
+8. **Frontend** — hidden admin route (absent from nav; react-router-dom
+   path routing: `/settings`, unknown paths redirect to `/`), login
+   card, section cards (AI/LLM, Language, Voice, Retrieval, Rate limits,
+   Corpus, Memory, Status) matching the Nyaya design system, masked API-key
+   inputs with show/hide, unsaved-changes indicator with Save/Reset,
+   per-section Test Connection buttons showing latency, and a confirmation
+   dialog before corpus replacement.
+
+### Testing
+
+Backend: auth (invalid creds, forged/expired cookies, disabled mode, CSRF
+header), settings masking + persistence + env-wins precedence, provider
+validation, corpus rejection/atomicity/BNSS-as-BNS rejection against the dev
+Gazette PDF, status truthfulness, memory. Frontend: auth gate, section
+rendering, provider-driven field visibility, secret masking, dirty tracking,
+save/reset, connection tests, corpus confirmation/rejection, status, memory.
+
+**Amendment (2026-08-31, official Gazette ingestion):** The official Gazette
+BNS PDF (Act 45 of 2023, 138 pages) exposed two layout artifacts the dev
+fixture did not: left marginal notes glued onto section headers
+("punishment.6. In calculating …", sometimes without the period) and
+space-less headers ("192.Whoever …"). Extraction gained a positional
+glue-split step (`cleaning.split_marginal_glue`) that fires only when a
+lowercase-ending fragment is followed by a 1-3 digit "N. " header start
+(four-digit years cannot match), and `SECTION_RE` now tolerates a missing
+space while requiring a letter/paren body so page-number artifacts like
+"338.96" are not parsed as sections. Result: all 358 sections parse
+contiguously; the full upload→validate→index→verify→activate pipeline runs
+live in Docker. Content validation, chunking, and every safety guarantee are
+untouched — this is layout repair only.
+
+## D-081 — Lightweight Piper TTS default (Bonus, Non-Weakening)
+
+**Decision:** Replace Parler-TTS as the local TTS default with Piper
+(`piper-tts==1.7.0`, ONNX voices on CPU). Parler's ~10 s synthesis and ~3 GB
+RAM footprint caused nginx 502s on the speech endpoint; Piper synthesizes the
+same utterances in ~100 ms with ~200 MB RAM. Voices are pinned per language in
+code (en → `en_US-lessac-medium`, overridable via `SPEECH_TTS_MODEL`; hi →
+`hi_IN-pratham-medium`, fixed); unknown languages fall back to the English
+voice. The Docker image bakes both voices into `/app/piper-voices`
+(`SPEECH_TTS_VOICES_DIR`), so TTS works offline; outside Docker voices
+auto-download into `storage/piper-voices` on first use. Parler-TTS remains
+selectable (`SPEECH_TTS_PROVIDER=parler-tts`) for operators who prefer it.
+**Non-weakening:** synthesis-only path — grounding, citations, refusal, and
+injection protection untouched; failures still fail closed (503) with clean
+error messages.
+
+## D-082 — Final QA remediation (2026-08-31)
+
+**Decision:** Findings from the final red-team/QA audit, fixed in one pass:
+
+1. **BGE embedder is now the live default** (`EMBEDDING_BACKEND=bge`,
+   `EMBEDDING_MODEL=BAAI/bge-base-en-v1.5`). D-078's HashingEmbedder
+   "temporary dev setup" is now an explicit fallback only — the app boots
+   with the semantic embedder and logs a warning when it must degrade.
+   `eval/run_eval.py --bge` runs the golden set with the same model. The
+   model is baked into the Docker image (HF cache) for offline startup.
+   Pinned `sentence-transformers==3.4.1` (6.x needs transformers≥5, which
+   conflicts with the speech stack's 4.46.1 pin).
+2. **Marginal-note title association fixed** (Gazette layout: a section's
+   note is printed immediately BEFORE its header). The parser now assigns
+   the last pre-header note cluster to the new section and earlier clusters
+   to older untitled sections in order; citation-note clusters ("1 of
+   1871.") are dropped. Verified: s.101 "Murder", s.103 "Punishment for
+   murder" … s.358 "Repeal and savings"; 46 sections remain untitled only
+   where the text layer carries no extractable note (flagged
+   `needs_review`). Inline chrome (Gazette headers, glued page numbers,
+   middot-for-apostrophe) scrubbed; 0 artifact chunks in the re-ingested
+   `data/processed/bns_corpus.jsonl`, which is now the compose default
+   corpus (was: BNSS dev fixture).
+3. **Citation guard hardening:** sentences naming an Act absent from the
+   evidence ("Indian Penal Code"/IPC, CrPC, IEA) are removed as
+   misattributions even when the section number exists in both statutes;
+   citation-free sentences using punishment/consequence vocabulary (incl.
+   Indic दंड/সাজা/தண்டனை …) with no evidenced section reference are
+   removed as uncited legal claims.
+4. **Redis outage = 503 not 500:** `redis.RedisError` maps to
+   `503 DEPENDENCY_UNAVAILABLE`; readiness gains a `redis` check when
+   `DOCUMENTS_BACKEND=redis`.
+5. **Metrics zero-series seeding:** headless counters/gauges (tokens,
+   uploads, refusals, cost) emit 0-valued samples at startup so a scrape
+   right after restart does not show the metrics as absent.
+6. **Compose hardening:** Ollama is default-on (the `llm` profile broke
+   clean-start — `.env` pointed at an unreachable URL); a Prometheus
+   container (v2.53.0, port 9090) ships in the default stack; tesseract +
+   poppler-utils installed in the image for the forms OCR fallback;
+   whitespace-only form search queries now 422 instead of returning every
+   form.
+
+**Non-weakening:** no requirement was removed or weakened; all fixes tighten
+validation or repair layout/deployment defects. Full regression: 629
+backend + 93 frontend tests.
+
+## D-083 — Remediation + verification pass 2 (2026-08-31)
+
+Second independent audit remediation. All changes tighten correctness; none
+weaken citation enforcement, refusal, isolation, or injection defenses.
+
+1. **Embedder parity made loud:** the API and the arq worker already share
+   one embedder factory (`build_embedder`), but a dimension mismatch between
+   a stored document vector and the query vector silently scored 0. The Redis
+   document index now counts mismatches, skips unusable vectors, and raises
+   `503 EMBEDDING_MISMATCH` when nothing is usable (full mismatch) or logs a
+   warning (partial). Regression tests in
+   `tests/workers/test_arq_worker.py::TestEmbeddingParity`.
+2. **Citation normalization gap closed:** `[Document {id} p.1]` (braces
+   around the id *inside* the label) previously failed the strict document
+   regex. Harmless formatting is now normalized to `[Document <id> p.1]`
+   without loosening validation — existence, page-range, relevance, and
+   altered-id checks all still apply (`test_curly_id_inside_document_label_is_normalized`,
+   `test_altered_document_id_is_rejected`, `test_invented_page_is_rejected`).
+3. **SSE `done.citations` contract fixed:** the final event listed statute
+   labels only; answers citing an uploaded document with no statute showed
+   `citations: []` while `sources` carried document evidence. `done.citations`
+   now includes `[Document <id>]` labels derived from the validated
+   citation set (`test_done_event_includes_document_citations`), verified
+   live: document answers now emit e.g. `["[Document e5224… p.1]"]`-style
+   labels in `done`.
+4. **Eval recall denominator explained (not changed):** official Recall@5/
+   @10/MRR average over ALL golden cases, including refusal cases with no
+   `expected_sections` (counted as 0). Applicable-case-only numbers (n=21):
+   hybrid(BGE) R@5 0.476 / R@10 0.762 / MRR 0.480; sparse-only(BM25)
+   R@5 0.857 / R@10 0.905 / MRR 0.723; dense-only(BGE) R@5 0.429. The
+   metric was left untouched to keep historical comparability; the low
+   headline numbers are a denominator artifact plus a lexically-biased
+   golden set, not a retrieval defect. No thresholds were tuned.
+5. **Untitled-section root cause identified:** sampled "untitled" sections
+   (s.282, s.300 …) DO carry marginal notes in the Gazette PDF, but the
+   side-column layout interleaves them into the body text mid-sentence
+   ("…to endanger **Rash navigation** human life…"). The parser correctly
+   refuses to guess titles (no manufacturing); a layout-aware extractor
+   (pdfplumber column split) is future work. 46 sections affected, all
+   flagged in the manifest warnings.
+6. **Speech verified live:** TTS→STT round trip passes for English
+   ("This is a test of text-to-speech." → exact) and Hindi (Devanagari →
+   close transcription). mr/gu/ta Piper voices synthesize but produce
+   unintelligible audio from Indic script — documented limitation, not
+   claimed as verified. Malformed audio → `AUDIO_DECODE_FAILED`, empty →
+   `EMPTY_TRANSCRIPTION`, unsupported language → `SPEECH_LANGUAGE_INVALID`.
+7. **Clean-start verified:** `docker compose down -v && up -d --build` →
+   all services healthy in 423 s wall-clock (incl. image rebuild), first
+   chat request 7.9 s (Ollama model load), readiness all-green. Statute
+   chat continues to answer correctly during a Redis outage (statute path
+   does not depend on Redis); API and worker restarts recover cleanly.
+
+**Stress test (live, docker stack):** casual short-circuits carry no
+citations/sources; lookup and hybrid queries cite BNS; nonexistent s.9999
+refuses; prompt-injection payloads never leak and citations remain
+enforced; upload → async ingestion → document answer with document
+citation → cross-session isolation (no citations, status 403/404) →
+deletion → citations gone; Hindi casual/legal/injection behave; language
+override respected; rate limiting returns 429; malformed PDF 400; 25 MB
+upload 400; forms list/search OK; TTS OK.
+
+**Regression after this pass:** 642 backend tests, 93 frontend tests,
+ruff/mypy/eslint/tsc/build all green.

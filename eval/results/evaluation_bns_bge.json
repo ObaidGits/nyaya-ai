@@ -1,0 +1,41 @@
+{
+  "golden_set": "/media/obaid/SSD/my-files/shared/nyay/eval/golden_set.jsonl",
+  "corpus": "data/processed/bns_corpus.jsonl",
+  "deterministic": false,
+  "llm_mode": true,
+  "configurations": [
+    {
+      "config": "dense_only",
+      "cases": 29,
+      "failed_cases": 0,
+      "failures": [],
+      "recall_at_5": 0.3103448275862069,
+      "recall_at_10": 0.3103448275862069,
+      "mrr": 0.2827586206896551,
+      "citation_accuracy": 0.35714285714285715,
+      "refusal_correctness": 0.5172413793103449,
+      "document_hit_rate": 1.0,
+      "retrieval_latency_p50": 0.02453055599471554,
+      "retrieval_latency_p95": 0.08652619400527328,
+      "generation_latency_p50": 1.1645913980028126,
+      "generation_latency_p95": 6.515615962998709
+    },
+    {
+      "config": "hybrid",
+      "cases": 29,
+      "failed_cases": 0,
+      "failures": [],
+      "recall_at_5": 0.27586206896551724,
+      "recall_at_10": 0.27586206896551724,
+      "mrr": 0.27586206896551724,
+      "citation_accuracy": 0.35714285714285715,
+      "refusal_correctness": 0.5517241379310345,
+      "document_hit_rate": 1.0,
+      "retrieval_latency_p50": 0.026540923019638285,
+      "retrieval_latency_p95": 0.04111477598780766,
+      "generation_latency_p50": 1.195853678014828,
+      "generation_latency_p95": 5.077898833988002
+    }
+  ],
+  "executed_at": "2026-08-31T06:18:05.238981+00:00"
+}

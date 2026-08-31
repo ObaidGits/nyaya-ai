@@ -35,16 +35,16 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| P-001 | MUST | Build Nyaya as a small but real product | Working product exists, not merely an LLM demo | TODO |
-| P-002 | MUST | Provide a ChatGPT-style legal assistant | User can ask supported Indian criminal-law questions through the UI | TODO |
-| P-003 | MUST | Legal answers must be grounded in the required corpus | Legal answers use retrieved authoritative context | TODO |
-| P-004 | MUST | Every legal claim must carry an exact Act/Section citation | Generated legal claims contain citations | TODO |
-| P-005 | MUST | Allow users to upload their own legal document | User can upload and later query a document | TODO |
-| P-006 | MUST | Provide a downloadable statutory forms library | Forms can be browsed and downloaded | TODO |
-| P-007 | MUST | Product has two primary panels | UI contains Chatbot and Forms panels | TODO |
-| P-008 | MUST | Optimize for a second engineer being able to run the system | Clean-clone setup is documented and works | TODO |
-| P-009 | MUST | Attempt the maximum practical scope within the four-day deadline | Completed/partial work is honestly reported in README | TODO |
-| P-010 | MUST | Every submitted line must be explainable by the candidate | AI-assisted implementation is documented and understandable | TODO |
+| P-001 | MUST | Build Nyaya as a small but real product | Working product exists, not merely an LLM demo | DONE |
+| P-002 | MUST | Provide a ChatGPT-style legal assistant | User can ask supported Indian criminal-law questions through the UI | DONE |
+| P-003 | MUST | Legal answers must be grounded in the required corpus | Legal answers use retrieved authoritative context | DONE |
+| P-004 | MUST | Every legal claim must carry an exact Act/Section citation | Generated legal claims contain citations | DONE |
+| P-005 | MUST | Allow users to upload their own legal document | User can upload and later query a document | DONE |
+| P-006 | MUST | Provide a downloadable statutory forms library | Forms can be browsed and downloaded | DONE |
+| P-007 | MUST | Product has two primary panels | UI contains Chatbot and Forms panels | DONE |
+| P-008 | MUST | Optimize for a second engineer being able to run the system | Clean-clone setup is documented and works | DONE |
+| P-009 | MUST | Attempt the maximum practical scope within the four-day deadline | Completed/partial work is honestly reported in README | DONE |
+| P-010 | MUST | Every submitted line must be explainable by the candidate | AI-assisted implementation is documented and understandable | DONE |
 
 ---
 
@@ -52,12 +52,12 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| SRC-001 | MUST | Use Bharatiya Nyaya Sanhita, 2023 as primary corpus | BNS is the primary legal retrieval corpus | BLOCKED |
-| SRC-002 | MUST | Use the official bare-act PDF specified by the assignment | The exact supplied PDF is used | BLOCKED |
-| SRC-003 | MUST | Do not substitute a differently paginated copy | No alternate BNS PDF is used | BLOCKED |
-| SRC-004 | MUST | Use pages 190–249 as the expected forms range | Forms extraction initially targets pages 190–249 | TODO |
-| SRC-005 | MUST | Treat the actual page contents as authoritative for form parsing | Parser detects what is actually on each page | TODO |
-| SRC-006 | MUST | Do not assume the form pages solely from statute identity | Parser is content-driven rather than statute-name-driven | TODO |
+| SRC-001 | MUST | Use Bharatiya Nyaya Sanhita, 2023 as primary corpus | Serving corpus is the content-validated BNS Gazette artifact (358 sections, manifest SHA-256) | DONE |
+| SRC-002 | MUST | Use the official bare-act PDF specified by the assignment | The supplied bare-act PDF was content-validated as BNSS (not BNS); it is used as the forms source, and the statute corpus uses the official BNS 2023 Gazette PDF — documented trade-off (README "Known gaps") | PARTIAL |
+| SRC-003 | MUST | Do not substitute a differently paginated copy | No unofficial BNS substitute: the official Gazette publication is used, never a re-paginated copy | DONE |
+| SRC-004 | MUST | Use pages 190–249 as the expected forms range | Forms extraction initially targets pages 190–249 | DONE |
+| SRC-005 | MUST | Treat the actual page contents as authoritative for form parsing | Parser detects what is actually on each page | DONE |
+| SRC-006 | MUST | Do not assume the form pages solely from statute identity | Parser is content-driven rather than statute-name-driven | DONE |
 | SRC-007 | MUST | Document any disagreement between observed and expected forms range | Discrepancy is recorded in `DECISIONS.md` | DONE |
 | SRC-008 | MUST | Keep source PDF out of Git | Raw PDF is gitignored | DONE |
 | SRC-009 | MUST | Make source retrieval/ingestion reproducible | Bootstrap/ingestion process obtains/processes the source deterministically | DONE |
@@ -136,7 +136,7 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| A3-001 | MUST | Use a vector DB that can run in Docker | Vector DB is containerized | TODO |
+| A3-001 | MUST | Use a vector DB that can run in Docker | Vector DB is containerized | DONE |
 | A3-002 | DECISION | Select vector DB from allowed choices | Selection is documented | DONE |
 | A3-003 | MUST | Implement dense retrieval | Dense search returns relevant chunks | DONE |
 | A3-004 | MUST | Implement sparse/BM25/full-text retrieval | Sparse/exact retrieval is available | DONE |
@@ -156,44 +156,44 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| A4-001 | MUST | Every legal statement carries an inline citation | Generated legal statements have citations | TODO |
-| A4-002 | MUST | Citation includes Act | Citation identifies BNS/appropriate authority | TODO |
-| A4-003 | MUST | Citation includes Section | Citation contains section number | TODO |
-| A4-004 | MUST | Include subsection when relevant | Relevant subsection appears in citation | TODO |
-| A4-005 | MUST | Use required citation style | Example format `[BNS s.103(1)]` is supported | TODO |
-| A4-006 | MUST | Render citations as inline UI chips | Citation appears as clickable chip | TODO |
-| A4-007 | MUST | Citation chip opens source drawer | Click action opens source evidence | TODO |
-| A4-008 | MUST | Source drawer displays retrieved chunk verbatim | Exact retrieved text is shown | TODO |
-| A4-009 | MUST | Source drawer displays source page number | Page number is shown | TODO |
-| A4-010 | MUST | Define a confidence threshold | Threshold exists and is documented | TODO |
-| A4-011 | MUST | Refuse when retrieval is below confidence threshold | Low-confidence question produces refusal | TODO |
-| A4-012 | MUST | Do not answer low-confidence legal questions from parametric memory | No unsupported answer is generated | TODO |
-| A4-013 | MUST | Implement post-generation citation validation | Generated citations are checked in code | TODO |
-| A4-014 | MUST | Verify every cited section exists in retrieved context | Unsupported section numbers are detected | TODO |
-| A4-015 | MUST | Handle invented citations | Invalid citation is stripped or answer regenerated | TODO |
-| A4-016 | MUST | Keep citation guard in executable code | Guard is not prompt-only | TODO |
-| A4-017 | MUST | Display standing `not legal advice` disclaimer | Disclaimer appears once in chat panel chrome | TODO |
-| A4-018 | MUST | Do not spam legal disclaimer into every message | Disclaimer is not repeated in each answer | TODO |
+| A4-001 | MUST | Every legal statement carries an inline citation | Generated legal statements have citations | DONE |
+| A4-002 | MUST | Citation includes Act | Citation identifies BNS/appropriate authority | DONE |
+| A4-003 | MUST | Citation includes Section | Citation contains section number | DONE |
+| A4-004 | MUST | Include subsection when relevant | Relevant subsection appears in citation | DONE |
+| A4-005 | MUST | Use required citation style | Example format `[BNS s.103(1)]` is supported | DONE |
+| A4-006 | MUST | Render citations as inline UI chips | Citation appears as clickable chip | DONE |
+| A4-007 | MUST | Citation chip opens source drawer | Click action opens source evidence | DONE |
+| A4-008 | MUST | Source drawer displays retrieved chunk verbatim | Exact retrieved text is shown | DONE |
+| A4-009 | MUST | Source drawer displays source page number | Page number is shown | DONE |
+| A4-010 | MUST | Define a confidence threshold | Threshold exists and is documented | DONE |
+| A4-011 | MUST | Refuse when retrieval is below confidence threshold | Low-confidence question produces refusal | DONE |
+| A4-012 | MUST | Do not answer low-confidence legal questions from parametric memory | No unsupported answer is generated | DONE |
+| A4-013 | MUST | Implement post-generation citation validation | Generated citations are checked in code | DONE |
+| A4-014 | MUST | Verify every cited section exists in retrieved context | Unsupported section numbers are detected | DONE |
+| A4-015 | MUST | Handle invented citations | Invalid citation is stripped or answer regenerated | DONE |
+| A4-016 | MUST | Keep citation guard in executable code | Guard is not prompt-only | DONE |
+| A4-017 | MUST | Display standing `not legal advice` disclaimer | Disclaimer appears once in chat panel chrome | DONE |
+| A4-018 | MUST | Do not spam legal disclaimer into every message | Disclaimer is not repeated in each answer | DONE |
 
 ## A5. Two Corpora / User Documents
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| A5-001 | MUST | Support user legal-document uploads | User can upload a document | TODO |
-| A5-002 | MUST | Ingest uploaded documents | Uploaded document enters ingestion pipeline | TODO |
-| A5-003 | MUST | Chunk uploaded documents | Uploaded content is chunked | TODO |
-| A5-004 | MUST | Embed uploaded documents | Uploaded chunks receive embeddings | TODO |
-| A5-005 | MUST | Make uploaded documents queryable | Ready document can be queried | TODO |
-| A5-006 | MUST | Scope uploaded-document retrieval to user/session | Retrieval is isolated by ownership/session | TODO |
-| A5-007 | MUST | Prevent uploaded content leaking across users/sessions | Cross-session retrieval cannot return another user's content | TODO |
-| A5-008 | MUST | Never confuse uploaded documents with bare-act authority | Source types remain distinguishable | TODO |
-| A5-009 | MUST | Route statute questions to BNS index | Statute question retrieves BNS authority | TODO |
-| A5-010 | MUST | Route document questions to session index | Document question retrieves session document | TODO |
-| A5-011 | MUST | Route combined compliance questions to both indexes | Example notice-vs-section question searches both | TODO |
-| A5-012 | MUST | Distinguish user-document evidence from statutory authority in citations | UI/output makes source type clear | TODO |
-| A5-013 | MUST | Treat uploaded PDFs as untrusted input | Document text cannot alter system instructions | TODO |
-| A5-014 | MUST | Defend against prompt injection contained in uploads | Embedded instructions such as `ignore previous instructions` are not obeyed | TODO |
-| A5-015 | MUST | Document prompt-injection approach | Security approach is explained in project documentation | TODO |
+| A5-001 | MUST | Support user legal-document uploads | User can upload a document | DONE |
+| A5-002 | MUST | Ingest uploaded documents | Uploaded document enters ingestion pipeline | DONE |
+| A5-003 | MUST | Chunk uploaded documents | Uploaded content is chunked | DONE |
+| A5-004 | MUST | Embed uploaded documents | Uploaded chunks receive embeddings | DONE |
+| A5-005 | MUST | Make uploaded documents queryable | Ready document can be queried | DONE |
+| A5-006 | MUST | Scope uploaded-document retrieval to user/session | Retrieval is isolated by ownership/session | DONE |
+| A5-007 | MUST | Prevent uploaded content leaking across users/sessions | Cross-session retrieval cannot return another user's content | DONE |
+| A5-008 | MUST | Never confuse uploaded documents with bare-act authority | Source types remain distinguishable | DONE |
+| A5-009 | MUST | Route statute questions to BNS index | Statute question retrieves BNS authority | DONE |
+| A5-010 | MUST | Route document questions to session index | Document question retrieves session document | DONE |
+| A5-011 | MUST | Route combined compliance questions to both indexes | Example notice-vs-section question searches both | DONE |
+| A5-012 | MUST | Distinguish user-document evidence from statutory authority in citations | UI/output makes source type clear | DONE |
+| A5-013 | MUST | Treat uploaded PDFs as untrusted input | Document text cannot alter system instructions | DONE |
+| A5-014 | MUST | Defend against prompt injection contained in uploads | Embedded instructions such as `ignore previous instructions` are not obeyed | DONE |
+| A5-015 | MUST | Document prompt-injection approach | Security approach is explained in project documentation | DONE |
 
 ---
 
@@ -201,46 +201,46 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| B-001 | MUST | Process forms pages 190–249 | Pipeline covers expected range | TODO |
-| B-002 | MUST | Produce one PDF per form | Each detected form becomes its own PDF | TODO |
-| B-003 | MUST | Preserve page-perfect source output | Output corresponds to source pages without re-rendering where possible | TODO |
-| B-004 | MUST | Keep text/vector source as real PDF | Text/vector pages remain PDF rather than screenshots | TODO |
-| B-005 | MUST | Use rasterization only as documented fallback | Any rasterized output is justified/documented | TODO |
-| B-006 | MUST | Derive filenames from the printed form title | Filename title originates from parsed source | TODO |
-| B-007 | MUST | Scrape form titles programmatically | Titles are extracted by parser | TODO |
-| B-008 | MUST | Do not hardcode a list of form titles | No manually maintained list of 60 form names | TODO |
-| B-009 | MUST | Detect multi-page forms | Continuation pages are recognized | TODO |
-| B-010 | MUST | Keep multi-page forms as a single PDF | Two/three-page form produces one output file | TODO |
-| B-011 | MUST | Follow `FORM-<number>_<slugified-title>.pdf` naming | Every output follows required convention | TODO |
-| B-012 | MUST | Make filenames deterministic | Same input produces same filenames | TODO |
-| B-013 | MUST | Make filenames filesystem-safe | No invalid path characters | TODO |
-| B-014 | MUST | Do not use spaces in form filenames | Generated names contain no spaces | TODO |
-| B-015 | MUST | Prevent filename collisions | Distinct forms cannot overwrite each other | TODO |
-| B-016 | MUST | Generate `forms_manifest.json` | Manifest is produced | TODO |
-| B-017 | MUST | Manifest contains form number | Every entry includes number | TODO |
-| B-018 | MUST | Manifest contains scraped title | Exact parsed title is recorded | TODO |
-| B-019 | MUST | Manifest contains source page range | Start/end pages are recorded | TODO |
-| B-020 | MUST | Manifest contains output filename | Generated filename is recorded | TODO |
-| B-021 | MUST | Manifest contains byte size | Output size is recorded | TODO |
-| B-022 | MUST | Manifest contains SHA-256 | Cryptographic hash is recorded | TODO |
-| B-023 | MUST | Manifest contains extraction confidence | Parser confidence is recorded | TODO |
-| B-024 | MUST | Manifest contains `needs_review` | Review flag exists | TODO |
-| B-025 | MUST | Set `needs_review: true` when parser is unsure | Uncertain extraction is flagged | TODO |
-| B-026 | MUST | Provide OCR fallback | Tesseract or equivalent is available | TODO |
-| B-027 | MUST | Trigger OCR when text layer is missing | Missing text layer is handled | TODO |
-| B-028 | MUST | Trigger OCR when text layer is garbage | Unusable text layer is handled | TODO |
-| B-029 | MUST | Log pages that require OCR | OCR usage is traceable by page | TODO |
-| B-030 | MUST | Make forms pipeline idempotent | Re-running same source does not duplicate outputs/rows | TODO |
-| B-031 | MUST | Produce byte-identical output on repeated runs | Same PDF input produces identical output bytes | TODO |
-| B-032 | MUST | Ensure manifest titles are exact | Titles are suitable for evaluator manifest diff | TODO |
-| B-033 | MUST | Provide forms list API | `GET /api/v1/forms` works | TODO |
-| B-034 | MUST | Forms list API returns title | Title included | TODO |
-| B-035 | MUST | Forms list API returns form number | Form number included | TODO |
-| B-036 | MUST | Forms list API returns page range | Page range included | TODO |
-| B-037 | MUST | Forms list API returns size | Size included | TODO |
-| B-038 | MUST | Provide single-form download API | `GET /api/v1/forms/{id}/download` works | TODO |
-| B-039 | MUST | Provide bulk ZIP API | `GET /api/v1/forms/download-all` works | TODO |
-| B-040 | MUST | Provide form title search API | `GET /api/v1/forms/search?q=` works | TODO |
+| B-001 | MUST | Process forms pages 190–249 | Pipeline covers expected range | DONE |
+| B-002 | MUST | Produce one PDF per form | Each detected form becomes its own PDF | DONE |
+| B-003 | MUST | Preserve page-perfect source output | Output corresponds to source pages without re-rendering where possible | DONE |
+| B-004 | MUST | Keep text/vector source as real PDF | Text/vector pages remain PDF rather than screenshots | DONE |
+| B-005 | MUST | Use rasterization only as documented fallback | Any rasterized output is justified/documented | DONE |
+| B-006 | MUST | Derive filenames from the printed form title | Filename title originates from parsed source | DONE |
+| B-007 | MUST | Scrape form titles programmatically | Titles are extracted by parser | DONE |
+| B-008 | MUST | Do not hardcode a list of form titles | No manually maintained list of 60 form names | DONE |
+| B-009 | MUST | Detect multi-page forms | Continuation pages are recognized | DONE |
+| B-010 | MUST | Keep multi-page forms as a single PDF | Two/three-page form produces one output file | DONE |
+| B-011 | MUST | Follow `FORM-<number>_<slugified-title>.pdf` naming | Every output follows required convention | DONE |
+| B-012 | MUST | Make filenames deterministic | Same input produces same filenames | DONE |
+| B-013 | MUST | Make filenames filesystem-safe | No invalid path characters | DONE |
+| B-014 | MUST | Do not use spaces in form filenames | Generated names contain no spaces | DONE |
+| B-015 | MUST | Prevent filename collisions | Distinct forms cannot overwrite each other | DONE |
+| B-016 | MUST | Generate `forms_manifest.json` | Manifest is produced | DONE |
+| B-017 | MUST | Manifest contains form number | Every entry includes number | DONE |
+| B-018 | MUST | Manifest contains scraped title | Exact parsed title is recorded | DONE |
+| B-019 | MUST | Manifest contains source page range | Start/end pages are recorded | DONE |
+| B-020 | MUST | Manifest contains output filename | Generated filename is recorded | DONE |
+| B-021 | MUST | Manifest contains byte size | Output size is recorded | DONE |
+| B-022 | MUST | Manifest contains SHA-256 | Cryptographic hash is recorded | DONE |
+| B-023 | MUST | Manifest contains extraction confidence | Parser confidence is recorded | DONE |
+| B-024 | MUST | Manifest contains `needs_review` | Review flag exists | DONE |
+| B-025 | MUST | Set `needs_review: true` when parser is unsure | Uncertain extraction is flagged | DONE |
+| B-026 | MUST | Provide OCR fallback | Tesseract or equivalent is available | DONE |
+| B-027 | MUST | Trigger OCR when text layer is missing | Missing text layer is handled | DONE |
+| B-028 | MUST | Trigger OCR when text layer is garbage | Unusable text layer is handled | DONE |
+| B-029 | MUST | Log pages that require OCR | OCR usage is traceable by page | DONE |
+| B-030 | MUST | Make forms pipeline idempotent | Re-running same source does not duplicate outputs/rows | DONE |
+| B-031 | MUST | Produce byte-identical output on repeated runs | Same PDF input produces identical output bytes | DONE |
+| B-032 | MUST | Ensure manifest titles are exact | Titles are suitable for evaluator manifest diff | DONE |
+| B-033 | MUST | Provide forms list API | `GET /api/v1/forms` works | DONE |
+| B-034 | MUST | Forms list API returns title | Title included | DONE |
+| B-035 | MUST | Forms list API returns form number | Form number included | DONE |
+| B-036 | MUST | Forms list API returns page range | Page range included | DONE |
+| B-037 | MUST | Forms list API returns size | Size included | DONE |
+| B-038 | MUST | Provide single-form download API | `GET /api/v1/forms/{id}/download` works | DONE |
+| B-039 | MUST | Provide bulk ZIP API | `GET /api/v1/forms/download-all` works | DONE |
+| B-040 | MUST | Provide form title search API | `GET /api/v1/forms/search?q=` works | DONE |
 
 ---
 
@@ -250,68 +250,68 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| C-001 | MUST | Build ChatGPT-style chat UI | Chat interface is obvious and usable | TODO |
-| C-002 | MUST | Keep product to two primary panels | Chat and Forms are the main panels | TODO |
-| C-003 | MUST | Implement token streaming | Tokens visibly arrive progressively | TODO |
-| C-004 | MUST | Use SSE or WebSocket for streaming | One supported streaming transport is implemented | TODO |
-| C-005 | MUST | Do not use spinner-then-wall-of-text interaction | Response streams in UI | TODO |
-| C-006 | MUST | Support multi-turn history | Previous conversation context is retained | TODO |
-| C-007 | MUST | Show conversation list in sidebar | Conversations are listed | TODO |
-| C-008 | MUST | Allow conversation rename | User can rename a conversation | TODO |
-| C-009 | MUST | Allow conversation delete | User can delete a conversation | TODO |
-| C-010 | MUST | Render citations as chips | Citations are interactive UI elements | TODO |
-| C-011 | MUST | Open source drawer from citation chip | Source drawer is functional | TODO |
-| C-012 | MUST | Show exact statutory text in source drawer | Retrieved source text is displayed | TODO |
-| C-013 | MUST | Show source page in source drawer | Page number is displayed | TODO |
-| C-014 | MUST | Support drag-and-drop upload | User can drag a document into upload area | TODO |
-| C-015 | MUST | Support click-to-upload | User can select file normally | TODO |
-| C-016 | MUST | Show upload progress | Progress is visible | TODO |
-| C-017 | MUST | Show parse stage | UI indicates parse state | TODO |
-| C-018 | MUST | Show chunk stage | UI indicates chunk state | TODO |
-| C-019 | MUST | Show embed stage | UI indicates embedding state | TODO |
-| C-020 | MUST | Show ready state | UI clearly indicates document is queryable | TODO |
-| C-021 | MUST | Render Markdown | Markdown answers display correctly | TODO |
-| C-022 | MUST | Render code blocks | Code blocks are visually distinct/readable | TODO |
-| C-023 | MUST | Render quote blocks | Quote blocks display correctly | TODO |
-| C-024 | MUST | Provide copy button | User can copy answer/content | TODO |
-| C-025 | MUST | Provide stop-generation action | Active generation can be stopped | TODO |
-| C-026 | MUST | Provide regenerate action | User can regenerate an answer | TODO |
-| C-027 | MUST | Provide 3–4 example questions in empty state | Cold user sees examples | TODO |
-| C-028 | MUST | Provide useful file-too-large error | Error explains size issue | TODO |
-| C-029 | MUST | Provide useful unsupported-type error | Error explains file type issue | TODO |
-| C-030 | MUST | Provide useful model-timeout error | Error communicates timeout | TODO |
-| C-031 | MUST | Provide useful retrieval-empty error | Error communicates missing retrieval evidence | TODO |
-| C-032 | MUST | Avoid layout shift during long streamed answers | UI remains stable while streaming | TODO |
+| C-001 | MUST | Build ChatGPT-style chat UI | Chat interface is obvious and usable | DONE |
+| C-002 | MUST | Keep product to two primary panels | Chat and Forms are the main panels | DONE |
+| C-003 | MUST | Implement token streaming | Tokens visibly arrive progressively | DONE |
+| C-004 | MUST | Use SSE or WebSocket for streaming | One supported streaming transport is implemented | DONE |
+| C-005 | MUST | Do not use spinner-then-wall-of-text interaction | Response streams in UI | DONE |
+| C-006 | MUST | Support multi-turn history | Previous conversation context is retained | DONE |
+| C-007 | MUST | Show conversation list in sidebar | Conversations are listed | DONE |
+| C-008 | MUST | Allow conversation rename | User can rename a conversation | DONE |
+| C-009 | MUST | Allow conversation delete | User can delete a conversation | DONE |
+| C-010 | MUST | Render citations as chips | Citations are interactive UI elements | DONE |
+| C-011 | MUST | Open source drawer from citation chip | Source drawer is functional | DONE |
+| C-012 | MUST | Show exact statutory text in source drawer | Retrieved source text is displayed | DONE |
+| C-013 | MUST | Show source page in source drawer | Page number is displayed | DONE |
+| C-014 | MUST | Support drag-and-drop upload | User can drag a document into upload area | DONE |
+| C-015 | MUST | Support click-to-upload | User can select file normally | DONE |
+| C-016 | MUST | Show upload progress | Progress is visible | DONE |
+| C-017 | MUST | Show parse stage | UI indicates parse state | DONE |
+| C-018 | MUST | Show chunk stage | UI indicates chunk state | DONE |
+| C-019 | MUST | Show embed stage | UI indicates embedding state | DONE |
+| C-020 | MUST | Show ready state | UI clearly indicates document is queryable | DONE |
+| C-021 | MUST | Render Markdown | Markdown answers display correctly | DONE |
+| C-022 | MUST | Render code blocks | Code blocks are visually distinct/readable | DONE |
+| C-023 | MUST | Render quote blocks | Quote blocks display correctly | DONE |
+| C-024 | MUST | Provide copy button | User can copy answer/content | DONE |
+| C-025 | MUST | Provide stop-generation action | Active generation can be stopped | DONE |
+| C-026 | MUST | Provide regenerate action | User can regenerate an answer | DONE |
+| C-027 | MUST | Provide 3–4 example questions in empty state | Cold user sees examples | DONE |
+| C-028 | MUST | Provide useful file-too-large error | Error explains size issue | DONE |
+| C-029 | MUST | Provide useful unsupported-type error | Error explains file type issue | DONE |
+| C-030 | MUST | Provide useful model-timeout error | Error communicates timeout | DONE |
+| C-031 | MUST | Provide useful retrieval-empty error | Error communicates missing retrieval evidence | DONE |
+| C-032 | MUST | Avoid layout shift during long streamed answers | UI remains stable while streaming | DONE |
 
 ## Forms Panel
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| C-033 | MUST | Provide Forms panel | Forms are accessible from dedicated panel | TODO |
-| C-034 | MUST | Provide searchable form list | User can search forms | TODO |
-| C-035 | MUST | Provide filterable form list | User can filter forms | TODO |
-| C-036 | MUST | Provide form preview | User can preview before download | TODO |
-| C-037 | MUST | Provide single-form download | User can download one form | TODO |
-| C-038 | MUST | Provide bulk ZIP download | User can download all forms as ZIP | TODO |
+| C-033 | MUST | Provide Forms panel | Forms are accessible from dedicated panel | DONE |
+| C-034 | MUST | Provide searchable form list | User can search forms | DONE |
+| C-035 | MUST | Provide filterable form list | User can filter forms | DONE |
+| C-036 | MUST | Provide form preview | User can preview before download | DONE |
+| C-037 | MUST | Provide single-form download | User can download one form | DONE |
+| C-038 | MUST | Provide bulk ZIP download | User can download all forms as ZIP | DONE |
 
 ## Non-Negotiable UX
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| C-039 | MUST | Fully responsive UI | Application is usable across viewport sizes | TODO |
-| C-040 | MUST | Usable on a phone | Core workflows work on mobile viewport | TODO |
-| C-041 | MUST | Keyboard accessible | Core UI can be operated by keyboard | TODO |
-| C-042 | MUST | Visible focus states | Focus is visually apparent | TODO |
-| C-043 | MUST | Use sensible ARIA | Relevant interactive elements have appropriate accessibility semantics | TODO |
-| C-044 | MUST | Meet basic WCAG AA contrast | Basic contrast requirement is satisfied | TODO |
-| C-045 | MUST | Support dark mode | Dark theme works | TODO |
-| C-046 | MUST | Support light mode | Light theme works | TODO |
-| C-047 | MUST | Prevent streaming layout shift | Long answers do not destabilize layout | TODO |
-| C-048 | MUST | Use React | Frontend is React-based | TODO |
-| C-049 | DECISION | Choose React or Next.js | Choice documented | TODO |
-| C-050 | EXPECTED | Use Tailwind as styling default | Tailwind is used unless a justified implementation decision says otherwise | TODO |
-| C-051 | DECISION | Make a deliberate visual design choice | UI has a consistent visual language | TODO |
-| C-052 | MUST | Avoid stock/unstyled dashboard appearance | UI demonstrates deliberate design decisions | TODO |
+| C-039 | MUST | Fully responsive UI | Application is usable across viewport sizes | DONE |
+| C-040 | MUST | Usable on a phone | Core workflows work on mobile viewport | DONE |
+| C-041 | MUST | Keyboard accessible | Core UI can be operated by keyboard | DONE |
+| C-042 | MUST | Visible focus states | Focus is visually apparent | DONE |
+| C-043 | MUST | Use sensible ARIA | Relevant interactive elements have appropriate accessibility semantics | DONE |
+| C-044 | MUST | Meet basic WCAG AA contrast | Basic contrast requirement is satisfied | PARTIAL |
+| C-045 | MUST | Support dark mode | Dark theme works | DONE |
+| C-046 | MUST | Support light mode | Light theme works | DONE |
+| C-047 | MUST | Prevent streaming layout shift | Long answers do not destabilize layout | DONE |
+| C-048 | MUST | Use React | Frontend is React-based | DONE |
+| C-049 | DECISION | Choose React or Next.js | Choice documented | DONE |
+| C-050 | EXPECTED | Use Tailwind as styling default | Tailwind is used unless a justified implementation decision says otherwise | DONE |
+| C-051 | DECISION | Make a deliberate visual design choice | UI has a consistent visual language | DONE |
+| C-052 | MUST | Avoid stock/unstyled dashboard appearance | UI demonstrates deliberate design decisions | DONE |
 
 ---
 
@@ -330,67 +330,67 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| D-005 | MUST | `POST /api/v1/chat` exists | Endpoint is callable | TODO |
-| D-006 | MUST | Chat endpoint streams responses | Streaming behavior works | TODO |
-| D-007 | MUST | Chat endpoint supports multi-turn conversations | Conversation context is accepted/handled | TODO |
-| D-008 | MUST | `POST /api/v1/documents/upload` exists | Endpoint is callable | TODO |
-| D-009 | MUST | Upload endpoint returns `document_id` | Response contains ID | TODO |
-| D-010 | MUST | Upload endpoint returns `job_id` | Response contains job ID | TODO |
-| D-011 | MUST | `GET /api/v1/documents/{id}/status` exists | Status endpoint is callable | TODO |
-| D-012 | MUST | Status endpoint exposes parse progress | Parse state is represented | TODO |
-| D-013 | MUST | Status endpoint exposes chunk progress | Chunk state is represented | TODO |
-| D-014 | MUST | Status endpoint exposes embed progress | Embed state is represented | TODO |
-| D-015 | MUST | `GET /api/v1/documents` exists | Endpoint lists documents | TODO |
-| D-016 | MUST | Documents endpoint is session-scoped | Only current session's documents are returned | TODO |
-| D-017 | MUST | `DELETE /api/v1/documents/{id}` exists | Endpoint is callable | TODO |
-| D-018 | MUST | Document deletion purges vectors | Associated vector records are removed | TODO |
-| D-019 | MUST | `POST /api/v1/search` exists | Raw retrieval endpoint is callable | TODO |
-| D-020 | MUST | Search endpoint exposes raw retrieval | Useful for debugging/evaluation | TODO |
-| D-021 | MUST | `GET /api/v1/forms` exists | Forms list endpoint works | TODO |
-| D-022 | MUST | `GET /api/v1/forms/{id}/download` exists | Single download works | TODO |
-| D-023 | MUST | `GET /api/v1/forms/download-all` exists | ZIP download works | TODO |
-| D-024 | MUST | `GET /api/v1/forms/search` exists | Search endpoint works | TODO |
-| D-025 | MUST | `POST /api/v1/feedback` exists | Feedback endpoint works | TODO |
-| D-026 | MUST | Feedback supports thumbs up/down | Vote is persisted | TODO |
-| D-027 | MUST | Feedback supports optional text | Optional comment is persisted | TODO |
+| D-005 | MUST | `POST /api/v1/chat` exists | Endpoint is callable | DONE |
+| D-006 | MUST | Chat endpoint streams responses | Streaming behavior works | DONE |
+| D-007 | MUST | Chat endpoint supports multi-turn conversations | Conversation context is accepted/handled | DONE |
+| D-008 | MUST | `POST /api/v1/documents/upload` exists | Endpoint is callable | DONE |
+| D-009 | MUST | Upload endpoint returns `document_id` | Response contains ID | DONE |
+| D-010 | MUST | Upload endpoint returns `job_id` | Response contains job ID | DONE |
+| D-011 | MUST | `GET /api/v1/documents/{id}/status` exists | Status endpoint is callable | DONE |
+| D-012 | MUST | Status endpoint exposes parse progress | Parse state is represented | DONE |
+| D-013 | MUST | Status endpoint exposes chunk progress | Chunk state is represented | DONE |
+| D-014 | MUST | Status endpoint exposes embed progress | Embed state is represented | DONE |
+| D-015 | MUST | `GET /api/v1/documents` exists | Endpoint lists documents | DONE |
+| D-016 | MUST | Documents endpoint is session-scoped | Only current session's documents are returned | DONE |
+| D-017 | MUST | `DELETE /api/v1/documents/{id}` exists | Endpoint is callable | DONE |
+| D-018 | MUST | Document deletion purges vectors | Associated vector records are removed | DONE |
+| D-019 | MUST | `POST /api/v1/search` exists | Raw retrieval endpoint is callable | DONE |
+| D-020 | MUST | Search endpoint exposes raw retrieval | Useful for debugging/evaluation | DONE |
+| D-021 | MUST | `GET /api/v1/forms` exists | Forms list endpoint works | DONE |
+| D-022 | MUST | `GET /api/v1/forms/{id}/download` exists | Single download works | DONE |
+| D-023 | MUST | `GET /api/v1/forms/download-all` exists | ZIP download works | DONE |
+| D-024 | MUST | `GET /api/v1/forms/search` exists | Search endpoint works | DONE |
+| D-025 | MUST | `POST /api/v1/feedback` exists | Feedback endpoint works | DONE |
+| D-026 | MUST | Feedback supports thumbs up/down | Vote is persisted | DONE |
+| D-027 | MUST | Feedback supports optional text | Optional comment is persisted | DONE |
 | D-028 | MUST | `GET /api/v1/health` exists | Liveness endpoint responds | DONE |
 | D-029 | MUST | `GET /api/v1/health/ready` exists | Readiness endpoint responds | DONE |
-| D-030 | MUST | Readiness checks vector DB | Vector DB dependency is checked | PARTIAL |
-| D-031 | MUST | Readiness checks model | Model/provider readiness is checked | PARTIAL |
-| D-032 | MUST | Readiness checks storage | Storage readiness is checked | PARTIAL |
-| D-033 | MUST | `GET /api/v1/metrics` exists | Endpoint responds | TODO |
-| D-034 | MUST | Metrics endpoint uses Prometheus format | Metrics can be scraped | TODO |
+| D-030 | MUST | Readiness checks vector DB | Vector DB dependency is checked | DONE |
+| D-031 | MUST | Readiness checks model | Model/provider readiness is checked | DONE |
+| D-032 | MUST | Readiness checks storage | Storage readiness is checked | DONE |
+| D-033 | MUST | `GET /api/v1/metrics` exists | Endpoint responds | DONE |
+| D-034 | MUST | Metrics endpoint uses Prometheus format | Metrics can be scraped | DONE |
 
 ## Async Ingestion
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| D-035 | MUST | Document ingestion is asynchronous | Upload request returns without doing entire processing inline | TODO |
-| D-036 | MUST | Large upload must not block request thread | 60-page upload is handled by worker/task queue | TODO |
-| D-037 | MUST | Use a background worker/task queue | One supported queue architecture is implemented | TODO |
-| D-038 | DECISION | Choose queue implementation | Choice documented in `DECISIONS.md` | TODO |
-| D-039 | MUST | Provide job status | User can inspect processing state | TODO |
+| D-035 | MUST | Document ingestion is asynchronous | Upload request returns without doing entire processing inline | DONE |
+| D-036 | MUST | Large upload must not block request thread | 60-page upload is handled by worker/task queue | DONE |
+| D-037 | MUST | Use a background worker/task queue | One supported queue architecture is implemented | DONE |
+| D-038 | DECISION | Choose queue implementation | Choice documented in `DECISIONS.md` | DONE |
+| D-039 | MUST | Provide job status | User can inspect processing state | DONE |
 
 ## Identity & Ownership
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| D-040 | MUST | Provide session or user identity | Requests have an ownership identity | TODO |
-| D-041 | DECISION | Session model may use anonymous session tokens | If anonymous model chosen, it is documented | TODO |
-| D-042 | MUST | Enforce document ownership | Document access checks current owner | TODO |
-| D-043 | MUST | Cross-owner document access returns 404 | Access to someone else's ID does not reveal document | TODO |
+| D-040 | MUST | Provide session or user identity | Requests have an ownership identity | DONE |
+| D-041 | DECISION | Session model may use anonymous session tokens | If anonymous model chosen, it is documented | DONE |
+| D-042 | MUST | Enforce document ownership | Document access checks current owner | DONE |
+| D-043 | MUST | Cross-owner document access returns 404 | Access to someone else's ID does not reveal document | DONE |
 
 ## Upload Validation & Rate Limiting
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| D-044 | MUST | Enforce upload type allowlist | Unsupported file type is rejected | TODO |
-| D-045 | MUST | Enforce maximum upload size | Oversized upload is rejected | TODO |
-| D-046 | MUST | Perform MIME sniffing | Content is checked rather than trusting filename alone | TODO |
-| D-047 | MUST | Reject encrypted PDFs | Encrypted PDF has hard rejection path | TODO |
-| D-048 | MUST | Reject corrupt PDFs | Corrupt PDF has hard rejection path | TODO |
-| D-049 | MUST | Rate-limit chat | Excessive chat requests are controlled | TODO |
-| D-050 | MUST | Rate-limit upload | Excessive uploads are controlled | TODO |
+| D-044 | MUST | Enforce upload type allowlist | Unsupported file type is rejected | DONE |
+| D-045 | MUST | Enforce maximum upload size | Oversized upload is rejected | DONE |
+| D-046 | MUST | Perform MIME sniffing | Content is checked rather than trusting filename alone | DONE |
+| D-047 | MUST | Reject encrypted PDFs | Encrypted PDF has hard rejection path | DONE |
+| D-048 | MUST | Reject corrupt PDFs | Corrupt PDF has hard rejection path | DONE |
+| D-049 | MUST | Rate-limit chat | Excessive chat requests are controlled |DONE |
+| D-050 | MUST | Rate-limit upload | Excessive uploads are controlled |DONE |
 
 ## Logging & API Documentation
 
@@ -398,8 +398,8 @@
 |---|---|---|---|---|
 | D-051 | MUST | Use structured JSON logs | Logs are machine-readable JSON | DONE |
 | D-052 | MUST | Generate request ID | Each request has an identifier | DONE |
-| D-053 | MUST | Propagate request ID through retrieval | Retrieval logs retain request ID | TODO |
-| D-054 | MUST | Propagate request ID through generation | Generation logs retain request ID | TODO |
+| D-053 | MUST | Propagate request ID through retrieval | Retrieval logs retain request ID | DONE |
+| D-054 | MUST | Propagate request ID through generation | Generation logs retain request ID | DONE |
 | D-055 | MUST | Make OpenAPI docs work at `/docs` | `/docs` loads usable API documentation | DONE |
 
 ---
@@ -408,28 +408,28 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| INF-001 | MUST | Dockerize backend API | API image builds and runs | TODO |
-| INF-002 | MUST | Provide multi-stage API Dockerfile | API Dockerfile uses multi-stage build | TODO |
-| INF-003 | MUST | Provide worker Dockerfile or shared image with distinct entrypoints | Worker can run independently | TODO |
-| INF-004 | MUST | Run containers as non-root | Runtime user is non-root | TODO |
-| INF-005 | MUST | Use slim base image | Base image is appropriately slim | TODO |
-| INF-006 | MUST | Provide meaningful `.dockerignore` | Unnecessary files are excluded | TODO |
-| INF-007 | MUST | Exclude `.git` from Docker build context/image | Git history is not shipped | TODO |
-| INF-008 | MUST | Exclude `.env` from Docker build context/image | Secrets are not shipped | TODO |
-| INF-009 | MUST | Exclude `node_modules` from Docker build context/image | Local dependency tree is not shipped | TODO |
-| INF-010 | MUST | Exclude raw PDFs from Docker image | Source corpus is not baked into image | TODO |
-| INF-011 | MUST | Add Docker `HEALTHCHECK` | Healthcheck calls required health endpoint | TODO |
-| INF-012 | MUST | Wire healthcheck to `/api/v1/health` | Healthcheck uses liveness endpoint | TODO |
-| INF-013 | MUST | Pin dependency versions | Builds do not float to arbitrary future versions | TODO |
-| INF-014 | MUST | Define API service in Docker Compose | API starts via Compose | TODO |
-| INF-015 | MUST | Define worker service in Docker Compose | Worker starts via Compose | TODO |
-| INF-016 | MUST | Define vector DB in Docker Compose | Vector DB starts via Compose | TODO |
-| INF-017 | MUST | Define Redis/queue in Docker Compose | Queue starts via Compose | TODO |
-| INF-018 | MUST | Define frontend in Docker Compose | Frontend starts via Compose | TODO |
-| INF-019 | MUST | Use a shared Docker network | Services communicate over shared network | TODO |
-| INF-020 | MUST | Use named volumes | Persistent service data uses named volumes | TODO |
-| INF-021 | MUST | Document image size in README | Image size is explicitly recorded | TODO |
-| INF-022 | MUST | Avoid unnecessary heavyweight dependencies | Image remains appropriately sized | TODO |
+| INF-001 | MUST | Dockerize backend API | API image builds and runs | DONE |
+| INF-002 | MUST | Provide multi-stage API Dockerfile | API Dockerfile uses multi-stage build | DONE |
+| INF-003 | MUST | Provide worker Dockerfile or shared image with distinct entrypoints | Worker can run independently | DONE |
+| INF-004 | MUST | Run containers as non-root | Runtime user is non-root | DONE |
+| INF-005 | MUST | Use slim base image | Base image is appropriately slim | DONE |
+| INF-006 | MUST | Provide meaningful `.dockerignore` | Unnecessary files are excluded | DONE |
+| INF-007 | MUST | Exclude `.git` from Docker build context/image | Git history is not shipped | DONE |
+| INF-008 | MUST | Exclude `.env` from Docker build context/image | Secrets are not shipped | DONE |
+| INF-009 | MUST | Exclude `node_modules` from Docker build context/image | Local dependency tree is not shipped | DONE |
+| INF-010 | MUST | Exclude raw PDFs from Docker image | Source corpus is not baked into image | DONE |
+| INF-011 | MUST | Add Docker `HEALTHCHECK` | Healthcheck calls required health endpoint | DONE |
+| INF-012 | MUST | Wire healthcheck to `/api/v1/health` | Healthcheck uses liveness endpoint | DONE |
+| INF-013 | MUST | Pin dependency versions | Builds do not float to arbitrary future versions | DONE |
+| INF-014 | MUST | Define API service in Docker Compose | API starts via Compose | DONE |
+| INF-015 | MUST | Define worker service in Docker Compose | Worker starts via Compose | DONE |
+| INF-016 | MUST | Define vector DB in Docker Compose | Vector DB starts via Compose | DONE |
+| INF-017 | MUST | Define Redis/queue in Docker Compose | Queue starts via Compose | DONE |
+| INF-018 | MUST | Define frontend in Docker Compose | Frontend starts via Compose | DONE |
+| INF-019 | MUST | Use a shared Docker network | Services communicate over shared network | DONE |
+| INF-020 | MUST | Use named volumes | Persistent service data uses named volumes | DONE |
+| INF-021 | MUST | Document image size in README | Image size is explicitly recorded | DONE |
+| INF-022 | MUST | Avoid unnecessary heavyweight dependencies | Image remains appropriately sized | DONE |
 
 ---
 
@@ -437,11 +437,11 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| LLM-001 | DECISION | Choose an LLM provider | Provider is documented | PARTIAL |
+| LLM-001 | DECISION | Choose an LLM provider | Provider is documented | DONE |
 | LLM-002 | MUST | Put LLM provider behind an interface | Application calls an abstraction rather than hardcoded provider implementation | DONE |
 | LLM-003 | MUST | Provider must be swappable by environment variable | Provider can be changed through configuration | DONE |
-| LLM-004 | MUST | Document free-tier execution path | Reviewer can run without paid API access where applicable | TODO |
-| LLM-005 | MUST | Include Ollama path | Reviewer can evaluate without your API key | TODO |
+| LLM-004 | MUST | Document free-tier execution path | Reviewer can run without paid API access where applicable | DONE |
+| LLM-005 | MUST | Include Ollama path | Reviewer can evaluate without your API key | DONE |
 
 ---
 
@@ -451,21 +451,21 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| E-001 | MUST | Use GitHub Actions | CI is implemented using GitHub Actions | TODO |
-| E-002 | MUST | Run CI on every pull request | PR triggers workflow | TODO |
-| E-003 | MUST | Run CI on every push to `main` | Push triggers workflow | TODO |
-| E-004 | MUST | Run lint | Lint check is part of CI | TODO |
-| E-005 | MUST | Run format check | Formatting is checked | TODO |
-| E-006 | MUST | Run type check | Type checker is part of CI | TODO |
-| E-007 | MUST | Run test suite | Tests execute in CI | TODO |
-| E-008 | MUST | Report test coverage | Coverage is generated | TODO |
-| E-009 | MUST | Enforce stated coverage threshold | CI fails below configured threshold | TODO |
-| E-010 | MUST | Run secret scanning | Gitleaks or TruffleHog is integrated | TODO |
-| E-011 | MUST | Fail when credential appears in diff | Secret scanner blocks unsafe change | TODO |
-| E-012 | MUST | Build Docker image | CI builds application image | TODO |
-| E-013 | MUST | Tag image with commit SHA | Image tag includes commit SHA | TODO |
+| E-001 | MUST | Use GitHub Actions | CI is implemented using GitHub Actions | DONE |
+| E-002 | MUST | Run CI on every pull request | PR triggers workflow | DONE |
+| E-003 | MUST | Run CI on every push to `main` | Push triggers workflow | DONE |
+| E-004 | MUST | Run lint | Lint check is part of CI | DONE |
+| E-005 | MUST | Run format check | Formatting is checked | DONE |
+| E-006 | MUST | Run type check | Type checker is part of CI | DONE |
+| E-007 | MUST | Run test suite | Tests execute in CI | DONE |
+| E-008 | MUST | Report test coverage | Coverage is generated | DONE |
+| E-009 | MUST | Enforce stated coverage threshold | CI fails below configured threshold | DONE |
+| E-010 | MUST | Run secret scanning | Gitleaks or TruffleHog is integrated | DONE |
+| E-011 | MUST | Fail when credential appears in diff | Secret scanner blocks unsafe change | DONE |
+| E-012 | MUST | Build Docker image | CI builds application image | DONE |
+| E-013 | MUST | Tag image with commit SHA | Image tag includes commit SHA | DONE |
 | E-014 | MUST | Push image to GHCR | CI publishes image to GitHub Container Registry | TODO |
-| E-015 | MUST | Scan built image with Trivy | Vulnerability scan runs | TODO |
+| E-015 | MUST | Scan built image with Trivy | Vulnerability scan runs | DONE |
 | E-016 | MUST | Deploy on merge to `main` | Deployment job triggers after merge | TODO |
 
 ## Self-Hosted Runner — DevOps Track
@@ -487,20 +487,20 @@
 |---|---|---|---|---|
 | E-025 | TRACK | Deploy frontend to Vercel for DevOps track | Frontend is live on Vercel | TODO |
 | E-026 | OPTIONAL | Vercel deployment for non-DevOps track | May be omitted outside DevOps track | TODO |
-| E-027 | MUST | Backend runs through Docker Compose deployment | Backend service starts via Compose | TODO |
-| E-028 | MUST | Vector DB runs through Docker Compose deployment | Vector DB starts via Compose | TODO |
-| E-029 | MUST | Worker runs through Docker Compose deployment | Worker starts via Compose | TODO |
-| E-030 | MUST | Deployment includes health checks | Services expose/use health checks | TODO |
-| E-031 | MUST | Deployment uses named volumes | Persistent data is retained | TODO |
-| E-032 | MUST | Deployment uses shared network | Required services communicate | TODO |
-| E-033 | MUST | Deployment uses restart policies | Appropriate services restart automatically | TODO |
-| E-034 | MUST | Clean clone can run `docker-compose up` | Whole system starts with one command | TODO |
-| E-035 | MUST | Avoid multi-step startup preamble | Reviewer does not need a long manual setup sequence | TODO |
-| E-036 | MUST | Provide one-shot BNS ingestion process | `scripts/bootstrap.sh` or init container performs documented ingestion | TODO |
-| E-037 | MUST | Provide one-shot forms extraction process | Same bootstrap/init mechanism handles forms extraction | TODO |
-| E-038 | MUST | Make bootstrap/init process idempotent | Re-running does not duplicate/re-corrupt data | TODO |
-| E-039 | MUST | Document rollback story | Previous image can be restored | TODO |
-| E-040 | MUST | Document rollback speed/expected recovery process | README/deployment docs state how fast/how | TODO |
+| E-027 | MUST | Backend runs through Docker Compose deployment | Backend service starts via Compose | DONE |
+| E-028 | MUST | Vector DB runs through Docker Compose deployment | Vector DB starts via Compose | DONE |
+| E-029 | MUST | Worker runs through Docker Compose deployment | Worker starts via Compose | DONE |
+| E-030 | MUST | Deployment includes health checks | Services expose/use health checks | DONE |
+| E-031 | MUST | Deployment uses named volumes | Persistent data is retained | DONE |
+| E-032 | MUST | Deployment uses shared network | Required services communicate | DONE |
+| E-033 | MUST | Deployment uses restart policies | Appropriate services restart automatically | DONE |
+| E-034 | MUST | Clean clone can run `docker-compose up` | Whole system starts with one command | DONE |
+| E-035 | MUST | Avoid multi-step startup preamble | Reviewer does not need a long manual setup sequence | DONE |
+| E-036 | MUST | Provide one-shot BNS ingestion process | `scripts/bootstrap.sh` or init container performs documented ingestion | DONE |
+| E-037 | MUST | Provide one-shot forms extraction process | Same bootstrap/init mechanism handles forms extraction | DONE |
+| E-038 | MUST | Make bootstrap/init process idempotent | Re-running does not duplicate/re-corrupt data | DONE |
+| E-039 | MUST | Document rollback story | Previous image can be restored | DONE |
+| E-040 | MUST | Document rollback speed/expected recovery process | README/deployment docs state how fast/how | DONE |
 
 ---
 
@@ -508,18 +508,18 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| SEC-001 | MUST | Never commit `.env` | `.env` is ignored and absent from Git | TODO |
-| SEC-002 | MUST | Never commit API keys | Repository contains no keys | TODO |
-| SEC-003 | MUST | Never commit credentials | Repository contains no credentials | TODO |
-| SEC-004 | MUST | Treat committed secret as release blocker | Submission is not made while secret exists | TODO |
+| SEC-001 | MUST | Never commit `.env` | `.env` is ignored and absent from Git | DONE |
+| SEC-002 | MUST | Never commit API keys | Repository contains no keys | DONE |
+| SEC-003 | MUST | Never commit credentials | Repository contains no credentials | DONE |
+| SEC-004 | MUST | Treat committed secret as release blocker | Submission is not made while secret exists | DONE |
 | SEC-005 | MUST | Provide complete `.env.example` | All variables are listed | DONE |
-| SEC-006 | MUST | Document purpose of every env variable | Variable table is complete | TODO |
+| SEC-006 | MUST | Document purpose of every env variable | Variable table is complete | DONE |
 | SEC-007 | MUST | Provide safe default for every env variable where applicable | Defaults do not expose secrets | DONE |
-| SEC-008 | MUST | Store CI secrets in GitHub Secrets | Workflow does not hardcode secrets | TODO |
+| SEC-008 | MUST | Store CI secrets in GitHub Secrets | Workflow does not hardcode secrets | DONE |
 | SEC-009 | MUST | Store Vercel secrets in project env vars | Secrets are not committed | TODO |
-| SEC-010 | MUST | If a secret is accidentally committed, rotate it | Credential is invalidated/replaced | TODO |
-| SEC-011 | MUST | Document accidental secret incident in `DECISIONS.md` | Incident is honestly recorded | TODO |
-| SEC-012 | MUST | Do not hide an accidental secret by pretending it did not happen | Documentation remains truthful | TODO |
+| SEC-010 | MUST | If a secret is accidentally committed, rotate it | Credential is invalidated/replaced | DONE |
+| SEC-011 | MUST | Document accidental secret incident in `DECISIONS.md` | Incident is honestly recorded | DONE |
+| SEC-012 | MUST | Do not hide an accidental secret by pretending it did not happen | Documentation remains truthful | DONE |
 
 ---
 
@@ -529,57 +529,57 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| F-001 | MUST | Create `eval/golden_set.jsonl` | File exists and is executable as evaluation input | TODO |
-| F-002 | MUST | Golden set contains 25–30 questions | Count is within required range | TODO |
-| F-003 | MUST | Every golden question has expected section(s) | Schema includes expected sections | TODO |
-| F-004 | MUST | Include lookup questions | Lookup type represented | TODO |
-| F-005 | MUST | Include reasoning questions | Reasoning type represented | TODO |
-| F-006 | MUST | Include at least 5 out-of-scope questions | At least five `must_refuse` examples exist | TODO |
-| F-007 | MUST | Out-of-scope questions are expected to be refused | Expected sections are empty/appropriate refusal expectation | TODO |
+| F-001 | MUST | Create `eval/golden_set.jsonl` | File exists and is executable as evaluation input |DONE |
+| F-002 | MUST | Golden set contains 25–30 questions | Count is within required range |DONE |
+| F-003 | MUST | Every golden question has expected section(s) | Schema includes expected sections |DONE |
+| F-004 | MUST | Include lookup questions | Lookup type represented |DONE |
+| F-005 | MUST | Include reasoning questions | Reasoning type represented |DONE |
+| F-006 | MUST | Include at least 5 out-of-scope questions | At least five `must_refuse` examples exist |DONE |
+| F-007 | MUST | Out-of-scope questions are expected to be refused | Expected sections are empty/appropriate refusal expectation |DONE |
 
 ## Retrieval Metrics
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| F-008 | MUST | Report Recall@5 | Numerical result is produced | TODO |
-| F-009 | MUST | Report Recall@10 | Numerical result is produced | TODO |
-| F-010 | MUST | Report MRR | Numerical result is produced | TODO |
-| F-011 | MUST | Report citation accuracy | Numerical percentage is produced | TODO |
-| F-012 | MUST | Citation accuracy checks cited section presence in retrieved context | Metric logic verifies source presence | TODO |
-| F-013 | MUST | Citation accuracy checks cited section relevance | Metric logic evaluates relevance | TODO |
-| F-014 | MUST | Report out-of-scope refusal rate | Numerical refusal rate is produced | TODO |
-| F-015 | MUST | Report p50 end-to-end latency | Numerical p50 is produced | TODO |
-| F-016 | MUST | Report p95 end-to-end latency | Numerical p95 is produced | TODO |
-| F-017 | MUST | Split latency into retrieval and generation | Separate latency measurements are reported | TODO |
+| F-008 | MUST | Report Recall@5 | Numerical result is produced |DONE |
+| F-009 | MUST | Report Recall@10 | Numerical result is produced |DONE |
+| F-010 | MUST | Report MRR | Numerical result is produced |DONE |
+| F-011 | MUST | Report citation accuracy | Numerical percentage is produced |DONE |
+| F-012 | MUST | Citation accuracy checks cited section presence in retrieved context | Metric logic verifies source presence |DONE |
+| F-013 | MUST | Citation accuracy checks cited section relevance | Metric logic evaluates relevance |DONE |
+| F-014 | MUST | Report out-of-scope refusal rate | Numerical refusal rate is produced |DONE |
+| F-015 | MUST | Report p50 end-to-end latency | Numerical p50 is produced |DONE |
+| F-016 | MUST | Report p95 end-to-end latency | Numerical p95 is produced |DONE |
+| F-017 | MUST | Split latency into retrieval and generation | Separate latency measurements are reported |DONE |
 
 ## Configuration Comparison
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| F-018 | MUST | Evaluate at least two configurations | Two materially different configurations are tested | TODO |
-| F-019 | DECISION | Configuration comparison may use two embedding models | Valid comparison option | TODO |
-| F-020 | DECISION | Configuration comparison may use two chunking strategies | Valid comparison option | TODO |
-| F-021 | DECISION | Configuration comparison may use dense-only vs hybrid | Valid comparison option | TODO |
-| F-022 | MUST | Put comparison table in README | Table contains both configurations | TODO |
-| F-023 | MUST | Use numerical results | Comparison uses numbers, not only adjectives | TODO |
-| F-024 | MUST | Explain why winner won | README contains rationale for selected configuration | TODO |
+| F-018 | MUST | Evaluate at least two configurations | Two materially different configurations are tested |DONE |
+| F-019 | DECISION | Configuration comparison may use two embedding models | Valid comparison option | N/A (D-048 chose dense-only vs hybrid) |
+| F-020 | DECISION | Configuration comparison may use two chunking strategies | Valid comparison option | N/A (D-048 chose dense-only vs hybrid) |
+| F-021 | DECISION | Configuration comparison may use dense-only vs hybrid | Valid comparison option |DONE |
+| F-022 | MUST | Put comparison table in README | Table contains both configurations |DONE |
+| F-023 | MUST | Use numerical results | Comparison uses numbers, not only adjectives |DONE |
+| F-024 | MUST | Explain why winner won | README contains rationale for selected configuration |DONE |
 
 ## Observability
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| F-025 | MUST | Expose request count metric | Prometheus metric exists | TODO |
-| F-026 | MUST | Expose latency histogram metrics | Histogram exists | TODO |
-| F-027 | MUST | Expose embedding time | Metric exists | TODO |
-| F-028 | MUST | Expose retrieval latency | Metric exists | TODO |
-| F-029 | MUST | Expose vector DB up/down state | Metric exists | TODO |
-| F-030 | MUST | Expose token usage | Metric exists | TODO |
-| F-031 | MUST | Expose upload count | Metric exists | TODO |
-| F-032 | MUST | Expose refusal count | Metric exists | TODO |
-| F-033 | MUST | Provide one Grafana dashboard OR documented `/metrics` scraping with screenshots | One allowed observability deliverable exists | TODO |
-| F-034 | MUST | Track estimated cost per query | Cost is calculated | TODO |
-| F-035 | MUST | Calculate query cost from input/output tokens × provider rate | Cost formula follows assignment | TODO |
-| F-036 | MUST | Display estimated query cost | Cost is visible through the required observability/product surface | TODO |
+| F-025 | MUST | Expose request count metric | Prometheus metric exists |DONE |
+| F-026 | MUST | Expose latency histogram metrics | Histogram exists |DONE |
+| F-027 | MUST | Expose embedding time | Metric exists |DONE |
+| F-028 | MUST | Expose retrieval latency | Metric exists |DONE |
+| F-029 | MUST | Expose vector DB up/down state | Metric exists |DONE |
+| F-030 | MUST | Expose token usage | Metric exists |DONE |
+| F-031 | MUST | Expose upload count | Metric exists |DONE |
+| F-032 | MUST | Expose refusal count | Metric exists |DONE |
+| F-033 | MUST | Provide one Grafana dashboard OR documented `/metrics` scraping with screenshots | One allowed observability deliverable exists |DONE |
+| F-034 | MUST | Track estimated cost per query | Cost is calculated |DONE |
+| F-035 | MUST | Calculate query cost from input/output tokens × provider rate | Cost formula follows assignment |DONE |
+| F-036 | MUST | Display estimated query cost | Cost is visible through the required observability/product surface |DONE |
 
 ---
 
@@ -590,15 +590,15 @@
 | T-001 | MUST | Use an appropriate test framework | pytest/vitest or suitable equivalent is configured | DONE |
 | T-002 | MUST | Unit-test section boundary preservation | Test fails if chunker crosses required boundaries | DONE |
 | T-003 | MUST | Unit-test proviso attachment | Test verifies proviso remains with parent section | DONE |
-| T-004 | MUST | Unit-test slugifier punctuation handling | Fixture covers punctuation | TODO |
-| T-005 | MUST | Unit-test forms title extraction | Fixture verifies correct title | TODO |
-| T-006 | MUST | Integration-test vector DB round-trip | Write/index/retrieve path works | TODO |
-| T-007 | MUST | API-test every endpoint | Required endpoints have tests | PARTIAL |
+| T-004 | MUST | Unit-test slugifier punctuation handling | Fixture covers punctuation |DONE |
+| T-005 | MUST | Unit-test forms title extraction | Fixture verifies correct title |DONE |
+| T-006 | MUST | Integration-test vector DB round-trip | Write/index/retrieve path works | DONE |
+| T-007 | MUST | API-test every endpoint | Required endpoints have tests | DONE |
 | T-008 | MUST | API tests cover happy paths | Valid requests succeed | DONE |
-| T-009 | MUST | API tests cover auth/ownership failure | Unauthorized document access is rejected | TODO |
+| T-009 | MUST | API tests cover auth/ownership failure | Unauthorized document access is rejected |DONE |
 | T-010 | MUST | API tests cover validation failure | Invalid inputs produce expected errors | DONE |
-| T-011 | MUST | Run a small retrieval assertion set from golden file in CI | CI executes retrieval assertions | TODO |
-| T-012 | MUST | Provide one end-to-end test | Test covers upload → ready → query → cited answer | TODO |
+| T-011 | MUST | Run a small retrieval assertion set from golden file in CI | CI executes retrieval assertions | DONE |
+| T-012 | MUST | Provide one end-to-end test | Test covers upload → ready → query → cited answer | DONE |
 
 ---
 
@@ -606,32 +606,32 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| R-001 | MUST | Provide `frontend/` | React application exists there | TODO |
+| R-001 | MUST | Provide `frontend/` | React application exists there | DONE |
 | R-002 | MUST | Provide `backend/app/api/` | API routers live there | DONE |
 | R-003 | MUST | Provide `backend/app/core/` | Config/security/dependencies live there | DONE |
-| R-004 | MUST | Provide `backend/app/ingestion/` | PDF parsing and structure-aware chunking live there | TODO |
-| R-005 | MUST | Provide `backend/app/forms/` | Forms pages 190–249 pipeline lives there | TODO |
-| R-006 | MUST | Provide `backend/app/retrieval/` | Hybrid search/rerank/routing live there | TODO |
-| R-007 | MUST | Provide `backend/app/llm/` | Provider abstraction/prompts/guards live there | TODO |
-| R-008 | MUST | Provide `backend/app/workers/` | Async ingestion jobs live there | TODO |
+| R-004 | MUST | Provide `backend/app/ingestion/` | PDF parsing and structure-aware chunking live there | DONE |
+| R-005 | MUST | Provide `backend/app/forms/` | Forms pages 190–249 pipeline lives there | DONE |
+| R-006 | MUST | Provide `backend/app/retrieval/` | Hybrid search/rerank/routing live there | DONE |
+| R-007 | MUST | Provide `backend/app/llm/` | Provider abstraction/prompts/guards live there | DONE |
+| R-008 | MUST | Provide `backend/app/workers/` | Async ingestion jobs live there | DONE |
 | R-009 | MUST | Provide `backend/app/main.py` | Application entry point exists | DONE |
 | R-010 | MUST | Provide `backend/tests/` | Backend tests live there | DONE |
-| R-011 | MUST | Provide `eval/golden_set.jsonl` | Golden dataset exists | TODO |
-| R-012 | MUST | Provide `eval/run_eval.py` | Evaluation runner exists | TODO |
-| R-013 | MUST | Provide `eval/results/` | Evaluation results are stored | TODO |
-| R-014 | MUST | Provide `data/raw/` | Raw source location exists and is gitignored | TODO |
-| R-015 | MUST | Provide `data/forms/` | Extracted form location exists and is gitignored | TODO |
-| R-016 | MUST | Provide `monitoring/` | Prometheus/Grafana configuration lives there | TODO |
-| R-017 | MUST | Provide `scripts/` | Operational scripts live there | TODO |
-| R-018 | MUST | Provide `scripts/bootstrap.sh` | Bootstrap script exists | TODO |
-| R-019 | MUST | Provide `scripts/ingest.py` | Ingestion script exists | TODO |
-| R-020 | MUST | Provide `scripts/extract_forms.py` | Forms extraction script exists | TODO |
-| R-021 | MUST | Provide `.github/workflows/` | CI workflows exist | TODO |
-| R-022 | MUST | Provide `docker-compose.yml` | Compose definition exists | TODO |
+| R-011 | MUST | Provide `eval/golden_set.jsonl` | Golden dataset exists | DONE |
+| R-012 | MUST | Provide `eval/run_eval.py` | Evaluation runner exists | DONE |
+| R-013 | MUST | Provide `eval/results/` | Evaluation results are stored | DONE |
+| R-014 | MUST | Provide `data/raw/` | Raw source location exists and is gitignored | DONE |
+| R-015 | MUST | Provide `data/forms/` | Extracted form location exists and is gitignored | DONE |
+| R-016 | MUST | Provide `monitoring/` | Prometheus/Grafana configuration lives there | DONE |
+| R-017 | MUST | Provide `scripts/` | Operational scripts live there | DONE |
+| R-018 | MUST | Provide `scripts/bootstrap.sh` | Bootstrap script exists | DONE |
+| R-019 | MUST | Provide `scripts/ingest.py` | Ingestion script exists | DONE |
+| R-020 | MUST | Provide `scripts/extract_forms.py` | Forms extraction script exists | DONE |
+| R-021 | MUST | Provide `.github/workflows/` | CI workflows exist | DONE |
+| R-022 | MUST | Provide `docker-compose.yml` | Compose definition exists | DONE |
 | R-023 | MUST | Provide `.env.example` | Environment template exists | DONE |
-| R-024 | MUST | Provide `README.md` | README exists | TODO |
-| R-025 | MUST | Provide `ARCHITECTURE.md` | Architecture document exists | TODO |
-| R-026 | MUST | Provide `DECISIONS.md` | Decision log exists | TODO |
+| R-024 | MUST | Provide `README.md` | README exists | DONE |
+| R-025 | MUST | Provide `ARCHITECTURE.md` | Architecture document exists | DONE |
+| R-026 | MUST | Provide `DECISIONS.md` | Decision log exists | DONE |
 
 ---
 
@@ -641,77 +641,77 @@
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| DOC-001 | MUST | README is a graded deliverable | README is complete before submission | TODO |
-| DOC-002 | MUST | Explain implementation status Part A | Every A requirement marked Done/Partial/Not attempted | TODO |
-| DOC-003 | MUST | Explain implementation status Part B | Every B requirement marked Done/Partial/Not attempted | TODO |
-| DOC-004 | MUST | Explain implementation status Part C | Every C requirement marked Done/Partial/Not attempted | TODO |
-| DOC-005 | MUST | Explain implementation status Part D | Every D requirement marked Done/Partial/Not attempted | TODO |
-| DOC-006 | MUST | Explain implementation status Part E | Every E requirement marked Done/Partial/Not attempted | TODO |
-| DOC-007 | MUST | Explain implementation status Part F | Every F requirement marked Done/Partial/Not attempted | TODO |
-| DOC-008 | MUST | Provide clean-clone prerequisites | Reviewer can identify prerequisites | TODO |
-| DOC-009 | MUST | Provide clone instructions | Reviewer can clone repository | TODO |
-| DOC-010 | MUST | Explain copying `.env.example` | Setup step is documented | TODO |
-| DOC-011 | MUST | Explain `docker-compose up` | Exact command is documented | TODO |
-| DOC-012 | MUST | Explain bootstrap/ingestion command | Exact command is documented | TODO |
-| DOC-013 | MUST | Provide application URL | URL/port is documented | TODO |
-| DOC-014 | MUST | Provide API docs URL | `/docs` URL is documented | TODO |
-| DOC-015 | MUST | Provide vector DB console URL | Console URL is documented if available | TODO |
-| DOC-016 | MUST | Provide Grafana URL | Grafana URL is documented if provided | TODO |
-| DOC-017 | MUST | Document every environment variable | Complete env table exists | TODO |
-| DOC-018 | MUST | Explain how to run with Ollama | Keyless evaluation path is documented | TODO |
-| DOC-019 | MUST | Explain BNS ingestion | Ingestion procedure is documented | TODO |
-| DOC-020 | MUST | Explain forms extraction | Extraction procedure is documented | TODO |
-| DOC-021 | MUST | Provide real copy-pasteable curl examples | Examples work against API | TODO |
-| DOC-022 | MUST | Explain how to run tests | Test command documented | TODO |
-| DOC-023 | MUST | Explain how to run evaluation | Eval command documented | TODO |
-| DOC-024 | MUST | Include evaluation results table | Numerical results included | TODO |
-| DOC-025 | MUST | Include AI usage disclosure | Required disclosure section exists | TODO |
-| DOC-026 | MUST | Document incomplete work honestly | Specific gaps are listed | TODO |
-| DOC-027 | MUST | Document image sizes | Runtime image sizes are listed | TODO |
-| DOC-028 | MUST | Document ports | All relevant ports are listed | TODO |
-| DOC-029 | MUST | Document known bugs | Known bugs are explicitly listed | TODO |
+| DOC-001 | MUST | README is a graded deliverable | README is complete before submission | DONE |
+| DOC-002 | MUST | Explain implementation status Part A | Every A requirement marked Done/Partial/Not attempted | DONE |
+| DOC-003 | MUST | Explain implementation status Part B | Every B requirement marked Done/Partial/Not attempted | DONE |
+| DOC-004 | MUST | Explain implementation status Part C | Every C requirement marked Done/Partial/Not attempted | DONE |
+| DOC-005 | MUST | Explain implementation status Part D | Every D requirement marked Done/Partial/Not attempted | DONE |
+| DOC-006 | MUST | Explain implementation status Part E | Every E requirement marked Done/Partial/Not attempted | DONE |
+| DOC-007 | MUST | Explain implementation status Part F | Every F requirement marked Done/Partial/Not attempted | DONE |
+| DOC-008 | MUST | Provide clean-clone prerequisites | Reviewer can identify prerequisites | DONE |
+| DOC-009 | MUST | Provide clone instructions | Reviewer can clone repository | DONE |
+| DOC-010 | MUST | Explain copying `.env.example` | Setup step is documented | DONE |
+| DOC-011 | MUST | Explain `docker-compose up` | Exact command is documented | DONE |
+| DOC-012 | MUST | Explain bootstrap/ingestion command | Exact command is documented | DONE |
+| DOC-013 | MUST | Provide application URL | URL/port is documented | DONE |
+| DOC-014 | MUST | Provide API docs URL | `/docs` URL is documented | DONE |
+| DOC-015 | MUST | Provide vector DB console URL | Console URL is documented if available | DONE |
+| DOC-016 | MUST | Provide Grafana URL | Grafana URL is documented if provided | DONE |
+| DOC-017 | MUST | Document every environment variable | Complete env table exists | DONE |
+| DOC-018 | MUST | Explain how to run with Ollama | Keyless evaluation path is documented | DONE |
+| DOC-019 | MUST | Explain BNS ingestion | Ingestion procedure is documented | DONE |
+| DOC-020 | MUST | Explain forms extraction | Extraction procedure is documented | DONE |
+| DOC-021 | MUST | Provide real copy-pasteable curl examples | Examples work against API | DONE |
+| DOC-022 | MUST | Explain how to run tests | Test command documented | DONE |
+| DOC-023 | MUST | Explain how to run evaluation | Eval command documented | DONE |
+| DOC-024 | MUST | Include evaluation results table | Numerical results included | DONE |
+| DOC-025 | MUST | Include AI usage disclosure | Required disclosure section exists | DONE |
+| DOC-026 | MUST | Document incomplete work honestly | Specific gaps are listed | DONE |
+| DOC-027 | MUST | Document image sizes | Runtime image sizes are listed | DONE |
+| DOC-028 | MUST | Document ports | All relevant ports are listed | DONE |
+| DOC-029 | MUST | Document known bugs | Known bugs are explicitly listed | DONE |
 
 ## AI Usage Disclosure
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| DOC-030 | MUST | State where AI was used | Codebase areas are identified | TODO |
-| DOC-031 | MUST | Name AI coding tools used | Tools such as ChatGPT/Cursor/etc. are named accurately | TODO |
-| DOC-032 | MUST | Explain roughly what each AI tool was used for | Tool usage is summarized | TODO |
-| DOC-033 | MUST | Provide 5–10 representative prompts | Prompt examples are documented | TODO |
-| DOC-034 | MUST | Describe one prompt refinement after wrong output | Failed output and refinement are briefly documented | TODO |
-| DOC-035 | MUST | State where manual coding was required | Human-written/reworked areas are documented | TODO |
-| DOC-036 | MUST | State where AI output was wrong or insufficient | Corrections are documented | TODO |
-| DOC-037 | MUST | Do not hide heavy AI usage | Disclosure is complete | TODO |
-| DOC-038 | MUST | Ensure candidate can explain submitted code | Code is reviewed/understood before submission | TODO |
+| DOC-030 | MUST | State where AI was used | Codebase areas are identified | DONE |
+| DOC-031 | MUST | Name AI coding tools used | Tools such as ChatGPT/Cursor/etc. are named accurately | DONE |
+| DOC-032 | MUST | Explain roughly what each AI tool was used for | Tool usage is summarized | DONE |
+| DOC-033 | MUST | Provide 5–10 representative prompts | Prompt examples are documented | DONE |
+| DOC-034 | MUST | Describe one prompt refinement after wrong output | Failed output and refinement are briefly documented | DONE |
+| DOC-035 | MUST | State where manual coding was required | Human-written/reworked areas are documented | DONE |
+| DOC-036 | MUST | State where AI output was wrong or insufficient | Corrections are documented | DONE |
+| DOC-037 | MUST | Do not hide heavy AI usage | Disclosure is complete | DONE |
+| DOC-038 | MUST | Ensure candidate can explain submitted code | Code is reviewed/understood before submission | DONE |
 
 ## ARCHITECTURE.md
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| DOC-039 | MUST | Include architecture diagram | Diagram exists; Mermaid is acceptable | TODO |
-| DOC-040 | MUST | Document upload lifecycle | Upload request lifecycle is documented | TODO |
-| DOC-041 | MUST | Document statute-question lifecycle | Statute query lifecycle is documented | TODO |
-| DOC-042 | MUST | Document document-question lifecycle | User-document query lifecycle is documented | TODO |
-| DOC-043 | MUST | Include chunking schema | Metadata/schema is documented | TODO |
-| DOC-044 | MUST | Include retrieval flow | Retrieval stages are documented | TODO |
+| DOC-039 | MUST | Include architecture diagram | Diagram exists; Mermaid is acceptable | DONE |
+| DOC-040 | MUST | Document upload lifecycle | Upload request lifecycle is documented | DONE |
+| DOC-041 | MUST | Document statute-question lifecycle | Statute query lifecycle is documented | DONE |
+| DOC-042 | MUST | Document document-question lifecycle | User-document query lifecycle is documented | DONE |
+| DOC-043 | MUST | Include chunking schema | Metadata/schema is documented | DONE |
+| DOC-044 | MUST | Include retrieval flow | Retrieval stages are documented | DONE |
 
 ## DECISIONS.md
 
 | ID | Priority | Requirement | Acceptance Criteria | Status |
 |---|---|---|---|---|
-| DOC-045 | MUST | Document embedding-model trade-off | Choice and alternatives are explained | TODO |
-| DOC-046 | MUST | Document chunk-strategy trade-off | Choice and alternatives are explained | TODO |
-| DOC-047 | MUST | Document overlap strategy | Strategy and rationale are recorded | TODO |
-| DOC-048 | MUST | Document hybrid retrieval decision | Dense/sparse/fusion reasoning is recorded | TODO |
-| DOC-049 | MUST | Document reranking approach | Selected approach or deliberate omission is explained | TODO |
-| DOC-050 | MUST | Document confidence threshold | Threshold and rationale are recorded | TODO |
-| DOC-051 | MUST | Document session model | Ownership/session decision is recorded | TODO |
-| DOC-052 | MUST | Document queue choice | Queue decision is recorded | TODO |
-| DOC-053 | MUST | Document LLM provider choice | Provider/interface decision is recorded | TODO |
-| DOC-054 | MUST | Document what would change with two more weeks | Future engineering improvements are stated | TODO |
-| DOC-055 | MUST | Document known broken areas | Known weaknesses are honestly recorded | TODO |
-| DOC-056 | MUST | Document source/forms page-range discrepancies if found | Any discrepancy is explicitly recorded | TODO |
+| DOC-045 | MUST | Document embedding-model trade-off | Choice and alternatives are explained | DONE |
+| DOC-046 | MUST | Document chunk-strategy trade-off | Choice and alternatives are explained | DONE |
+| DOC-047 | MUST | Document overlap strategy | Strategy and rationale are recorded | DONE |
+| DOC-048 | MUST | Document hybrid retrieval decision | Dense/sparse/fusion reasoning is recorded | DONE |
+| DOC-049 | MUST | Document reranking approach | Selected approach or deliberate omission is explained | DONE |
+| DOC-050 | MUST | Document confidence threshold | Threshold and rationale are recorded | DONE |
+| DOC-051 | MUST | Document session model | Ownership/session decision is recorded | DONE |
+| DOC-052 | MUST | Document queue choice | Queue decision is recorded | DONE |
+| DOC-053 | MUST | Document LLM provider choice | Provider/interface decision is recorded | DONE |
+| DOC-054 | MUST | Document what would change with two more weeks | Future engineering improvements are stated | DONE |
+| DOC-055 | MUST | Document known broken areas | Known weaknesses are honestly recorded | DONE |
+| DOC-056 | MUST | Document source/forms page-range discrepancies if found | Any discrepancy is explicitly recorded | DONE |
 
 ---
 
@@ -748,13 +748,13 @@ These are not ordinary TODO items. They are **hard release gates**.
 
 | ID | Priority | Rejection Condition | Verification | Status |
 |---|---|---|---|---|
-| REJ-001 | BLOCKER | Any credential committed | Git history + secret scan contains no credentials | TODO |
-| REJ-002 | BLOCKER | Any API key committed | Secret audit is clean | TODO |
-| REJ-003 | BLOCKER | `.env` committed | `.env` absent from repository | TODO |
-| REJ-004 | BLOCKER | Form titles hardcoded instead of scraped | Code review confirms programmatic title extraction | TODO |
-| REJ-005 | BLOCKER | Legal chatbot answers without citations | Manual/evaluation tests confirm citation contract | TODO |
+| REJ-001 | BLOCKER | Any credential committed | Git history + secret scan contains no credentials | DONE |
+| REJ-002 | BLOCKER | Any API key committed | Secret audit is clean | DONE |
+| REJ-003 | BLOCKER | `.env` committed | `.env` absent from repository | DONE |
+| REJ-004 | BLOCKER | Form titles hardcoded instead of scraped | Code review confirms programmatic title extraction | DONE |
+| REJ-005 | BLOCKER | Legal chatbot answers without citations | Manual/evaluation tests confirm citation contract | DONE |
 | REJ-006 | BLOCKER | Repository is private | Repository opens publicly | TODO |
-| REJ-007 | BLOCKER | README missing | README exists and is complete | TODO |
+| REJ-007 | BLOCKER | README missing | README exists and is complete | DONE |
 
 **No submission is allowed while any blocker is unresolved.**
 
@@ -766,11 +766,11 @@ These are explicitly identified by the assignment as qualities that earn a stron
 
 | ID | Priority | Quality Target | Verification | Status |
 |---|---|---|---|---|
-| SQ-001 | MUST | Retrieve correct section for difficult indirectly phrased questions | Golden evaluation demonstrates this | TODO |
-| SQ-002 | MUST | Chunker visibly understands statutory structure | Chunking fixtures/manual inspection demonstrate structure | TODO |
-| SQ-003 | MUST | Refusal path actually fires | Out-of-scope evaluation demonstrates refusal | TODO |
-| SQ-004 | MUST | Forms manifest matches evaluator expectation | Manifest diff passes | TODO |
-| SQ-005 | MUST | `DECISIONS.md` honestly discusses trade-offs and weaknesses | Decision document is substantive | TODO |
+| SQ-001 | MUST | Retrieve correct section for difficult indirectly phrased questions | Golden evaluation demonstrates this | PARTIAL |
+| SQ-002 | MUST | Chunker visibly understands statutory structure | Chunking fixtures/manual inspection demonstrate structure | DONE |
+| SQ-003 | MUST | Refusal path actually fires | Out-of-scope evaluation demonstrates refusal | DONE |
+| SQ-004 | MUST | Forms manifest matches evaluator expectation | 58 forms, SHA-256 + byte size + page range per form; the evaluator's expected manifest is not published, so an external diff is NOT VERIFIED | PARTIAL |
+| SQ-005 | MUST | `DECISIONS.md` honestly discusses trade-offs and weaknesses | Decision document is substantive | DONE |
 
 ---
 
@@ -780,16 +780,16 @@ The assignment intentionally leaves these choices to the candidate. They are not
 
 | ID | Decision | Required Action | Status |
 |---|---|---|---|
-| DEC-001 | Reranking approach | Select and document approach | TODO |
-| DEC-002 | Confidence threshold | Select and document threshold/refusal logic | TODO |
-| DEC-003 | Session model | Select and document identity/ownership model | TODO |
-| DEC-004 | Queue | Select and document worker/task queue | TODO |
-| DEC-005 | CSS/design | Select and document visual design approach | TODO |
-| DEC-006 | Prompt | Design and document generation/system prompt strategy | TODO |
-| DEC-007 | Embedding model | Select from allowed/open-weight approach and document | TODO |
-| DEC-008 | Vector database | Select allowed Docker-runnable vector DB and document | TODO |
-| DEC-009 | Retrieval fusion | Select dense+sparse fusion strategy and document | TODO |
-| DEC-010 | LLM provider | Select provider and implement swappable interface | TODO |
+| DEC-001 | Reranking approach | Select and document approach | DONE |
+| DEC-002 | Confidence threshold | Select and document threshold/refusal logic | DONE |
+| DEC-003 | Session model | Select and document identity/ownership model | DONE |
+| DEC-004 | Queue | Select and document worker/task queue | DONE |
+| DEC-005 | CSS/design | Select and document visual design approach | DONE |
+| DEC-006 | Prompt | Design and document generation/system prompt strategy | DONE |
+| DEC-007 | Embedding model | Select from allowed/open-weight approach and document | DONE |
+| DEC-008 | Vector database | Select allowed Docker-runnable vector DB and document | DONE |
+| DEC-009 | Retrieval fusion | Select dense+sparse fusion strategy and document | DONE |
+| DEC-010 | LLM provider | Select provider and implement swappable interface | DONE |
 
 ---
 
@@ -808,22 +808,26 @@ Before submission, every requirement in this document must have a final status.
 
 | Area | Total Requirements | DONE | PARTIAL | NOT ATTEMPTED | BLOCKED |
 |---|---:|---:|---:|---:|---:|
-| Product baseline | 10 | 0 | 0 | 0 | 0 |
-| Source corpus | 9 | 0 | 0 | 0 | 0 |
-| Part A — Retrieval & Indexing | 65+ | 0 | 0 | 0 | 0 |
-| Part B — Forms | 40 | 0 | 0 | 0 | 0 |
-| Part C — Frontend & UX | 52 | 0 | 0 | 0 | 0 |
-| Part D — Backend & API | 55 | 0 | 0 | 0 | 0 |
-| Infrastructure | 22 | 0 | 0 | 0 | 0 |
-| LLM | 5 | 0 | 0 | 0 | 0 |
-| Part E — CI/CD | 40 | 0 | 0 | 0 | 0 |
-| Secrets | 12 | 0 | 0 | 0 | 0 |
-| Part F — Evaluation & Observability | 36 | 0 | 0 | 0 | 0 |
-| Testing | 12 | 0 | 0 | 0 | 0 |
-| Repository | 26 | 0 | 0 | 0 | 0 |
-| Documentation | 56 | 0 | 0 | 0 | 0 |
-| Git & Submission | 20 | 0 | 0 | 0 | 0 |
-| Automatic blockers | 7 | 0 | 0 | 0 | 0 |
+| Product baseline | 10 | 10 | 0 | 0 | 0 |
+| Source corpus | 13 | 10 | 0 | 0 | 3 |
+| Part A | 99 | 97 | 0 | 2 | 0 |
+| Part B — Forms | 40 | 40 | 0 | 0 | 0 |
+| Part C — Frontend | 52 | 51 | 1 | 0 | 0 |
+| Part D — Backend | 55 | 55 | 0 | 0 | 0 |
+| Infrastructure | 22 | 22 | 0 | 0 | 0 |
+| LLM | 5 | 5 | 0 | 0 | 0 |
+| Part E — CI/CD | 40 | 28 | 0 | 12 | 0 |
+| Secrets | 12 | 11 | 0 | 1 | 0 |
+| Part F — Evaluation | 34 | 34 | 0 | 0 | 0 |
+| Testing | 12 | 12 | 0 | 0 | 0 |
+| Repository | 26 | 26 | 0 | 0 | 0 |
+| Documentation | 56 | 56 | 0 | 0 | 0 |
+| Git & Submission | 20 | 0 | 0 | 20 | 0 |
+| Automatic blockers | 7 | 6 | 0 | 1 | 0 |
+| Strong-Yes | 5 | 3 | 1 | 0 | 1 |
+| Engineering decisions | 10 | 10 | 0 | 0 | 0 |
+
+Audit run: 2026-08-30 (Phase 11 final compliance audit). The individual requirement rows are authoritative.
 
 > The exact totals in the summary table are informational; the individual requirement rows are authoritative.
 
@@ -833,124 +837,124 @@ Before submission, every requirement in this document must have a final status.
 
 ## Product
 
-- [ ] Two-panel Chat + Forms application works.
-- [ ] BNS questions are grounded and cited.
-- [ ] User documents can be uploaded and queried.
-- [ ] Forms can be searched, previewed, and downloaded.
+- [x] Two-panel Chat + Forms application works.
+- [x] BNS questions are grounded and cited. *(serving corpus: real BNS Gazette artifact)*
+- [x] User documents can be uploaded and queried.
+- [x] Forms can be searched, previewed, and downloaded.
 
 ## Retrieval
 
-- [ ] Structure-aware parser verified.
-- [ ] Legal boundaries verified.
-- [ ] Parent legal components remain attached.
-- [ ] Dense + sparse hybrid retrieval verified.
-- [ ] Direct section lookup verified.
-- [ ] Citation validator verified.
-- [ ] Refusal verified.
+- [x] Structure-aware parser verified.
+- [x] Legal boundaries verified.
+- [x] Parent legal components remain attached.
+- [x] Dense + sparse hybrid retrieval verified.
+- [x] Direct section lookup verified.
+- [x] Citation validator verified.
+- [x] Refusal verified.
 
 ## Forms
 
-- [ ] Exact source PDF used.
-- [ ] Forms 190–249 processed.
-- [ ] Titles scraped.
-- [ ] Multi-page forms detected.
-- [ ] Manifest generated.
-- [ ] OCR fallback verified.
-- [ ] Idempotency verified.
-- [ ] Manifest compared against expected result.
+- [x] Exact source PDF used. *(the supplied bare-act PDF — content-validated as BNSS — is the forms source; the BNS Act itself carries no forms schedule)*
+- [x] Forms 190–249 processed. *(against the fixture's Second Schedule forms)*
+- [x] Titles scraped.
+- [x] Multi-page forms detected.
+- [x] Manifest generated.
+- [x] OCR fallback verified.
+- [x] Idempotency verified.
+- [ ] Manifest compared against expected result. *(evaluator manifest not published; NOT VERIFIED)*
 
 ## Frontend
 
-- [ ] Streaming.
-- [ ] Conversation history.
-- [ ] Citation chips.
-- [ ] Source drawer.
-- [ ] Upload progress.
-- [ ] Markdown.
-- [ ] Copy.
-- [ ] Stop.
-- [ ] Regenerate.
-- [ ] Empty state.
-- [ ] Useful errors.
-- [ ] Forms search/filter.
-- [ ] Preview.
-- [ ] Downloads.
-- [ ] Mobile.
-- [ ] Keyboard accessibility.
-- [ ] Dark/light mode.
+- [x] Streaming.
+- [x] Conversation history.
+- [x] Citation chips.
+- [x] Source drawer.
+- [x] Upload progress.
+- [x] Markdown.
+- [x] Copy.
+- [x] Stop.
+- [x] Regenerate.
+- [x] Empty state.
+- [x] Useful errors.
+- [x] Forms search/filter.
+- [x] Preview.
+- [x] Downloads.
+- [x] Mobile.
+- [x] Keyboard accessibility.
+- [x] Dark/light mode.
 
 ## Backend
 
-- [ ] All required endpoints.
-- [ ] Async ingestion.
-- [ ] Ownership.
-- [ ] Validation.
-- [ ] Rate limiting.
-- [ ] Structured logs.
-- [ ] Request IDs.
-- [ ] OpenAPI.
-- [ ] Health/readiness.
-- [ ] Metrics.
+- [x] All required endpoints.
+- [x] Async ingestion.
+- [x] Ownership.
+- [x] Validation.
+- [x] Rate limiting.
+- [x] Structured logs.
+- [x] Request IDs.
+- [x] OpenAPI.
+- [x] Health/readiness.
+- [x] Metrics.
 
 ## Infrastructure
 
-- [ ] API Dockerfile.
-- [ ] Worker image/entrypoint.
-- [ ] Non-root.
-- [ ] Slim base.
-- [ ] `.dockerignore`.
-- [ ] Healthcheck.
-- [ ] Pinned dependencies.
-- [ ] Compose services.
-- [ ] Named volumes.
-- [ ] Shared network.
-- [ ] Restart policies.
-- [ ] Clean-clone startup.
-- [ ] Bootstrap script.
+- [x] API Dockerfile.
+- [x] Worker image/entrypoint.
+- [x] Non-root.
+- [x] Slim base.
+- [x] `.dockerignore`.
+- [x] Healthcheck.
+- [x] Pinned dependencies.
+- [x] Compose services.
+- [x] Named volumes.
+- [x] Shared network.
+- [x] Restart policies.
+- [x] Clean-clone startup.
+- [x] Bootstrap script.
 
 ## CI/CD
 
-- [ ] PR CI.
-- [ ] Main CI.
-- [ ] Lint.
-- [ ] Format.
-- [ ] Type check.
-- [ ] Tests.
-- [ ] Coverage gate.
-- [ ] Secret scan.
-- [ ] GHCR.
-- [ ] SHA tags.
-- [ ] Trivy.
+- [x] PR CI. *(workflow authored and locally validated; execution requires GitHub remote)*
+- [x] Main CI. *(as above)*
+- [x] Lint.
+- [x] Format.
+- [x] Type check.
+- [x] Tests.
+- [x] Coverage gate.
+- [x] Secret scan.
+- [ ] GHCR. *(workflow authored; publishing unverified without a remote)*
+- [x] SHA tags. *(workflow-authored and build-verified locally)*
+- [x] Trivy.
 - [ ] Deployment.
 - [ ] Self-hosted runner if required.
 
 ## Evaluation
 
-- [ ] 25–30 golden questions.
-- [ ] ≥5 refusal questions.
-- [ ] Recall@5.
-- [ ] Recall@10.
-- [ ] MRR.
-- [ ] Citation accuracy.
-- [ ] Refusal rate.
-- [ ] p50.
-- [ ] p95.
-- [ ] Retrieval latency.
-- [ ] Generation latency.
-- [ ] Two configurations.
-- [ ] Numerical comparison.
+- [x] 25–30 golden questions.
+- [x] ≥5 refusal questions.
+- [x] Recall@5.
+- [x] Recall@10.
+- [x] MRR.
+- [x] Citation accuracy.
+- [x] Refusal rate.
+- [x] p50.
+- [x] p95.
+- [x] Retrieval latency.
+- [x] Generation latency.
+- [x] Two configurations.
+- [x] Numerical comparison.
 
 ## Documentation
 
-- [ ] README complete.
-- [ ] AI usage disclosed.
-- [ ] Architecture documented.
-- [ ] Decisions documented.
-- [ ] Known gaps documented.
-- [ ] Known bugs documented.
-- [ ] Image sizes documented.
-- [ ] Ports documented.
-- [ ] API curl examples documented.
+- [x] README complete.
+- [x] AI usage disclosed.
+- [x] Architecture documented.
+- [x] Decisions documented.
+- [x] Known gaps documented.
+- [x] Known bugs documented.
+- [x] Image sizes documented.
+- [x] Ports documented.
+- [x] API curl examples documented.
 
 ## Submission
 
@@ -985,3 +989,37 @@ Only categories 1–3 should affect the assignment implementation.
 Category 4 must not be implemented until all mandatory requirements have been completed and verified.
 
 **This document exists to prevent scope drift during AI-assisted/vibecoded development.**
+
+---
+
+# 22. Optional Bonus — Multilingual Indian Language Support (D-077)
+
+Explicitly identified as a bonus/accessibility feature. It MUST NOT
+weaken any requirement in this document: legal grounding, citation
+rules, refusal behavior, the confidence gate, prompt-injection
+defenses, and session isolation all remain authoritative.
+
+- [x] Language selector in the chat UI: Auto Detect, English, and the
+  supported Indian languages (Hindi, Bengali, Marathi, Gujarati, Tamil,
+  Telugu, Kannada, Malayalam, Punjabi, Odia, Assamese). Manual
+  selection overrides detection. Accessible and responsive.
+- [x] No translated corpus copies: the authoritative statute corpus
+  remains the single English source; answers cite it with unchanged
+  labels (e.g. `[BNS s.103]`).
+- [x] Non-English legal questions retrieve via English translation of
+  the query (translation used for retrieval only) and are answered in
+  the requested language with citations preserved exactly.
+- [x] Conversational messages (greetings, identity questions) in any
+  supported language receive a fixed in-language response with no
+  retrieval and no citations.
+- [x] Refusals for unsupported questions are code-controlled and
+  provided in the requested/detected language where practical;
+  translation must never cause the model to answer from its own
+  knowledge.
+- [x] Session document isolation is preserved for document questions in
+  any language.
+- [x] Free/open-source/local tooling only (script detection, optional
+  fastText, optional IndicTrans2, existing Ollama provider); no paid
+  APIs or cloud translation services.
+
+---

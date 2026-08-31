@@ -1,0 +1,41 @@
+{
+  "golden_set": "/media/obaid/SSD/my-files/shared/nyay/eval/golden_set.jsonl",
+  "corpus": "data/processed/bnss-dev_chunks.jsonl",
+  "deterministic": true,
+  "llm_mode": false,
+  "configurations": [
+    {
+      "config": "dense_only",
+      "cases": 29,
+      "failed_cases": 0,
+      "failures": [],
+      "recall_at_5": 0.3103448275862069,
+      "recall_at_10": 0.3448275862068966,
+      "mrr": 0.3146551724137931,
+      "citation_accuracy": null,
+      "refusal_correctness": 0.7931034482758621,
+      "document_hit_rate": 1.0,
+      "retrieval_latency_p50": 0.03617472099722363,
+      "retrieval_latency_p95": 0.041727820003870875,
+      "generation_latency_p50": null,
+      "generation_latency_p95": null
+    },
+    {
+      "config": "hybrid",
+      "cases": 29,
+      "failed_cases": 0,
+      "failures": [],
+      "recall_at_5": 0.3448275862068966,
+      "recall_at_10": 0.5517241379310345,
+      "mrr": 0.34783798576902025,
+      "citation_accuracy": null,
+      "refusal_correctness": 0.7931034482758621,
+      "document_hit_rate": 1.0,
+      "retrieval_latency_p50": 0.03409405201091431,
+      "retrieval_latency_p95": 0.038112231995910406,
+      "generation_latency_p50": null,
+      "generation_latency_p95": null
+    }
+  ],
+  "executed_at": "2026-08-31T08:26:57.312052+00:00"
+}
