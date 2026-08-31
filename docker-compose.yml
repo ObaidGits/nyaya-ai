@@ -1,0 +1,211 @@
+# Complete Nyaya stack (REQUIREMENTS INF-003..INF-013; DECISIONS D-055).
+# Config is environment-driven: secrets come from the shell environment or a
+# local .env file that is never committed (SEC-001..SEC-003).
+
+services:
+  api:
+    build: ./backend
+    image: nyaya/backend:local
+    environment:
+      ENVIRONMENT: production
+      DOCUMENTS_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      DATABASE_URL: postgresql+asyncpg://nyaya:${POSTGRES_PASSWORD:-nyaya}@postgres:5432/nyaya
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b}
+      STORAGE_DIR: /app/storage
+      # Serving corpus: the BNS Gazette artifact produced by
+      # scripts/bootstrap.sh (data/ is gitignored; chat fails closed 503
+      # until the artifact exists — run bootstrap once after a clean clone).
+      RETRIEVAL_CORPUS_PATH: ${RETRIEVAL_CORPUS_PATH:-/app/data/processed/bns_corpus.jsonl}
+      FORMS_SOURCE_PATH: /app/data/raw/BNS_bare_act_2023.pdf
+      FORMS_OUTPUT_DIR: /app/data/forms
+      # Speech (D-079): public-weights local providers so the containerized
+      # stack transcribes/synthesizes out of the box. Devices pinned to cpu —
+      # the container has no GPU and the host GPU is reserved for Ollama.
+      SPEECH_STT_PROVIDER: ${SPEECH_STT_PROVIDER:-faster-whisper}
+      SPEECH_STT_MODEL: ${SPEECH_STT_MODEL:-small}
+      SPEECH_STT_DEVICE: ${SPEECH_STT_DEVICE:-cpu}
+      SPEECH_TTS_PROVIDER: ${SPEECH_TTS_PROVIDER:-piper}
+      SPEECH_TTS_MODEL: ${SPEECH_TTS_MODEL:-en_US-lessac-medium}
+      SPEECH_TTS_DEVICE: ${SPEECH_TTS_DEVICE:-cpu}
+      # Voices are baked into the image at build time (Dockerfile, D-081).
+      SPEECH_TTS_VOICES_DIR: /app/piper-voices
+      # Load speech weights at startup: first request skips the ~30-60 s
+      # model-load (costs ~3 GB RAM held permanently).
+      SPEECH_PRELOAD: ${SPEECH_PRELOAD:-1}
+      HF_HOME: /app/hf-cache
+      # Admin console (D-080): credentials from env only — never hardcoded.
+      # Set ADMIN_USERNAME/ADMIN_PASSWORD in .env to enable /#/settings.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:-}
+      # Persisted admin settings + active corpus manifest survive restarts.
+      ADMIN_SETTINGS_PATH: /app/storage/admin/admin.json
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - storage_data:/app/storage
+      - hf_cache:/app/hf-cache
+      - ./data:/app/data:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  worker:
+    image: nyaya/backend:local
+    build: ./backend
+    # arq worker shares the API image but runs the queue entrypoint (D-030).
+    command: ["arq", "app.workers.arq_worker.WorkerSettings"]
+    # The image HEALTHCHECK probes the API port; the worker runs no server.
+    healthcheck:
+      disable: true
+    environment:
+      ENVIRONMENT: production
+      DOCUMENTS_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b}
+      STORAGE_DIR: /app/storage
+      RETRIEVAL_CORPUS_PATH: ${RETRIEVAL_CORPUS_PATH:-/app/data/processed/bns_corpus.jsonl}
+      FORMS_SOURCE_PATH: /app/data/raw/BNS_bare_act_2023.pdf
+      FORMS_OUTPUT_DIR: /app/data/forms
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - storage_data:/app/storage
+      - ./data:/app/data:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    image: nyaya/frontend:local
+    ports:
+      - "${FRONTEND_PORT:-3000}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.1
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: nyaya
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nyaya}
+      POSTGRES_DB: nyaya
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nyaya -d nyaya"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  ollama:
+    # Local LLM. Runs by default so a plain `docker compose up` produces a
+    # fully working stack (QA 2026-08-31: the previous `--profile llm` gate
+    # left chat broken out of the box because .env points LLM_BASE_URL here).
+    # NVIDIA GPU passthrough (RTX 4050). Equivalent of `docker run --gpus all`:
+    # Compose translates this reservation into a DeviceRequest handled by the
+    # nvidia container toolkit / CDI integration in the Docker daemon.
+    image: ollama/ollama:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  ollama-init:
+    # One-shot: on a FRESH volume (docker compose down -v && up) the model
+    # store is empty and readiness honestly reports the model missing. This
+    # job pulls the configured model once, then exits; the API's model check
+    # turns green as soon as the pull lands.
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama pull ${LLM_MODEL:-qwen2.5:3b}"]
+    restart: "no"
+
+  prometheus:
+    # Scrapes the API's /api/v1/metrics every 15s (F-025..F-036). UI at
+    # http://localhost:9090 (graphs/tables serve as the documented evidence).
+    image: prom/prometheus:v2.53.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  storage_data:
+  hf_cache:
+  redis_data:
+  qdrant_data:
+  postgres_data:
+  ollama_data:
+  prometheus_data:
