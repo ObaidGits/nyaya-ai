@@ -23,6 +23,7 @@ from app.llm.base import (
     LLMProvider,
     ProviderMetadata,
 )
+from app.llm.sanitize import ReasoningStreamFilter, sanitize_answer_text
 
 logger = logging.getLogger(__name__)
 
@@ -96,10 +97,13 @@ class GeminiProvider(LLMProvider):
             raise GeminiProviderError("The generation provider is currently unavailable.") from exc
         candidates = data.get("candidates") or [{}]
         parts = (candidates[0].get("content") or {}).get("parts") or []
-        text = "".join(str(part.get("text", "")) for part in parts)
+        # Thought-summary parts (thought: true) are Gemini's reasoning
+        # channel — never answer content. Only plain text parts count, and
+        # wrapper-formatted reasoning inside them is stripped.
+        text = "".join(str(part.get("text", "")) for part in parts if not part.get("thought"))
         usage = data.get("usageMetadata") or {}
         return GenerationResult(
-            text=text,
+            text=sanitize_answer_text(text),
             model=self._model,
             prompt_tokens=usage.get("promptTokenCount"),
             completion_tokens=usage.get("candidatesTokenCount"),
@@ -119,6 +123,7 @@ class GeminiProvider(LLMProvider):
                 ) as response,
             ):
                 response.raise_for_status()
+                stream_filter = ReasoningStreamFilter()
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -132,9 +137,16 @@ class GeminiProvider(LLMProvider):
                     candidates = chunk.get("candidates") or [{}]
                     parts = (candidates[0].get("content") or {}).get("parts") or []
                     for part in parts:
+                        if part.get("thought"):
+                            continue  # reasoning channel, never answer text
                         token = part.get("text")
                         if token:
-                            yield str(token)
+                            safe = stream_filter.push(str(token))
+                            if safe:
+                                yield safe
+                tail = stream_filter.flush()
+                if tail:
+                    yield tail
         except httpx.HTTPError as exc:
             logger.warning("gemini streaming failed", extra={"error_type": type(exc).__name__})
             raise GeminiProviderError("The generation provider is currently unavailable.") from exc

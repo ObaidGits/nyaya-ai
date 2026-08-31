@@ -22,6 +22,7 @@ from app.llm.base import (
     LLMProvider,
     ProviderMetadata,
 )
+from app.llm.sanitize import ReasoningStreamFilter, sanitize_answer_text
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +51,14 @@ class OllamaProvider(LLMProvider):
         timeout_seconds: float = 300.0,
         num_ctx: int | None = None,
         num_predict: int | None = None,
+        disable_reasoning: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.num_ctx = num_ctx
         self.num_predict = num_predict
+        self.disable_reasoning = disable_reasoning
 
     def _payload(self, request: GenerationRequest, *, stream: bool) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -81,6 +84,10 @@ class OllamaProvider(LLMProvider):
             options["num_predict"] = self.num_predict
         if options:
             payload["options"] = options
+        # Opt-in think disable (Ollama >= 0.9 native switch). Only sent when
+        # explicitly configured: older Ollama servers reject unknown fields.
+        if self.disable_reasoning:
+            payload["think"] = False
         return payload
 
     async def generate(self, request: GenerationRequest) -> GenerationResult:
@@ -96,9 +103,12 @@ class OllamaProvider(LLMProvider):
                 extra={"error_type": type(exc).__name__, "url": self.base_url},
             )
             raise OllamaProviderError("The generation provider is currently unavailable.") from exc
+        # Only message.content is the answer; message.thinking (Ollama's
+        # native reasoning field) is never read. Wrapper-formatted reasoning
+        # inside content is stripped.
         message = data.get("message") or {}
         return GenerationResult(
-            text=str(message.get("content", "")),
+            text=sanitize_answer_text(str(message.get("content", ""))),
             model=self.model,
             prompt_tokens=_optional_int(data.get("prompt_eval_count")),
             completion_tokens=_optional_int(data.get("eval_count")),
@@ -112,6 +122,7 @@ class OllamaProvider(LLMProvider):
                 client.stream("POST", url, json=self._payload(request, stream=True)) as response,
             ):
                 response.raise_for_status()
+                stream_filter = ReasoningStreamFilter()
                 async for line in response.aiter_lines():
                     if not line.strip():
                         continue
@@ -122,7 +133,12 @@ class OllamaProvider(LLMProvider):
                     message = chunk.get("message") or {}
                     token = message.get("content")
                     if token:
-                        yield str(token)
+                        safe = stream_filter.push(str(token))
+                        if safe:
+                            yield safe
+                tail = stream_filter.flush()
+                if tail:
+                    yield tail
         except httpx.HTTPError as exc:
             logger.warning(
                 "ollama streaming failed",
@@ -153,6 +169,7 @@ def create_ollama_provider(settings: Settings) -> LLMProvider:
         timeout_seconds=settings.llm_timeout_seconds,
         num_ctx=settings.llm_num_ctx,
         num_predict=settings.llm_num_predict,
+        disable_reasoning=settings.llm_disable_reasoning,
     )
 
 

@@ -24,6 +24,7 @@ from app.llm.base import (
     LLMProvider,
     ProviderMetadata,
 )
+from app.llm.sanitize import ReasoningStreamFilter, sanitize_answer_text
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class OpenAICompatibleProvider(LLMProvider):
         timeout_seconds: float = 120.0,
         temperature: float = 0.2,
         max_output_tokens: int | None = None,
+        disable_reasoning: bool = False,
     ) -> None:
         self._provider = provider
         self._base_url = base_url.rstrip("/")
@@ -63,6 +65,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._timeout = timeout_seconds
         self._temperature = temperature
         self._max_output_tokens = max_output_tokens
+        self._disable_reasoning = disable_reasoning
 
     def _headers(self) -> dict[str, str]:
         headers = {
@@ -86,6 +89,11 @@ class OpenAICompatibleProvider(LLMProvider):
         }
         if self._max_output_tokens is not None:
             payload["max_tokens"] = self._max_output_tokens
+        # Native reasoning off-switch (opt-in): only sent to providers that
+        # document the parameter — unknown fields break strict gateways, so
+        # openai-compatible/grok/openrouter never receive it.
+        if self._disable_reasoning and self._provider == "openai":
+            payload["reasoning_effort"] = "none"
         return payload
 
     def _require_key(self) -> None:
@@ -124,11 +132,14 @@ class OpenAICompatibleProvider(LLMProvider):
                 extra={"provider": self._provider, "error_type": type(exc).__name__},
             )
             raise CloudProviderError("The generation provider is currently unavailable.") from exc
+        # Only the content field is the answer. Reasoning fields
+        # (reasoning / reasoning_content / reasoning_details) are never read;
+        # reasoning wrappers inside content itself are stripped here.
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         usage = data.get("usage") or {}
         return GenerationResult(
-            text=str(message.get("content", "")),
+            text=sanitize_answer_text(str(message.get("content") or "")),
             model=self._model,
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
@@ -148,6 +159,11 @@ class OpenAICompatibleProvider(LLMProvider):
                 ) as response,
             ):
                 response.raise_for_status()
+                # Streaming reasoning isolation: only delta.content passes,
+                # and it passes through the wrapper filter so <think> blocks
+                # streamed in content are suppressed even across chunk
+                # boundaries.
+                stream_filter = ReasoningStreamFilter()
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -161,7 +177,12 @@ class OpenAICompatibleProvider(LLMProvider):
                     delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
                     token = delta.get("content")
                     if token:
-                        yield str(token)
+                        safe = stream_filter.push(str(token))
+                        if safe:
+                            yield safe
+                tail = stream_filter.flush()
+                if tail:
+                    yield tail
         except httpx.HTTPError as exc:
             logger.warning(
                 "cloud llm streaming failed",
@@ -213,6 +234,7 @@ def _create_compat(settings: Settings, provider: str) -> LLMProvider:
         timeout_seconds=min(settings.llm_timeout_seconds, 300.0),
         temperature=settings.llm_temperature,
         max_output_tokens=settings.llm_num_predict,
+        disable_reasoning=settings.llm_disable_reasoning,
     )
 
 

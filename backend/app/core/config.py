@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     # local model occasionally rambles past any useful length on grounded
     # prompts; a cap bounds latency and keeps the answer finite.
     llm_num_predict: int | None = Field(default=768, gt=0)
+    # Ask reasoning-capable providers to disable native thinking where they
+    # document a switch (OpenAI reasoning_effort=none, Ollama think=false).
+    # Opt-in: unknown parameters break strict gateways, so providers without
+    # a documented switch never receive one — reasoning isolation is instead
+    # enforced by the provider-layer sanitizer (app.llm.sanitize) either way.
+    llm_disable_reasoning: bool = False
     # Estimated query cost (F-034/F-035): (tokens / 1000) x rate. Local
     # Ollama generation is free by default; hosted providers set real rates.
     llm_cost_per_1k_input_tokens: float = Field(default=0.0, ge=0.0)

@@ -34,6 +34,7 @@ from app.generation.prompt import build_generation_request
 from app.language.models import LanguageCode
 from app.language.service import REFUSAL_RESPONSES, answer_instruction
 from app.llm.base import ChatMessage, GenerationRequest, LLMProvider
+from app.llm.sanitize import is_prompt_echo, sanitize_answer_text
 from app.observability.metrics import REFUSALS
 from app.retrieval.models import RetrievedEvidence
 
@@ -147,21 +148,36 @@ class GenerationService:
         prompt_tokens: int | None = None
         completion_tokens: int | None = None
         saw_text = False
+        contaminated = False
         for attempt in range(self._max_attempts):
             result = await self._provider.generate(request)
             model = result.model or model
             prompt_tokens = (result.prompt_tokens or 0) + (prompt_tokens or 0) or None
             completion_tokens = (result.completion_tokens or 0) + (completion_tokens or 0) or None
-            if not result.text.strip():
+            text = sanitize_answer_text(result.text)
+            if not text.strip():
                 # An empty completion is a provider failure, not an answer.
                 logger.info(
                     "provider returned empty response",
                     extra={"event": "generation_empty_response", "attempt": attempt + 1},
                 )
                 continue
+            # Prompt/reasoning echo defense (defense in depth on top of the
+            # provider-layer sanitizer): a "content" field that echoes the
+            # grounding prompt, evidence blocks or the internal regeneration
+            # instruction is reasoning leakage, never an answer. Retry once;
+            # if every attempt is contaminated the outcome is the code-level
+            # refusal — contaminated text never reaches validation or SSE.
+            if is_prompt_echo(text, request.messages):
+                contaminated = True
+                logger.warning(
+                    "answer looked like a prompt/reasoning echo; retrying",
+                    extra={"event": "generation_prompt_echo", "attempt": attempt + 1},
+                )
+                continue
             saw_text = True
             answer, check = validate_citations(
-                result.text, evidence.results, document_hits=evidence.document_hits
+                text, evidence.results, document_hits=evidence.document_hits
             )
             if _is_refusal_text(answer):
                 # The model itself refused: normalize to the code-level
@@ -208,6 +224,21 @@ class GenerationService:
             )
 
         if not saw_text:
+            if contaminated:
+                # Every attempt echoed the prompt/reasoning: fail closed with
+                # the code-controlled refusal. Never stream contaminated text.
+                logger.warning(
+                    "refusing: every attempt echoed the prompt or reasoning",
+                    extra={"event": "generation_refusal", "reason": "prompt_echo"},
+                )
+                REFUSALS.inc()
+                return GenerationOutcome(
+                    answer=refusal_text,
+                    refused=True,
+                    model=model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
             logger.warning("provider produced no content across attempts")
             raise EmptyGenerationError("The generation provider returned an empty response.")
 
