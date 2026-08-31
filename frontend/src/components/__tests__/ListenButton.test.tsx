@@ -14,7 +14,7 @@ beforeEach(() => {
   URL.createObjectURL = vi.fn().mockReturnValue('blob:mock')
   URL.revokeObjectURL = vi.fn()
   ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockResolvedValue(
-    new Response(new Blob(['wav'], { type: 'audio/wav' }), { status: 200 }),
+    new Response('wav', { status: 200, headers: { 'content-type': 'audio/wav' } }),
   )
   vi.stubGlobal(
     'Audio',
@@ -62,7 +62,7 @@ describe('ListenButton', () => {
       name: /generating speech/i,
     })) as HTMLButtonElement
     expect(generating.disabled).toBe(true)
-    release(new Response(new Blob(['wav'], { type: 'audio/wav' }), { status: 200 }))
+    release(new Response('wav', { status: 200, headers: { 'content-type': 'audio/wav' } }))
     await waitFor(() => {
       const stopButton = screen.getByRole('button', {
         name: /stop playback/i,
@@ -113,7 +113,7 @@ describe('ListenButton', () => {
     )
     const button = screen.getByRole('button', { name: /listen to answer/i })
     void userEvent.click(button)
-    release(new Response(new Blob(['wav']), { status: 200 }))
+    release(new Response('wav', { status: 200, headers: { 'content-type': 'audio/wav' } }))
     await userEvent.click(screen.getByRole('button', { name: /listen to answer|stop playback/i }))
     await waitFor(() =>
       expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1),

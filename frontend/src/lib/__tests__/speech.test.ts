@@ -43,7 +43,7 @@ describe('transcribeSpeech', () => {
 describe('synthesizeSpeech', () => {
   it('posts text + language and returns audio blob', async () => {
     ;(fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      new Response(new Blob(['wav'], { type: 'audio/wav' }), { status: 200 }),
+      new Response('wav', { status: 200, headers: { 'content-type': 'audio/wav' } }),
     )
     const blob = await synthesizeSpeech('sess', 'Section 103', 'en')
     expect(blob.size).toBeGreaterThan(0)
