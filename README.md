@@ -24,7 +24,7 @@ with FastAPI + React + Qdrant + Redis, deployable with one `docker compose up`.
 | B | Forms extraction pipeline (pages 190–249, manifest, OCR fallback) | Done |
 | C | Frontend (chat + forms panels, streaming, citations, dark/light) | Done |
 | D | Backend & API (all endpoints, async ingestion, rate limits) | Done |
-| E | CI/CD (GitHub Actions, Gitleaks, Trivy, GHCR workflow) | Workflow done; GHCR publish + deploy-on-main require a GitHub remote |
+| E | CI/CD (GitHub Actions, Gitleaks, Trivy, GHCR publish) | Done — CI green on GitHub (run 33390563891), images published to GHCR |
 | F | Evaluation & observability (golden set, metrics, cost) | Done |
 
 Requirement-by-requirement status: `docs/REQUIREMENTS.md`. Honest gap list at
@@ -315,21 +315,31 @@ dependency checks landed).
 3. **46 untitled sections:** Gazette marginal notes are interleaved
    mid-sentence by the PDF text layer (e.g. s.282, s.300); the parser
    refuses to guess titles (no manufacturing) and flags them in the
-   manifest. A layout-aware extractor is future work (DECISIONS.md D-083).
+   manifest. A three-iteration pdfplumber layout prototype recovered only
+   3/46 with one WRONG title (missing word) under strict validation — the
+   layout genuinely prevents reliable extraction (zero positional gap, no
+   font discriminator, adjacent-section note concatenation). All 46 stay
+   `needs_review`; evidence in DECISIONS.md D-084.
 4. **Speech voices:** STT/TTS verified live for English and Hindi only;
    the mr/gu/ta Piper voices synthesize unintelligible audio from Indic
    script — NOT VERIFIED for those languages.
-5. **GHCR publish + deploy-on-main (E-014/E-016):** CI workflow is complete
-   but unobservable until the repository has a GitHub remote; not claimed as
-   verified.
+5. **GHCR publish + deploy-on-main (E-014/E-016): VERIFIED.** CI run
+   33390563891 is green end-to-end on GitHub: backend (628 passed, 85%
+   coverage ≥80), frontend (93 tests + build), gitleaks (pinned 8.24.3
+   CLI, clean), Docker build + Trivy fail-closed scans, and
+   `ghcr.io/obaidgits/nyaya-ai/nyaya-{backend,frontend}:<sha>` pushed to
+   GHCR. The gated `deploy` job records a release summary; the actual
+   server rollout needs the `production` environment (manual).
 6. **Readiness dependency checks** cover vector DB, model provider, storage
    and Redis reachability, but do not validate model *correctness*.
 7. **Feedback persistence is in-process memory** (telemetry only; no account
    model to attach votes to). The store is a single swap-point class.
-8. **Combined statute+document answers:** a single question that needs BOTH
-   the statute and an uploaded document routes to one evidence set; the
-   golden set's combined cases exercise the document path. Full dual-route
-   fusion is future work.
+8. **Combined statute+document answers:** the COMBINED route merges session
+   document evidence with statute evidence, both independently validated by
+   the citation guard — live-verified (upload → combined question → s.103 +
+   document chunks retrieved, cited answer produced; DECISIONS.md D-084).
+   qwen2.5:3b sometimes fails the dual citation format and the guard then
+   refuses (honest limitation), rather than emitting ungrounded text.
 9. **Cross-encoder reranking (A3-011) and query-time cross-reference
    resolution (A1-039) are BONUS items — not attempted.**
 10. **DevOps-track items (E-017..E-025: self-hosted runner, Vercel) are
@@ -338,9 +348,11 @@ dependency checks landed).
 
 ## Known bugs
 
-None known-open at final-audit time (all 642 backend + 93 frontend tests
-pass, stack rebuilt clean and stress-tested live). Historical defects found
-and fixed during development are listed in `docs/DECISIONS.md`.
+None known-open at final-audit time (all 643 backend + 93 frontend tests
+pass, stack rebuilt clean and stress-tested live; a fresh clone from
+GitHub was bootstrapped and exercised end-to-end — DECISIONS.md D-084).
+Historical defects found and fixed during development are listed in
+`docs/DECISIONS.md`.
 
 ## Repository layout
 

@@ -8,15 +8,15 @@ submission-readiness rollup of the 2026-08-31 repository/submission pass.
 
 | Area | Requirements | Status | Evidence |
 |---|---:|---|---|
-| Product baseline | 10 | DONE | live stress test, 642 backend + 93 frontend tests |
+| Product baseline | 10 | DONE | live stress test, 643 backend + 93 frontend tests |
 | Source corpus | 13 | 11 DONE, 2 PARTIAL | SRC-002 (supplied bare-act is BNSS → forms source only; statute uses official BNS Gazette), SQ-004 (evaluator manifest unpublished) |
 | Part A — Retrieval & indexing | 99 | 97 DONE, 2 bonus NOT ATTEMPTED | cross-encoder rerank (A3-011), cross-ref resolution (A1-039) are bonus |
 | Part B — Forms | 40 | DONE | manifest, 58 forms, OCR fallback, idempotency; APIs live-tested |
 | Part C — Frontend | 52 | 51 DONE, 1 PARTIAL | C-044 WCAG AA contrast (basic level met, formal audit not run) |
 | Part D — Backend | 55 | DONE | API tests, security tests, live E2E |
-| Infrastructure / Docker | 22 | DONE | clean `down -v && up -d --build` verified, all healthy in 423 s incl. rebuild |
+| Infrastructure / Docker | 22 | DONE | clean `down -v && up -d --build` verified, all healthy in 423 s incl. rebuild; fresh GitHub clone bootstrapped + E2E-green (D-084) |
 | LLM provider system | 5 | DONE | registry abstraction, env-driven config; hosted providers NOT VERIFIED live (no key) |
-| Part E — CI/CD | 40 | DONE — CI GREEN ON GITHUB (run 33387616971) | backend 628 passed / 85% cov ≥80, frontend 93 tests + build, gitleaks 8.24.3 clean, Docker build + Trivy fail-closed (after D-084 CVE remediation), SHA-tagged images live in `ghcr.io/obaidgits/nyaya-ai/*`, gated deploy summary |
+| Part E — CI/CD | 40 | DONE — CI GREEN ON GITHUB (run 33390563891) | backend 628 passed / 85% cov ≥80, frontend 93 tests + build, gitleaks 8.24.3 clean, Docker build + Trivy fail-closed (after D-084 CVE remediation), SHA-tagged images live in `ghcr.io/obaidgits/nyaya-ai/*`, gated deploy summary |
 | Secrets | 12 | 11 DONE, 1 NOT VERIFIED | gitleaks scan needs the remote to run on GitHub |
 | Part F — Evaluation & observability | 34 | DONE | golden set (29 q), recall/MRR/citation/refusal, p50/p95, Prometheus |
 | Testing | 12 | DONE | unit/integration/API/retrieval/forms/security/E2E/speech/multilingual/frontend |
@@ -38,19 +38,19 @@ submission-readiness rollup of the 2026-08-31 repository/submission pass.
 | Document isolation | DONE | session-scoped Redis index, filter inside search, cross-session 403/404 (live-tested) |
 | Async ingestion | DONE | upload → Redis queue → arq worker → parse → chunk → embed → ready (live-tested) |
 | Docker | DONE | clean-start verified; non-root, multi-stage, pinned, healthchecks, named volumes |
-| CI | DONE — VERIFIED | green run 33387616971 (2026-08-31); Trivy CVE remediation D-084 (transformers 5.5.4, protobuf 5.29.6, libssl upgrade, frontend alpine 3.24) |
+| CI | DONE — VERIFIED | green run 33390563891 (2026-08-31); Trivy CVE remediation D-084 (transformers 5.5.4, protobuf 5.29.6, libssl upgrade, frontend alpine 3.24) |
 | Secrets | DONE | none tracked; gitleaks workflow ready; `.env` gitignored |
 | Evaluation | DONE | final 2026-08-31 numbers in README |
 | Observability | DONE | /metrics, Prometheus, request IDs, cost gauges |
 | Documentation | DONE | audited & corrected this pass |
-| Public repository | DONE | https://github.com/ObaidGits/nyaya-ai — main pushed, CI green (run 33387616971), GHCR images published |
+| Public repository | DONE | https://github.com/ObaidGits/nyaya-ai — main pushed, CI green (run 33390563891), GHCR images published |
 | Commit hygiene | DONE this pass | work committed in area-grouped commits; no history rewritten |
 
 ## Remaining manual actions (owner)
 
 1. ~~Create the public GitHub repository, push main~~ — DONE:
    https://github.com/ObaidGits/nyaya-ai (CI green, GHCR published).
-2. ~~Observe the first CI run~~ — DONE: run 33387616971 green
+2. ~~Observe the first CI run~~ — DONE: run 33390563891 green
    (backend 628 passed / 85% coverage, frontend, gitleaks, Trivy, GHCR).
 3. Optional: create the `production` environment (+ deploy secrets) to
    activate the gated deploy job's actual server rollout.
