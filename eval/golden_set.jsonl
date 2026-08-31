@@ -1,0 +1,29 @@
+{"id": "l1", "question": "What does section 224 of the BNSS say?", "type": "lookup", "expected_sections": ["224"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "l2", "question": "Section 226 BNSS contents", "type": "lookup", "expected_sections": ["226"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "l3", "question": "What is section 234 about?", "type": "lookup", "expected_sections": ["234"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "l4", "question": "Explain section 396 BNSS", "type": "lookup", "expected_sections": ["396"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "l5", "question": "What does section 35 of the BNSS provide?", "type": "lookup", "expected_sections": ["35"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "l6", "question": "What is the effect of section 230 of BNSS?", "type": "lookup", "expected_sections": ["230"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "l7", "question": "What does BNSS section 105 empower police officers to do?", "type": "lookup", "expected_sections": ["105"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "l8", "question": "What does section 193 BNSS deal with?", "type": "lookup", "expected_sections": ["193"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s1", "question": "What must a charge contain?", "type": "semantic", "expected_sections": ["224"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s2", "question": "When must the manner of committing an offence be stated in a charge?", "type": "reasoning", "expected_sections": ["227"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s3", "question": "What happens when errors appear in a charge?", "type": "reasoning", "expected_sections": ["230"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s4", "question": "Can a court alter a charge during trial?", "type": "reasoning", "expected_sections": ["231"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s5", "question": "Under what conditions can offences of the same kind be charged together?", "type": "reasoning", "expected_sections": ["236"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s6", "question": "What protection does the law provide for witnesses?", "type": "semantic", "expected_sections": ["396"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s7", "question": "When may an accused person be discharged?", "type": "reasoning", "expected_sections": ["258"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s8", "question": "How does the law treat statements made to police?", "type": "semantic", "expected_sections": ["172"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s9", "question": "What particulars as to time and place must a charge state?", "type": "semantic", "expected_sections": ["226"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s10", "question": "How are words in a charge to be understood when the law gives them a special sense?", "type": "reasoning", "expected_sections": ["228"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s11", "question": "Where the offence committed is doubtful, how should the charge be framed?", "type": "reasoning", "expected_sections": ["239"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "s12", "question": "Can separate charges for distinct offences be joined in one trial?", "type": "reasoning", "expected_sections": ["235"], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "o1", "question": "What is the punishment for murder under the Bharatiya Nyaya Sanhita?", "type": "semantic", "expected_sections": [], "must_refuse": true, "corpus": "bnss-dev"}
+{"id": "o2", "question": "What is the rate of GST on restaurant bills?", "type": "semantic", "expected_sections": [], "must_refuse": true, "corpus": "bnss-dev"}
+{"id": "o3", "question": "How do I file for divorce under the Hindu Marriage Act?", "type": "semantic", "expected_sections": [], "must_refuse": true, "corpus": "bnss-dev"}
+{"id": "o4", "question": "What does the Fourth Amendment of the US Constitution protect?", "type": "semantic", "expected_sections": [], "must_refuse": true, "corpus": "bnss-dev"}
+{"id": "o5", "question": "What is Newton's second law of motion?", "type": "semantic", "expected_sections": [], "must_refuse": true, "corpus": "bnss-dev"}
+{"id": "o6", "question": "What are the sections of the Indian Contract Act governing bailment?", "type": "semantic", "expected_sections": [], "must_refuse": true, "corpus": "bnss-dev"}
+{"id": "doc-1", "question": "According to my document, how many days notice must a tenant give before vacating?", "type": "document", "expected_sections": [], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "doc-2", "question": "What does my uploaded document say about the security deposit refund?", "type": "document", "expected_sections": [], "must_refuse": false, "corpus": "bnss-dev"}
+{"id": "combined-1", "question": "What must a charge contain under section 224, and what does my document say about notice periods?", "type": "combined", "expected_sections": ["224"], "must_refuse": false, "corpus": "bnss-dev"}
