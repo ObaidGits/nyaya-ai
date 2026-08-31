@@ -3015,3 +3015,43 @@ upload 400; forms list/search OK; TTS OK.
 
 **Regression after this pass:** 642 backend tests, 93 frontend tests,
 ruff/mypy/eslint/tsc/build all green.
+
+## D-084 — Final remediation pass 3 (2026-08-31)
+
+1. **Untitled sections (46) — left flagged, with evidence.** A
+   pdfplumber layout prototype (three iterations: naive fragment
+   collection → sentence segmentation with cross-section windowing →
+   strict validation requiring the candidate note to be a subsequence of
+   the section's own extracted text, title-shaped, and glue-free)
+   recovered only **3 of 46** marginal notes, and one of those
+   ("Rash navigation vessel." for s.282) is *missing a word* versus the
+   real Gazette note ("Rash navigation of vessel.") — a manufactured
+   wrong title. Root cause: the Gazette text layer interleaves the
+   marginal note into the section's first body line at the right margin
+   (x0≥445) with **zero positional gap** (0 section-start lines have a
+   gap >8 pt), all text is Helvetica 12.0 (no font discriminator), notes
+   of adjacent sections concatenate inside one inter-heading window, and
+   note continuations are typographically identical to body-continuation
+   fragments like "rupees." and "both.". Manufacturing titles under these
+   conditions violates the no-guessing rule, so all 46 stay
+   `needs_review` in the manifest. Layout facts recorded for future work.
+2. **Combined statute+document queries — live-verified.** The COMBINED
+   route (retrieval/service.py) merges session document hits into statute
+   evidence; both evidence sets reach the generation prompt (statute
+   blocks + UNTRUSTED document blocks) and are independently validated by
+   the citation guard. Live: upload → ready → combined question retrieved
+   s.103 + all 3 document chunks and produced a cited answer
+   (`[BNS s.103(1)]`); repeated identical queries sometimes refuse
+   because qwen2.5:3b fails the dual citation format — the guard refuses
+   rather than pass ungrounded text. Honest limitation, not a retrieval
+   defect (raw retrieval verified via /search: statute + document hits
+   both present).
+3. **CI fixes after the first real GitHub run:** mypy
+   `ignore_missing_imports` overrides for torch/transformers/
+   sentence_transformers (present in Docker image + local venv, absent in
+   CI); gitleaks-action@v2 replaced with the pinned gitleaks 8.24.3 CLI
+   (the action wrapper exited 1 despite "no leaks found"); frontend
+   Response mocks built from strings instead of jsdom Blobs (jsdom Blob
+   lacks `.stream()`, which Node 22's undici Response constructor
+   requires — passed on Node 24, failed CI); trivy-action pinned to
+   v0.36.0 (the 0.28.0 tag does not exist).
