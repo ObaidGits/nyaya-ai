@@ -22,3 +22,15 @@ BACKEND_IMAGE="$BACKEND_IMAGE" FRONTEND_IMAGE="$FRONTEND_IMAGE" \
   docker compose pull api worker frontend
 BACKEND_IMAGE="$BACKEND_IMAGE" FRONTEND_IMAGE="$FRONTEND_IMAGE" \
   docker compose up -d --remove-orphans api worker frontend
+
+# Small disk (29 GB): every rollout leaves the previous SHA-tagged images
+# (backend ~6 GB) behind and the disk fills within a few deploys. Drop
+# dangling layers and any nyaya-ai registry image no container references.
+docker image prune -f >/dev/null 2>&1 || true
+docker images --format '{{.Repository}}:{{.Tag}}' \
+  | grep '^ghcr.io/obaidgits/nyaya-ai/' \
+  | while read -r image; do
+      if [ -z "$(docker ps --format '{{.Image}}' | grep -F "$image")" ]; then
+        docker rmi "$image" >/dev/null 2>&1 || true
+      fi
+    done
