@@ -3080,3 +3080,18 @@ ruff/mypy/eslint/tsc/build all green.
    readiness reports the model unreachable. Rate limit: 20/min enforced
    (429 on burst 21+). Invalid language → 422; control characters and
    malformed JSON → clean 4xx, no echo, no internal paths.
+8. **Clean-clone E2E against GitHub found two real bugs — both fixed.**
+   (a) `scripts/bootstrap.sh` invoked ingest.py without `--output`, so the
+   artifact landed at the script default `bns_chunks.jsonl` while the
+   compose stack (and the script's own skip-check) expect
+   `bns_corpus.jsonl` — a fresh clone would fail closed (503) forever.
+   (b) bootstrap.sh was committed without the executable bit. (c) The
+   forms re-extraction on latest code produced 57 forms, not the shipped
+   58: the Gazette p.190 header renders as "FORM No.1" (glued) and the
+   generic glued-page-number chrome rule (".46" at line end) ate the
+   ".1" — FORM No. 1 silently dropped. Fixed with a header-aware
+   pre-normalization + regression test; re-extraction yields 58 again.
+   The clean-clone stack (cloned from
+   github.com/ObaidGits/nyaya-ai) is fully green: all services healthy,
+   readiness ok, statute chat cites `[BNS s.103]`, s.9999 refused,
+   forms list/download/search/zip 200, frontend 200.
