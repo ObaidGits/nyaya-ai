@@ -165,10 +165,9 @@ def is_prompt_echo(text: str, messages: Sequence[object]) -> bool:
 
     1. An exact internal marker string (evidence block header, rule
        heading, regeneration instruction) appears in the text.
-    2. A verbatim run of ``>= 60`` characters of any request message
-       (including the system prompt and evidence blocks) appears in the
-       text — normal quoting ("imprisonment for life [TS s.103]") is far
-       shorter; only wholesale copying trips this.
+    2. A verbatim run of ``>= 60`` characters of the SYSTEM prompt
+       appears in the text — rule text copied wholesale. Quoting the
+       evidence itself is legitimate (grounding rule 3) and never counts.
     """
     if not text:
         return False
@@ -187,19 +186,16 @@ def is_prompt_echo(text: str, messages: Sequence[object]) -> bool:
 
 
 def _internal_messages(messages: Sequence[object]) -> list[object]:
-    """The messages that carry internal prompt content.
+    """The messages whose verbatim copying is leakage.
 
-    The system prompt and the code-built grounding user message (evidence
-    blocks, citation instructions) are internal. Conversation HISTORY is
-    excluded: a follow-up turn legitimately repeats the previous answer's
-    wording ("as stated above, murder is punishable…"), and user turns are
-    the user's own words — echoing either is not leakage.
+    Only the SYSTEM prompt: it is the one channel the user must never see,
+    and its rules text never legitimately appears in an answer. The
+    evidence blocks live in the user message and quoting them is correct
+    behavior (grounding rule 3: quote statutory wording verbatim) — the
+    user also sees evidence in the sources drawer. Evidence-block echoes
+    are caught structurally by the header markers instead.
     """
-    system_messages = [m for m in messages if str(getattr(m, "role", "")) == "system"]
-    user_messages = [m for m in messages if str(getattr(m, "role", "")) == "user"]
-    # The grounding prompt is the LAST user message; earlier user turns are
-    # conversation history.
-    return [*system_messages, *user_messages[-1:]]
+    return [m for m in messages if str(getattr(m, "role", "")) == "system"]
 
 
 def _longest_common_run(source: str, other: str) -> int:
