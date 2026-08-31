@@ -36,8 +36,10 @@ from app.ingestion.models import (
     Section,
 )
 
-CHAPTER_RE = re.compile(r"^CHAPTER\s+([IVXLCDM]+)$")
-SECTION_RE = re.compile(r"^(\d{1,3})\.\s+(.*)$")
+# "CHAPTER V" — the Gazette sometimes glues the numeral ("CHAPTERV") and may
+# carry the chapter title on the same line.
+CHAPTER_RE = re.compile(r"^CHAPTER\s*([IVXLCDM]+)(?:\s+(.*))?$")
+SECTION_RE = re.compile(r"^(\d{1,3})\.\s*(?=[A-Za-z(])(.*)$")
 SUBSECTION_RE = re.compile(r"^\((\d{1,2})\)\s+(.*)$")
 CLAUSE_RE = re.compile(r"^\(([a-z])\)\s+(.*)$")
 PROVISO_RE = re.compile(r"^Provided\s+(?:further\s+)?that\b")
@@ -102,10 +104,8 @@ class StructureParser:
         # Sections that started on the current page (for note association).
         started_here: list[Section] = []
 
-        def flush_notes() -> None:
-            """Associate buffered marginal-note clusters with sections."""
-            if not note_buf:
-                return
+        def cluster_notes() -> list[str]:
+            """Split buffered note lines into clusters; clear the buffer."""
             clusters: list[str] = []
             buf: list[str] = []
             for line in note_buf:
@@ -116,23 +116,35 @@ class StructureParser:
             if buf:
                 clusters.append(" ".join(buf))
             note_buf.clear()
-
             # Citation-note clusters ("1 of 1871.") annotate the margin, not
             # a section title; drop them so they cannot shift association.
-            clusters = [c for c in clusters if not _CITATION_NOTE_RE.fullmatch(c)]
+            return [c for c in clusters if not _CITATION_NOTE_RE.fullmatch(c)]
 
+        def assign_notes(clusters: list[str], newest: Section | None) -> None:
+            """Attach note clusters to sections.
+
+            Gazette layout: a section's marginal note is printed immediately
+            before its header. So when clusters are flushed AT a section
+            header, the LAST cluster belongs to that new section; any earlier
+            clusters belong to older untitled sections in ascending order.
+            Page-tail flushes (no new section) use ascending order only.
+            """
+            if not clusters:
+                return
+            titles = [c.rstrip(".") for c in clusters]
+            if newest is not None and newest.title is None:
+                newest.title = titles.pop()
+                newest.title_confident = not titles
             targets = [s for s in sections if s.title is None]
-            if not targets and current is not None and current.title is None:
-                targets = [current]  # note for a section continued onto page
-            if len(clusters) > len(targets) > 0:
+            if len(titles) > len(targets) > 0:
                 self.warnings.append(
-                    f"page {page.printed_page}: {len(clusters)} marginal note "
+                    f"page {page.printed_page}: {len(titles)} marginal note "
                     f"cluster(s) for {len(targets)} untitled section(s); "
                     "association uncertain"
                 )
-            for target, cluster in zip(targets, clusters, strict=False):
-                target.title = cluster.rstrip(".")
-                target.title_confident = len(clusters) == len(targets)
+            for target, title in zip(targets, titles, strict=False):
+                target.title = title
+                target.title_confident = len(titles) == len(targets)
 
         for page in pages:
             started_here = []
@@ -142,9 +154,12 @@ class StructureParser:
                     break
 
                 if CHAPTER_RE.match(line):
-                    flush_notes()
-                    chapter_number = CHAPTER_RE.match(line).group(1)  # type: ignore[union-attr]
-                    chapter_title = None  # set by next non-empty line
+                    if note_buf:
+                        assign_notes(cluster_notes(), None)
+                    chapter_match = CHAPTER_RE.match(line)
+                    chapter_number = chapter_match.group(1)  # type: ignore[union-attr]
+                    # Chapter title may be glued to the heading line itself.
+                    chapter_title = chapter_match.group(2)  # type: ignore[union-attr]
                     continue
                 if chapter_number is not None and chapter_title is None and line:
                     if SECTION_RE.match(line):  # chapter with no title line
@@ -176,8 +191,11 @@ class StructureParser:
                 ):
                     note_buf.append(line)
                     continue
-                if note_buf:
-                    flush_notes()
+                # Flush buffered notes — EXCEPT when the next line is a
+                # section header: those clusters are assigned below, after
+                # the new section exists (its note precedes its header).
+                if note_buf and not SECTION_RE.match(line):
+                    assign_notes(cluster_notes(), None)
 
                 if not is_structural and line:
                     if current_block is not None:
@@ -189,6 +207,7 @@ class StructureParser:
 
                 section = SECTION_RE.match(line)
                 if section:
+                    buffered = cluster_notes() if note_buf else []
                     current = Section(
                         number=int(section.group(1)),
                         chapter_number=chapter_number,
@@ -196,6 +215,9 @@ class StructureParser:
                         page_start=page.printed_page,
                         page_end=page.printed_page,
                     )
+                    # The LAST pre-header cluster is this section's title;
+                    # earlier ones belong to older untitled sections.
+                    assign_notes(buffered, current)
                     sections.append(current)
                     started_here.append(current)
                     subsection = None
@@ -232,7 +254,7 @@ class StructureParser:
                     )
                 else:
                     current_block = Block(
-                        kind=kind,
+                        kind=kind,  # type: ignore[arg-type]
                         text=text,
                         page=page.printed_page,
                         subsection=subsection,
@@ -244,7 +266,9 @@ class StructureParser:
 
             if statute_ended:
                 break
-            flush_notes()
+            # Page-tail notes are flushed here (no new section on this page).
+            if note_buf:
+                assign_notes(cluster_notes(), None)
             if current is not None:
                 current.page_end = page.printed_page
 

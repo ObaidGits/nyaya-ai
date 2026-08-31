@@ -36,7 +36,10 @@ class DenseRetriever(Protocol):
 
 def embed_query(embedder: EmbeddingProvider, query: str) -> list[float]:
     """Embed a query with the model-required BGE query prefix (A2-009)."""
-    return embedder.embed_texts([f"{QUERY_PREFIX}{query}"])[0]
+    from app.observability.metrics import EMBEDDING_LATENCY
+
+    with EMBEDDING_LATENCY.observe_duration():
+        return embedder.embed_texts([f"{QUERY_PREFIX}{query}"])[0]
 
 
 class QdrantDenseRetriever:
@@ -79,7 +82,7 @@ class QdrantDenseRetriever:
                     key="section_number", match=rest.MatchValue(value=flt.section_number)
                 )
             )
-        return rest.Filter(must=conditions) if conditions else None
+        return rest.Filter(must=conditions) if conditions else None  # type: ignore[arg-type]
 
     def search(self, query: str, flt: MetadataFilter | None, top_k: int) -> list[str]:
         from qdrant_client import QdrantClient

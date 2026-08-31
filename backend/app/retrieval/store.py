@@ -49,6 +49,10 @@ class ChunkStore:
             and (flt.section_number is None or chunk.section_number == flt.section_number)
         )
 
+    def act_shorts(self) -> set[str]:
+        """Distinct act short codes present in the corpus."""
+        return {c.act_short for c in self._chunks}
+
     def section_lookup(self, section_number: str, *, act_short: str | None = None) -> list[Chunk]:
         """Deterministic section lookup (D-017) — no similarity involved.
 

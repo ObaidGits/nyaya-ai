@@ -46,6 +46,8 @@ class JsonlChunkSink:
         self.path = path
 
     def upsert(self, chunks: list[Chunk], vectors: list[list[float]] | None) -> int:
+        # The JSONL artifact stores chunks only; vectors are intentionally
+        # ignored (accepted to satisfy the ChunkIndex protocol).
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".jsonl.tmp")
         with tmp.open("w", encoding="utf-8") as handle:
@@ -92,7 +94,7 @@ class QdrantChunkIndex:
         points = [
             rest.PointStruct(
                 id=idx + 1,
-                vector=(vectors[idx] if vectors else None),
+                vector=(vectors[idx] if vectors else None),  # type: ignore[arg-type]
                 payload=chunk.model_dump(),
             )
             for idx, chunk in enumerate(chunks)

@@ -106,10 +106,12 @@ class StructureAwareChunker:
         return merged
 
     def _fits(self, a: list[Block], b: list[Block]) -> bool:
+        """True when the combined text of both groups stays under the limit."""
         return len(self._text(a)) + len(self._text(b)) <= self.max_chars
 
     @staticmethod
     def _same_subsection(a: list[Block], b: list[Block]) -> bool:
+        """True when both groups carry the same subsection label(s)."""
         sub_a = {blk.subsection for blk in a if blk.kind == BlockKind.BODY}
         sub_b = {blk.subsection for blk in b if blk.kind == BlockKind.BODY}
         return sub_a == sub_b

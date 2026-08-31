@@ -80,6 +80,7 @@ class Bm25SparseIndex:
             if tf == 0:
                 continue
             idf = self._idf(term)
+            # If avgdl is 0 (empty corpus), skip the length-normalization term.
             denom = tf + K1 * (1.0 - B + B * dl / self._avgdl) if self._avgdl else tf + K1
             total += idf * tf * (K1 + 1.0) / denom
         return total

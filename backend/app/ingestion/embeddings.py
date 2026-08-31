@@ -102,3 +102,63 @@ class NullEmbedder:
 
     def dimensions(self) -> int:
         return self._dimensions
+
+
+class HashingEmbedder:
+    """Deterministic bag-of-words hashing embedder (no model runtime).
+
+    Same contract as :class:`BgeEmbedder` (including the query prefix) so it
+    can stand in wherever a dependency-free deterministic embedder is enough:
+    local development wiring and tests. It is NOT a semantic-quality
+    substitute for the locked BGE model (D-011/D-012).
+    """
+
+    def __init__(self, dimensions: int = 256) -> None:
+        self._dimensions = dimensions
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed(text) for text in texts]
+
+    def dimensions(self) -> int:
+        return self._dimensions
+
+    def _embed(self, text: str) -> list[float]:
+        import hashlib
+
+        from app.retrieval.sparse import tokenize
+
+        vector = [0.0] * self._dimensions
+        for token in tokenize(text):
+            digest = hashlib.sha256(token.encode()).digest()
+            vector[int.from_bytes(digest[:4], "big") % self._dimensions] += 1.0
+        norm = sum(x * x for x in vector) ** 0.5
+        if norm > 0:
+            vector = [x / norm for x in vector]
+        return vector
+
+
+def build_embedder(embedding_backend: str) -> EmbeddingProvider:
+    """Construct the process-wide embedder (D-011/D-012).
+
+    Default is the open-weight BAAI/bge-base-en-v1.5 model (semantic,
+    768-dim, self-hosted — A2-001..A2-013). If the model runtime is
+    unavailable the deterministic HashingEmbedder stands in so the process
+    still boots; the warning makes the quality degradation observable.
+
+    Shared by the API and the arq worker so document vectors and query
+    vectors always live in the same embedding space.
+    """
+    if embedding_backend == "hashing":
+        return HashingEmbedder()
+    try:
+        embedder = BgeEmbedder()
+        embedder.embed_texts(["warmup"])  # force model load now, not mid-request
+        logger.info("dense retrieval uses BAAI/bge-base-en-v1.5 (768-dim, open-weight)")
+        return embedder
+    except Exception as exc:
+        logger.warning(
+            "BGE embedder unavailable; falling back to deterministic hashing "
+            "embedder (semantic retrieval quality degraded)",
+            extra={"error_type": type(exc).__name__},
+        )
+        return HashingEmbedder()

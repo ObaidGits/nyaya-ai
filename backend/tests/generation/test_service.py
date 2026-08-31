@@ -1,0 +1,193 @@
+"""Grounded generation service tests (REQUIREMENTS A4-*; ARCHITECTURE §17, §15)."""
+
+from __future__ import annotations
+
+import pytest
+from app.generation.prompt import SYSTEM_PROMPT, build_generation_request
+from app.generation.service import REFUSAL_RESPONSE, GenerationService
+from tests.generation.fixtures import (
+    GOOD_ANSWER,
+    MIXED_ANSWER,
+    FailingProvider,
+    ScriptedProvider,
+    history,
+    make_evidence,
+)
+
+
+def test_grounding_prompt_contains_evidence_and_rules() -> None:
+    evidence = make_evidence()
+    request = build_generation_request("What is the punishment for murder?", evidence.results)
+    user_message = request.messages[-1]
+    text = user_message.content
+    for scored in evidence.results:
+        assert scored.chunk.text in text
+        assert f"[{scored.chunk.act_short} s.{scored.chunk.section_number}]" in text
+    assert "What is the punishment for murder?" in text
+    assert "ONLY" in SYSTEM_PROMPT
+    assert REFUSAL_RESPONSE in SYSTEM_PROMPT
+
+
+async def test_grounded_answer_with_valid_citations() -> None:
+    provider = ScriptedProvider([GOOD_ANSWER])
+    outcome = await GenerationService(provider).answer(
+        "What is the punishment for murder?", make_evidence()
+    )
+    assert not outcome.refused
+    assert outcome.answer == GOOD_ANSWER
+    assert len(outcome.citations.valid_citations) == 2
+    assert len(outcome.sources) == 2
+    assert outcome.model == "scripted"
+
+
+async def test_invalid_citation_sentences_are_stripped_after_retry() -> None:
+    # First answer has a fabricated citation; the retry repeats the offence,
+    # so the final answer is the sanitized first-pass text.
+    provider = ScriptedProvider([MIXED_ANSWER, MIXED_ANSWER])
+    outcome = await GenerationService(provider).answer(
+        "What is theft?", make_evidence(query="what is theft?")
+    )
+    assert "s.999" not in outcome.answer
+    assert "[TS s.103]." in outcome.answer
+    assert outcome.citations.invalid_citations
+    assert len(provider.requests) == 2  # one regeneration attempt
+
+
+async def test_generation_only_receives_retrieved_evidence() -> None:
+    provider = ScriptedProvider([GOOD_ANSWER])
+    evidence = make_evidence()
+    await GenerationService(provider).answer("question", evidence)
+    request = provider.requests[0]
+    prompt_text = " ".join(m.content for m in request.messages)
+    # The full corpus is never supplied — only the retrieved chunks.
+    assert "Rash driving" not in prompt_text
+    assert evidence.results[0].chunk.text in prompt_text
+
+
+async def test_insufficient_evidence_refuses_without_calling_model() -> None:
+    provider = ScriptedProvider([GOOD_ANSWER])
+    outcome = await GenerationService(provider).answer(
+        "What does section 999 say?", make_evidence(sufficient=False, confidence=0.0, chunks=[])
+    )
+    assert outcome.refused
+    assert outcome.answer == REFUSAL_RESPONSE
+    assert not provider.requests  # gate runs before any LLM call (§15)
+
+
+async def test_low_confidence_evidence_refuses() -> None:
+    provider = ScriptedProvider([GOOD_ANSWER])
+    outcome = await GenerationService(provider).answer(
+        "vague question", make_evidence(sufficient=False, confidence=0.02)
+    )
+    assert outcome.refused
+    assert outcome.answer == REFUSAL_RESPONSE
+
+
+async def test_provider_failure_surfaces_app_error() -> None:
+    from app.core.errors import AppError
+
+    with pytest.raises(AppError):
+        await GenerationService(FailingProvider()).answer("question", make_evidence())
+
+
+async def test_multi_turn_history_is_passed_to_provider() -> None:
+    provider = ScriptedProvider([GOOD_ANSWER])
+    turns = history(("user", "What is murder?"), ("assistant", "It is an offence."))
+    await GenerationService(provider).answer(
+        "And its punishment?", make_evidence(query="and its punishment?"), turns
+    )
+    sent = [m.content for m in provider.requests[0].messages]
+    assert "What is murder?" in sent
+    assert "It is an offence." in sent
+
+
+async def test_empty_provider_responses_raise_app_error() -> None:
+    """Empty completions are provider failures, never blank answers."""
+    from app.generation.service import EmptyGenerationError
+
+    with pytest.raises(EmptyGenerationError):
+        await GenerationService(ScriptedProvider(["", ""])).answer("question", make_evidence())
+
+
+async def test_model_emitted_refusal_text_is_normalized() -> None:
+    """When the model itself outputs the refusal string, the outcome is a
+    truthful code-level refusal (refused=True), not a grounded answer."""
+    provider = ScriptedProvider([REFUSAL_RESPONSE])
+    outcome = await GenerationService(provider).answer("question", make_evidence())
+    assert outcome.refused
+    assert outcome.answer == REFUSAL_RESPONSE
+
+
+async def test_answer_with_no_grounded_sentence_refuses() -> None:
+    """Every sentence stripped by the guard → the specification refusal."""
+    provider = ScriptedProvider(["Theft is punishable with imprisonment [TS s.999]."] * 2)
+    outcome = await GenerationService(provider).answer("question", make_evidence())
+    assert outcome.refused
+    assert outcome.answer == REFUSAL_RESPONSE
+
+
+async def test_document_sources_only_for_cited_documents() -> None:
+    """Source drawer entries are emitted only for documents the answer
+    actually cites (A5-012) — citing one document must not leak the other."""
+    from app.documents.models import DocumentHit
+
+    cited = DocumentHit(
+        chunk_id="d-a-000",
+        document_id="aaaa",
+        text="The tenant must vacate the premises.",
+        page_start=1,
+        page_end=1,
+        score=0.9,
+    )
+    other = DocumentHit(
+        chunk_id="d-b-000",
+        document_id="bbbb",
+        text="Unrelated arbitration clause text.",
+        page_start=2,
+        page_end=2,
+        score=0.8,
+    )
+    evidence = make_evidence()
+    evidence.document_hits = [cited, other]
+    provider = ScriptedProvider(["The notice says the tenant must vacate [Document aaaa p.1]."])
+    outcome = await GenerationService(provider).answer("What does my notice say?", evidence)
+    doc_sources = [s for s in outcome.sources if s["source_type"] == "user_document"]
+    assert len(doc_sources) == 1
+    assert doc_sources[0]["document_id"] == "aaaa"
+    assert "arbitration" not in str(outcome.sources)
+
+
+async def test_irrelevant_citation_creates_no_source() -> None:
+    """A citation whose sentence shares no content with the chunk is
+    stripped and must not mint a source-drawer entry."""
+    provider = ScriptedProvider(["The sky is deep cobalt blue [TS s.103]."] * 2)
+    outcome = await GenerationService(provider).answer("question", make_evidence())
+    assert outcome.sources == []
+
+
+async def test_hedged_refusal_text_is_normalized() -> None:
+    """A model that prefixes the refusal ("...therefore: I don't know
+    based on the available source material.") is still a refusal —
+    observed live with qwen2.5:3b (D-077 audit)."""
+    from app.generation.service import GenerationService
+    from tests.generation.fixtures import ScriptedProvider, make_evidence
+
+    provider = ScriptedProvider(
+        [
+            "The evidence does not contain the answer. Therefore: "
+            "I don't know based on the available source material."
+        ]
+    )
+    outcome = await GenerationService(provider).answer("q?", make_evidence())
+    assert outcome.refused is True
+    assert outcome.answer == "I don't know based on the available source material."
+
+
+async def test_answer_without_any_citation_refuses() -> None:
+    """QA red-team regression: a model that obeys "don't cite the answer"
+    produces grounded-looking prose with ZERO citations. Every legal
+    answer must carry at least one citation — refuse instead."""
+    provider = ScriptedProvider(["Theft is punishable with imprisonment for a term of years."] * 2)
+    outcome = await GenerationService(provider).answer("question", make_evidence())
+    assert outcome.refused
+    assert outcome.answer == REFUSAL_RESPONSE

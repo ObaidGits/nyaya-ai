@@ -18,6 +18,7 @@ Cross-encoder reranking is deliberately deferred (D-016).
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from app.retrieval.dense import DenseRetriever
 from app.retrieval.intent import classify_route, detect_section_intent
@@ -26,10 +27,14 @@ from app.retrieval.models import (
     RetrievalRoute,
     RetrievedEvidence,
     ScoredChunk,
+    SectionIntent,
 )
 from app.retrieval.rrf import rrf_fuse
 from app.retrieval.sparse import SparseRetriever
 from app.retrieval.store import ChunkStore
+
+if TYPE_CHECKING:
+    from app.documents.retrieval import DocumentRetrievalService
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,8 @@ class RetrievalService:
         rrf_k: int = 60,
         confidence_threshold: float = 0.1,
         final_top_k: int = 10,
+        document_confidence_threshold: float = 0.05,
+        document_retrieval: DocumentRetrievalService | None = None,
     ) -> None:
         self._store = store
         self._dense = dense
@@ -57,6 +64,8 @@ class RetrievalService:
         self._rrf_k = rrf_k
         self._confidence_threshold = confidence_threshold
         self._final_top_k = final_top_k
+        self._document_confidence_threshold = document_confidence_threshold
+        self._document_retrieval = document_retrieval
 
     def retrieve(
         self,
@@ -64,37 +73,132 @@ class RetrievalService:
         flt: MetadataFilter | None = None,
         *,
         route: RetrievalRoute | None = None,
+        session_id: str | None = None,
     ) -> RetrievedEvidence:
-        """Run the hybrid retrieval pipeline for a query.
+        """Run the retrieval pipeline for a query.
 
         ``route`` overrides intent-based routing when the caller (API
-        layer) already knows the route.
+        layer) already knows the route. ``session_id`` scopes document
+        retrieval (§21); without it document routes fail closed.
         """
+        from app.observability.metrics import RETRIEVAL_LATENCY
+
+        with RETRIEVAL_LATENCY.observe_duration(route="total"):
+            return self._retrieve(query, flt, route=route, session_id=session_id)
+
+    def _retrieve(
+        self,
+        query: str,
+        flt: MetadataFilter | None,
+        route: RetrievalRoute | None,
+        session_id: str | None,
+    ) -> RetrievedEvidence:
         resolved_route = route or classify_route(query)
         intent = detect_section_intent(query)
         reasons: list[str] = []
 
         if resolved_route == RetrievalRoute.DOCUMENT:
-            # Phase 5 delivers document ingestion; until then the route is
-            # an explicit, honest stub — never a fake statute answer.
+            return self._document_evidence(query, resolved_route, intent, session_id, reasons)
+
+        if resolved_route == RetrievalRoute.COMBINED:
+            document_evidence = self._document_evidence(
+                query, resolved_route, intent, session_id, reasons
+            )
+            statute_evidence = self._statute_evidence(query, resolved_route, intent, flt, reasons)
+            statute_evidence.document_hits = document_evidence.document_hits
+            statute_evidence.sufficient = (
+                statute_evidence.sufficient or document_evidence.sufficient
+            )
+            if document_evidence.sufficient:
+                statute_evidence.reasons.append("session document evidence retrieved")
+            return statute_evidence
+
+        return self._statute_evidence(query, resolved_route, intent, flt, reasons)
+
+    def _document_evidence(
+        self,
+        query: str,
+        route: RetrievalRoute,
+        intent: SectionIntent | None,
+        session_id: str | None,
+        reasons: list[str],
+    ) -> RetrievedEvidence:
+        """Session-scoped user-document retrieval (§21, §34).
+
+        Isolation fails closed: no session id or no configured document
+        index means no document evidence — never a global search.
+        """
+        if session_id is None:
+            reasons.append("document route requested without a session id")
             return RetrievedEvidence(
                 query=query,
-                route=resolved_route,
+                route=route,
                 intent=intent,
                 results=[],
                 sufficient=False,
                 confidence=0.0,
-                reasons=["document retrieval not available until Phase 5"],
+                reasons=reasons,
             )
+        if self._document_retrieval is None:
+            reasons.append("document retrieval is not configured")
+            return RetrievedEvidence(
+                query=query,
+                route=route,
+                intent=intent,
+                results=[],
+                sufficient=False,
+                confidence=0.0,
+                reasons=reasons,
+            )
+        evidence = self._document_retrieval.retrieve(session_id, query)
+        confidence = evidence.hits[0].score if evidence.hits else 0.0
+        sufficient = bool(evidence.hits) and confidence >= self._document_confidence_threshold
+        retrieved = RetrievedEvidence(
+            query=query,
+            route=route,
+            intent=intent,
+            results=[],
+            document_hits=evidence.hits,
+            sufficient=sufficient,
+            confidence=confidence,
+            reasons=reasons,
+        )
+        if not evidence.hits:
+            retrieved.reasons.append("no session document chunks matched")
+        elif not sufficient:
+            retrieved.reasons.append(
+                f"document retrieval confidence {confidence:.3f} below threshold "
+                f"{self._document_confidence_threshold:.3f}"
+            )
+        self._log(query, retrieved)
+        return retrieved
+
+    def _statute_evidence(
+        self,
+        query: str,
+        route: RetrievalRoute,
+        intent: SectionIntent | None,
+        flt: MetadataFilter | None,
+        reasons: list[str],
+    ) -> RetrievedEvidence:
+        resolved_route = route
+        if resolved_route == RetrievalRoute.DOCUMENT:  # pragma: no cover - defensive
+            resolved_route = RetrievalRoute.STATUTE
 
         if intent is not None:
             # Deterministic precedence for exact identifiers (A3-014).
             chunks = self._store.section_lookup(intent.section_number, act_short=intent.act_short)
-            if not chunks:
+            if not chunks and intent.act_short is not None:
                 # The user's act label ("BNS") may not match the indexed
-                # corpus act_short; retry without the act restriction so
-                # the section number still resolves deterministically.
-                chunks = self._store.section_lookup(intent.section_number)
+                # corpus act_short. Retrying without the act restriction is
+                # only safe while the corpus holds a single act — then the
+                # label is an alias, not a different authority. With a
+                # multi-act corpus the requested act is genuinely absent,
+                # so we refuse rather than substitute the wrong act's text.
+                if len(self._store.act_shorts()) <= 1:
+                    chunks = self._store.section_lookup(intent.section_number)
+                else:
+                    reasons.append(f"act {intent.act_short} not present in the indexed corpus")
             if flt is not None:
                 chunks = [c for c in chunks if self._store.matches(c, flt)]
             lookup_results = [
@@ -190,7 +294,9 @@ class RetrievalService:
             extra={
                 "event": "retrieval_complete",
                 "route": evidence.route.value,
+                "intent": evidence.intent.section_number if evidence.intent else None,
                 "results": len(evidence.results),
+                "document_hits": len(evidence.document_hits),
                 "confidence": round(evidence.confidence, 4),
                 "sufficient": evidence.sufficient,
                 "query_length": len(query),

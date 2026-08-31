@@ -27,20 +27,91 @@ _NUMBER_ACT_RE = re.compile(
 )
 _ACT_MENTION_RE = re.compile(r"\b(BNS|BNSS)\b", re.IGNORECASE)
 
+# Bare section numbers: "What does 103 say?" / "Explain 103(1)". A 1-3 digit
+# number is treated as a section reference unless it is a quantity (followed
+# by a unit word: "30 days", "7 years", "500 rupees"), a non-statute
+# identifier (preceded by case/page/form/no./chapter/...), or part of a
+# decimal/IP-style number ("7.5 lakh", "169.254.169.254").
+_BARE_NUMBER_RE = re.compile(r"\b(\d{1,3})(?:\s*\(\s*(\d{1,3})\s*\))?(?!\w)")
+# Decimal/IP continuation: digit(s) + dot on either side of the match.
+_DECIMAL_TAIL_RE = re.compile(r"^\.\d")
+_DECIMAL_PREFIX_RE = re.compile(r"\d\.\s*$")
+_UNIT_FOLLOWER_RE = re.compile(
+    r"^\s*(?:days?|years?|months?|weeks?|hours?|minutes?|seconds?|rupees?|rs\.?|%"
+    r"|per\s*cent|percent|times?|persons?|people|lakh|lakhs|crore|crores|pages?"
+    r"|forms?|copies?|numbers?|articles?|clauses?)\b",
+    re.IGNORECASE,
+)
+_NON_STATUTE_PRECEDER_RE = re.compile(
+    r"\b(?:case|number|no|nos|page|pg|form|fir|chapter|part|schedule|annexure"
+    r"|article|clause|sub|sl|serial)\s*\.?\s*$",
+    re.IGNORECASE,
+)
+
 _DOCUMENT_HINT_RE = re.compile(
     r"\b(my|this|the|uploaded|attached)\s+"
+    r"(\w+\s+){0,2}"
     r"(document|notice|agreement|contract|letter|complaint|fir|f\.i\.r\.|file|pdf)\b"
     r"|\bmy\s+(notice|document|agreement|file)\b",
     re.IGNORECASE,
 )
 
+# Indic document nouns (multilingual support, D-077): "इस दस्तावेज़ का
+# सारांश दें", "এই দলিল...", "இந்த ஆவணம்..." route to the document side
+# even when query translation is unavailable. Fail-closed like the English
+# hints: no session means no document evidence.
+_INDIC_DOCUMENT_HINT_RE = re.compile(
+    "दस्तावेज|नोटिस|দস্তাবেজ|দলিল|নোটিশ|દસ્તાવેજ|ஆவண|நோட்டீஸ|పత్రం|ದಾಖಲೆ|രേഖ|ਦਸਤਾਵੇਜ਼|ਨੋਟਿਸ|ଦଲିଲ|ନୋଟିସ"
+)
+
+# Indic "section" words (D-077): "धारा 103", "ধারা ১০৩", "பிரிவு 103" take
+# the deterministic section-lookup path when present in the original
+# (untranslated) query. Devanagari/Bengali digits are normalized first.
+_INDIC_SECTION_WORDS = (
+    "धारा|कलम|ধারা|কলম|કલમ|பிரிவு|సెక్షన్|విభాగ|ವಿಧಿ|ಸೆಕ್ಷನ್|വകുപ്പ്|ਧਾਰਾ|ਸੈਕਸ਼ਨ|ଧାରା|ଅନୁଚ୍ଛେଦ|दफ़ा|दफा"
+)
+_INDIC_SECTION_RE = re.compile(
+    rf"(?:{_INDIC_SECTION_WORDS})\s*(\d{{1,3}})(?:\s*\(\s*(\d{{1,3}})\s*\))?"
+)
+
+# Indic digit forms (all supported scripts, D-077) normalized to ASCII:
+# Devanagari, Bengali/Assamese, Gujarati, and Odia blocks. Tamil, Telugu,
+# Kannada, Malayalam, and Gurmukhi texts use ASCII digits in practice.
+_DIGIT_TRANSLATION = {
+    **{0x0966 + offset: str(offset) for offset in range(10)},
+    **{0x09E6 + offset: str(offset) for offset in range(10)},
+    **{0x0AE6 + offset: str(offset) for offset in range(10)},
+    **{0x0B66 + offset: str(offset) for offset in range(10)},
+}
+
 
 def detect_section_intent(query: str) -> SectionIntent | None:
     """Return the direct-lookup intent for section-number queries.
 
-    Supports "section 103", "section 103(2)", "BNS 103", "103 BNS".
-    Returns None when no section identifier is present.
+    Supports "section 103", "section 103(2)", "BNS 103", "103 BNS", a
+    bare number in a question ("What does 103 say?") when the number is not
+    a quantity ("30 days") or a non-statute identifier ("case no. 5"), and
+    the Indic section-word forms ("धारा 103", "ধারা ১০৩", D-077) so a
+    non-English query still reaches the deterministic lookup without
+    waiting for translation. Returns None when no section identifier is
+    present.
+
+    Indic digit forms are normalized to ASCII FIRST, in every path: a
+    bare-number match on "१०३" previously returned the untranslated
+    Devanagari digits and the store lookup silently missed.
     """
+    query = query.translate(_DIGIT_TRANSLATION)
+    indic_match = _INDIC_SECTION_RE.search(query)
+    if indic_match:
+        act = None
+        act_mention = _ACT_MENTION_RE.search(query)
+        if act_mention:
+            act = act_mention.group(1).upper()
+        return SectionIntent(
+            act_short=act,
+            section_number=indic_match.group(1),
+            subsection=indic_match.group(2),
+        )
     for pattern in (_SECTION_RE, _ACT_NUMBER_RE, _NUMBER_ACT_RE):
         match = pattern.search(query)
         if match:
@@ -55,12 +126,39 @@ def detect_section_intent(query: str) -> SectionIntent | None:
                 section_number=section,
                 subsection=subsection,
             )
+
+    # Bare number: only treat as a section reference when it is not a
+    # quantity ("30 days") and not a non-statute identifier ("page 12").
+    for match in _BARE_NUMBER_RE.finditer(query):
+        tail = query[match.end() :]
+        if _UNIT_FOLLOWER_RE.match(tail):
+            continue
+        if _DECIMAL_TAIL_RE.match(tail):
+            continue
+        prefix = query[: match.start()]
+        if _NON_STATUTE_PRECEDER_RE.search(prefix):
+            continue
+        if _DECIMAL_PREFIX_RE.search(prefix):
+            continue
+        act = None
+        act_mention = _ACT_MENTION_RE.search(query)
+        if act_mention:
+            act = act_mention.group(1).upper()
+        return SectionIntent(
+            act_short=act,
+            section_number=match.group(1),
+            subsection=match.group(2),
+        )
     return None
 
 
 def classify_route(query: str) -> RetrievalRoute:
-    """Statute / document / combined routing (ARCHITECTURE §14)."""
-    document = bool(_DOCUMENT_HINT_RE.search(query))
+    """Statute / document / combined routing (ARCHITECTURE §14).
+
+    Document hints are matched in English and in the supported Indic
+    languages (D-077); the English patterns are unchanged.
+    """
+    document = bool(_DOCUMENT_HINT_RE.search(query)) or bool(_INDIC_DOCUMENT_HINT_RE.search(query))
     statute = bool(_ACT_MENTION_RE.search(query)) or detect_section_intent(query) is not None
     if document and statute:
         return RetrievalRoute.COMBINED

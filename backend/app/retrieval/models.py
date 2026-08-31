@@ -9,6 +9,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from app.documents.models import DocumentHit
 from app.ingestion.models import Chunk
 
 
@@ -58,6 +59,8 @@ class RetrievedEvidence(BaseModel):
     route: RetrievalRoute
     intent: SectionIntent | None = None
     results: list[ScoredChunk] = Field(default_factory=list)
+    # Session-scoped user-document evidence (Phase 5; empty on statute route).
+    document_hits: list[DocumentHit] = Field(default_factory=list)
     sufficient: bool = True
     confidence: float = 1.0
     reasons: list[str] = Field(default_factory=list)
