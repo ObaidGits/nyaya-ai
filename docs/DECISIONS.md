@@ -3055,3 +3055,28 @@ ruff/mypy/eslint/tsc/build all green.
    lacks `.stream()`, which Node 22's undici Response constructor
    requires — passed on Node 24, failed CI); trivy-action pinned to
    v0.36.0 (the 0.28.0 tag does not exist).
+5. **Trivy fail-closed found real CVEs — remediated, not ignored.**
+   Backend image: transformers 4.46.1 → 5.5.4 (CVE-2024-11392/11393/
+   11394, CVE-2026-4372, CVE-2026-5241), sentence-transformers 3.4.1 →
+   6.0.1 (3.4.1 pins transformers<5; BGE output re-verified 768-dim),
+   protobuf 4.25.9 → 5.29.6 (CVE-2026-0994), apt --only-upgrade
+   libssl3t64 (CVE-2026-14456). parler_tts dropped from the image (0.2.3
+   pins transformers==4.46.1 exactly); the provider module remains and
+   fails closed 503 without the package. Frontend image: nginx-
+   unprivileged 1.27-alpine (alpine 3.21, stale openssl/expat/c-ares,
+   CVE-2026-31789 CRITICAL et al.) → 1.31.4-alpine + `apk upgrade
+   --no-cache`. CI run 33387616971 green end-to-end afterwards.
+6. **Multilingual matrix (12 languages, live):** 11/12 fully pass
+   (greeting no-citation, legal/lookup grounded-or-refused, nonexistent
+   section refused with zero citations, injection safe, explicit
+   language override respected). Marathi auto-detect greeting
+   ("नमस्कार") resolves to Hindi — the word is valid in both languages
+   and the shared Devanagari script carries no discriminator; explicit
+   `language=mr` works. Documented ambiguity, not a bug.
+7. **Outage behavior (live):** Qdrant down → readiness honestly
+   `unavailable` (vector_db fail), statute chat unaffected, document
+   search still session-scoped (no cross-session leak). Ollama down →
+   chat streams a clean `SERVICE_UNAVAILABLE` error event (no traceback),
+   readiness reports the model unreachable. Rate limit: 20/min enforced
+   (429 on burst 21+). Invalid language → 422; control characters and
+   malformed JSON → clean 4xx, no echo, no internal paths.

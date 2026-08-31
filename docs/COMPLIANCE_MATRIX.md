@@ -16,14 +16,14 @@ submission-readiness rollup of the 2026-08-31 repository/submission pass.
 | Part D — Backend | 55 | DONE | API tests, security tests, live E2E |
 | Infrastructure / Docker | 22 | DONE | clean `down -v && up -d --build` verified, all healthy in 423 s incl. rebuild |
 | LLM provider system | 5 | DONE | registry abstraction, env-driven config; hosted providers NOT VERIFIED live (no key) |
-| Part E — CI/CD | 40 | workflow DONE; GHCR publish + deploy NOT VERIFIED (no GitHub remote) | `.github/workflows/ci.yml`: PR + push-main, lint/format/mypy/pytest≥80% cov, frontend gates, gitleaks full-history, Docker build, Trivy CRITICAL/HIGH fail-closed, SHA-tagged GHCR push on main, gated `deploy` environment |
+| Part E — CI/CD | 40 | DONE — CI GREEN ON GITHUB (run 33387616971) | backend 628 passed / 85% cov ≥80, frontend 93 tests + build, gitleaks 8.24.3 clean, Docker build + Trivy fail-closed (after D-084 CVE remediation), SHA-tagged images live in `ghcr.io/obaidgits/nyaya-ai/*`, gated deploy summary |
 | Secrets | 12 | 11 DONE, 1 NOT VERIFIED | gitleaks scan needs the remote to run on GitHub |
 | Part F — Evaluation & observability | 34 | DONE | golden set (29 q), recall/MRR/citation/refusal, p50/p95, Prometheus |
 | Testing | 12 | DONE | unit/integration/API/retrieval/forms/security/E2E/speech/multilingual/frontend |
 | Repository | 26 | DONE | structure, .gitignore, no secrets/PDFs/artifacts tracked |
 | Documentation | 56 | DONE | README/ARCHITECTURE/DECISIONS/.env.example audited this pass |
-| Git & submission | 20 | commits DONE this pass; public repo, push, Loom, demos = MANUAL | see below |
-| Automatic blockers | 7 | 6 DONE, 1 (public repo URL) MANUAL | |
+| Git & submission | 20 | DONE — 20 commits pushed to github.com/ObaidGits/nyaya-ai; Loom demo = MANUAL | see below |
+| Automatic blockers | 7 | 7 DONE — public repo live, CI green | |
 | Strong-Yes extras | 5 | multilingual + speech implemented & live-verified (en/hi) | |
 | Engineering decisions | 10 | DONE | DECISIONS.md D-001..D-083 |
 
@@ -38,17 +38,23 @@ submission-readiness rollup of the 2026-08-31 repository/submission pass.
 | Document isolation | DONE | session-scoped Redis index, filter inside search, cross-session 403/404 (live-tested) |
 | Async ingestion | DONE | upload → Redis queue → arq worker → parse → chunk → embed → ready (live-tested) |
 | Docker | DONE | clean-start verified; non-root, multi-stage, pinned, healthchecks, named volumes |
-| CI | WORKFLOW DONE, EXECUTION NOT VERIFIED | no GitHub remote — genuine external blocker |
+| CI | DONE — VERIFIED | green run 33387616971 (2026-08-31); Trivy CVE remediation D-084 (transformers 5.5.4, protobuf 5.29.6, libssl upgrade, frontend alpine 3.24) |
 | Secrets | DONE | none tracked; gitleaks workflow ready; `.env` gitignored |
 | Evaluation | DONE | final 2026-08-31 numbers in README |
 | Observability | DONE | /metrics, Prometheus, request IDs, cost gauges |
 | Documentation | DONE | audited & corrected this pass |
-| Public repository | MANUAL | `git remote` not configured; needs owner's GitHub credentials |
+| Public repository | DONE | https://github.com/ObaidGits/nyaya-ai — main pushed, CI green (run 33387616971), GHCR images published |
 | Commit hygiene | DONE this pass | work committed in area-grouped commits; no history rewritten |
 
 ## Remaining manual actions (owner)
 
-1. Create the **public** GitHub repository, add it as `origin`, `git push -u origin main`.
-2. Observe the first CI run (GHCR publish needs no extra secrets — `GITHUB_TOKEN` suffices).
-3. Optional: create the `production` environment (+ deploy secrets) to activate the gated deploy job.
+1. ~~Create the public GitHub repository, push main~~ — DONE:
+   https://github.com/ObaidGits/nyaya-ai (CI green, GHCR published).
+2. ~~Observe the first CI run~~ — DONE: run 33387616971 green
+   (backend 628 passed / 85% coverage, frontend, gitleaks, Trivy, GHCR).
+3. Optional: create the `production` environment (+ deploy secrets) to
+   activate the gated deploy job's actual server rollout.
 4. Record the Loom demo and add the repository link to the submission form.
+5. Optional: if the parler-tts fallback provider is wanted, install
+   `parler_tts==0.2.3` at runtime (removed from requirements-speech.txt
+   because it pins a vulnerable transformers version — D-084).
