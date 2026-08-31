@@ -217,7 +217,18 @@ def build_retrieval_service(
 
         store = ChunkStore.from_jsonl(Path(settings.retrieval_corpus_path))
         sparse = Bm25SparseIndex(store.chunks)
-        dense = CosineDenseIndex(store.chunks, _build_embedder(settings))
+        # Persisted corpus vectors (A2-013 one-time embedding): an API
+        # restart reloads them instead of re-embedding the whole corpus.
+        # "none" disables the cache (semantics unchanged).
+        if settings.retrieval_vector_cache_path.lower() == "none":
+            cache_path = None
+        elif settings.retrieval_vector_cache_path:
+            cache_path = Path(settings.retrieval_vector_cache_path)
+        else:
+            cache_path = Path(settings.storage_dir) / "retrieval_dense_vectors.json"
+        dense = CosineDenseIndex(
+            store.chunks, _build_embedder(settings), vector_cache_path=cache_path
+        )
         return RetrievalService(
             store,
             dense,

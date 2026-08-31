@@ -13,7 +13,13 @@ import { toast } from '../lib/toast'
 import { MicIcon, StopIcon } from './icons'
 import { RecordingBars } from './RecordingBars'
 import { useRecorder } from '../hooks/useRecorder'
-import { recordingSupported, transcribeSpeech } from '../lib/speech'
+import {
+  browserSttSupported,
+  fetchSpeechConfig,
+  recordingSupported,
+  transcribeInBrowser,
+  transcribeSpeech,
+} from '../lib/speech'
 
 interface VoiceInputProps {
   sessionId: string
@@ -26,7 +32,17 @@ interface VoiceInputProps {
 export function VoiceInput({ sessionId, language, onTranscript, disabled }: VoiceInputProps) {
   const recorder = useRecorder()
   const [transcribing, setTranscribing] = useState(false)
-  const supported = recordingSupported()
+  const [browserMode, setBrowserMode] = useState<boolean | null>(null)
+  const serverSupported = recordingSupported()
+
+  // Route by the server's non-secret speech config: "browser" runs the Web
+  // Speech API client-side (zero server RAM); anything else uploads the
+  // clip to the configured server provider.
+  useEffect(() => {
+    fetchSpeechConfig()
+      .then((config) => setBrowserMode(config.stt_provider === 'browser'))
+      .catch(() => setBrowserMode(false))
+  }, [])
 
   // Recorder failures (permission denied, unsupported browser, start error)
   // surface as toasts — never inline text that shifts the composer.
@@ -36,6 +52,26 @@ export function VoiceInput({ sessionId, language, onTranscript, disabled }: Voic
 
   const handleClick = async () => {
     if (transcribing) return
+    if (browserMode) {
+      // Browser STT: capture via the Web Speech API directly.
+      if (!browserSttSupported()) {
+        toast.error(
+          'Browser speech recognition is not supported here. Ask the administrator to switch STT to a server provider.',
+        )
+        return
+      }
+      setTranscribing(true)
+      toast.info('Listening…')
+      try {
+        const result = await transcribeInBrowser(language)
+        onTranscript(result.text)
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Transcription failed.')
+      } finally {
+        setTranscribing(false)
+      }
+      return
+    }
     if (recorder.state === 'recording') {
       setTranscribing(true)
       toast.info('Transcribing…')
@@ -69,11 +105,13 @@ export function VoiceInput({ sessionId, language, onTranscript, disabled }: Voic
 
   const recording = recorder.state === 'recording'
   const label = transcribing
-    ? 'Transcribing…'
+    ? browserMode
+      ? 'Listening…'
+      : 'Transcribing…'
     : recording
       ? `Stop recording (${recorder.elapsedSeconds}s)`
       : 'Speak your question'
-  const disabledNow = disabled || transcribing || !supported
+  const disabledNow = disabled || transcribing || (browserMode === false && !serverSupported)
 
   return (
     <div className="flex h-[44px] items-center gap-2">
@@ -89,7 +127,11 @@ export function VoiceInput({ sessionId, language, onTranscript, disabled }: Voic
         disabled={disabledNow}
         aria-label={label}
         aria-pressed={recording}
-        title={supported ? undefined : 'Audio recording is not supported in this browser.'}
+        title={
+          browserMode === false && !serverSupported
+            ? 'Audio recording is not supported in this browser.'
+            : undefined
+        }
         className={`inline-flex size-[44px] shrink-0 items-center justify-center rounded-xl border transition-colors ${
           recording
             ? 'animate-pulse border-red-400 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-950/40 dark:text-red-300'

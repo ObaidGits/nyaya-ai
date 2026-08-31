@@ -104,3 +104,7 @@ class WorkerSettings:
     on_startup = startup
     # REDIS_URL is exported by docker-compose; falls back to the dev default.
     redis_settings = RedisSettings.from_dsn(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
+    # Document ingestion embeds with BGE (~0.5 GB resident once warm); more
+    # concurrent jobs multiply that peak. 2 keeps a small server safe while
+    # uploads still process concurrently (configurable via WORKER_MAX_JOBS).
+    max_jobs: ClassVar[int] = int(os.environ.get("WORKER_MAX_JOBS", "2"))

@@ -16,12 +16,38 @@ from app.speech.base import (
     EmptyTranscriptionError,
     SpeechProviderError,
     STTProvider,
+    SynthesisResult,
     TranscriptionResult,
     TTSProvider,
 )
 from app.speech.indicconformer import mime_supported
 
 logger = logging.getLogger(__name__)
+
+
+class BrowserDelegatedSTT:
+    """``SPEECH_STT_PROVIDER=browser``: STT runs in the client (Web Speech
+    API), so the server keeps zero speech models in RAM. If a client still
+    calls the server endpoint it fails closed with a clear message."""
+
+    async def transcribe(
+        self, data: bytes, *, mime_type: str, language: str | None
+    ) -> TranscriptionResult:
+        raise SpeechProviderError(
+            "Speech-to-text is configured to run in the browser "
+            "(SPEECH_STT_PROVIDER=browser); the server endpoint is disabled.",
+        )
+
+
+class BrowserDelegatedTTS:
+    """``SPEECH_TTS_PROVIDER=browser``: TTS runs in the client
+    (speechSynthesis); the server endpoint fails closed if reached."""
+
+    async def synthesize(self, text: str, *, language: str) -> SynthesisResult:
+        raise SpeechProviderError(
+            "Speech synthesis is configured to run in the browser "
+            "(SPEECH_TTS_PROVIDER=browser); the server endpoint is disabled.",
+        )
 
 
 class SpeechService:
@@ -72,6 +98,8 @@ class SpeechService:
             from app.speech.cloud import create_openai_stt
 
             return create_openai_stt(settings)
+        if name == "browser":
+            return BrowserDelegatedSTT()
         raise SpeechProviderError(f"Unknown speech STT provider '{name}'.")
 
     def _build_tts(self) -> TTSProvider:
@@ -90,6 +118,8 @@ class SpeechService:
             from app.speech.cloud import create_openai_tts
 
             return create_openai_tts(settings)
+        if settings.speech_tts_provider == "browser":
+            return BrowserDelegatedTTS()
         raise SpeechProviderError(f"Unknown speech TTS provider '{settings.speech_tts_provider}'.")
 
     async def transcribe(

@@ -237,3 +237,14 @@ class TestPersistencePrecedence:
         assert store.load() == {"settings": {}, "secrets": {}, "corpus": {}}
         store.save(settings={"rate_limit_speech_per_minute": 3}, secrets={})
         assert store.load() == {"settings": {}, "secrets": {}, "corpus": {}}
+
+
+class TestResourceStatus:
+    def test_status_reports_detected_resources(self, client: TestClient) -> None:
+        """/admin/status includes CPU/RAM so heavy local models are an informed choice."""
+        login(client)
+        response = client.get("/api/v1/admin/status")
+        assert response.status_code == 200
+        resources = response.json()["resources"]
+        assert resources["cpu_cores"] >= 1
+        assert isinstance(resources["warnings"], list)

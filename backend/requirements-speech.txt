@@ -15,6 +15,10 @@ transformers==5.5.4
 tokenizers>=0.22
 soundfile==0.14.0
 faster-whisper==1.1.0
+# faster-whisper imports requests at module load (download helper); it is no
+# longer pulled in transitively since transformers 5.x — pin it explicitly so
+# STT does not fail closed in the image.
+requests==2.32.5
 # Open-weight BGE dense embeddings (D-011/D-012): semantic retrieval.
 # 6.0.1: supports transformers 5.x (3.4.1 pins transformers<5).
 sentence-transformers==6.0.1

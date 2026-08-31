@@ -205,6 +205,10 @@ class Settings(BaseSettings):
     # Phase 2 chunk artifact serving statute retrieval. Empty disables the
     # chat retrieval seam (503) until a corpus is ingested.
     retrieval_corpus_path: str = ""
+    # On-disk cache of the corpus dense vectors so an API restart reloads
+    # them instead of re-embedding the corpus (A2-013 one-time embedding).
+    # Empty uses "<storage_dir>/retrieval_dense_vectors.json"; "none" disables.
+    retrieval_vector_cache_path: str = ""
     # Dense embedding backend (D-011/D-012): "bge" = the open-weight
     # BAAI/bge-base-en-v1.5 model via sentence-transformers (semantic, 768-dim);
     # "hashing" = deterministic bag-of-words fallback (dev/tests, no model).

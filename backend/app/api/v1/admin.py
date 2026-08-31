@@ -314,6 +314,59 @@ async def test_tts(request: Request, _: AdminDep) -> TestResult:
 # --- system status ----------------------------------------------------------------
 
 
+def _resource_status() -> dict[str, Any]:
+    """Detected CPU/RAM so an admin can judge heavy local models honestly.
+
+    Read from the container's own cgroup/proc view (what this backend can
+    actually use), not the host, so numbers stay truthful when RAM is capped.
+    """
+    import os
+
+    cores = os.cpu_count() or 1
+    total_mb = available_mb = None
+    try:
+        with open("/proc/meminfo", encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("MemTotal:"):
+                    total_mb = int(line.split()[1]) // 1024
+                elif line.startswith("MemAvailable:"):
+                    available_mb = int(line.split()[1]) // 1024
+                if total_mb is not None and available_mb is not None:
+                    break
+    except OSError:
+        pass
+    # cgroup v2 memory limit (container cap) wins over /proc when lower.
+    try:
+        with open("/sys/fs/cgroup/memory.max", encoding="ascii") as handle:
+            raw = handle.read().strip()
+        if raw.isdigit():
+            limit_mb = int(raw) // (1024 * 1024)
+            if total_mb is None or limit_mb < total_mb:
+                total_mb = limit_mb
+    except OSError:
+        pass
+    # Rough guidance only — explicit admin choice is never blocked.
+    warnings: list[str] = []
+    if available_mb is not None and available_mb < 2048:
+        warnings.append(
+            "Less than 2 GB RAM available: prefer browser speech providers and a hosted LLM; "
+            "local speech models may fail to load or swap the server.",
+        )
+    if cores <= 2:
+        warnings.append(
+            "2 CPU cores or fewer: local STT/TTS transcription will be slow "
+            "(tens of seconds per clip); browser speech is recommended.",
+        )
+    return {
+        "status": "ok",
+        "cpu_cores": cores,
+        "total_ram_mb": total_mb,
+        "available_ram_mb": available_mb,
+        "warnings": warnings,
+        "detail": "detected inside the API container; estimates for guidance, not hard limits",
+    }
+
+
 @router.get("/status")
 async def system_status(request: Request, _: AdminDep) -> dict[str, Any]:
     settings: Settings = request.app.state.settings
@@ -325,6 +378,7 @@ async def system_status(request: Request, _: AdminDep) -> dict[str, Any]:
     postgres, redis, qdrant = checks
     return {
         "backend": {"status": "ok", "version": _app_version()},
+        "resources": _resource_status(),
         "postgres": postgres,
         "redis": redis,
         "qdrant": qdrant,

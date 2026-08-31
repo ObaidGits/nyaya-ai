@@ -112,6 +112,27 @@ def _validate_language(language: str | None) -> str | None:
     return None if language == "auto" else language
 
 
+@router.get("/config")
+async def speech_config(request: Request) -> dict[str, str]:
+    """Non-secret speech provider selection so the client can route.
+
+    ``browser`` providers are executed client-side (Web Speech API /
+    speechSynthesis) so a resource-constrained server holds no speech
+    models; the server endpoints then fail closed if reached anyway.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        raise AppError(
+            "Speech features are not configured on this instance.",
+            status_code=503,
+            code="SPEECH_NOT_CONFIGURED",
+        )
+    return {
+        "stt_provider": settings.speech_stt_provider,
+        "tts_provider": settings.speech_tts_provider,
+    }
+
+
 @router.post("/transcribe")
 async def transcribe_audio(
     request: Request,

@@ -43,8 +43,18 @@ export interface DependencyStatus {
   [key: string]: unknown
 }
 
+export interface ResourceStatus {
+  status: string
+  cpu_cores: number
+  total_ram_mb: number | null
+  available_ram_mb: number | null
+  warnings: string[]
+  detail: string
+}
+
 export interface SystemStatus {
   backend: DependencyStatus
+  resources?: ResourceStatus
   postgres: DependencyStatus
   redis: DependencyStatus
   qdrant: DependencyStatus

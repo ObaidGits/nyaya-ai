@@ -3095,3 +3095,42 @@ ruff/mypy/eslint/tsc/build all green.
    github.com/ObaidGits/nyaya-ai) is fully green: all services healthy,
    readiness ok, statute chat cites `[BNS s.103]`, s.9999 refused,
    forms list/download/search/zip 200, frontend 200.
+
+## D-085 — Resource-aware deployment pass (2026-08-31)
+
+Final pre-deployment pass for a ~2 CPU / 4 GB target, correctness and
+assignment compliance first.
+
+1. **Corpus vectors are cached on disk.** `CosineDenseIndex` previously
+   re-embedded all 433 chunks at every API startup. It now persists vectors
+   to `storage/retrieval_dense_vectors.json` (embedder identity + per-chunk
+   text hashes); a restart reloads them and embeds nothing. Cache is
+   invalidated by any corpus text change or embedder change; semantics are
+   identical (regression tests in tests/retrieval/test_dense.py). Opt out
+   with `RETRIEVAL_VECTOR_CACHE_PATH=none`.
+2. **Browser speech providers.** `SPEECH_STT_PROVIDER=browser` routes STT
+   to the client's Web Speech API and `SPEECH_TTS_PROVIDER=browser` routes
+   TTS to speechSynthesis — zero server RAM. A new public non-secret
+   `GET /api/v1/speech/config` tells the client which side handles each
+   direction; the server endpoints fail closed (503, clear message) if a
+   client reaches them anyway. Local models remain the defaults and stay
+   fully available.
+3. **Lazy speech by default.** `SPEECH_PRELOAD` now defaults to 0 in
+   compose: whisper/piper load on first use, so Nyaya's start no longer
+   costs ~1-3 GB. Admins can re-enable for latency.
+4. **Worker concurrency capped.** arq `max_jobs` defaults to 2
+   (`WORKER_MAX_JOBS` env) — document embedding peaks ~0.5-1 GB RAM per
+   job; 10 concurrent uploads no longer multiply that unbounded.
+5. **Resource visibility.** `GET /api/v1/admin/status` reports detected
+   CPU cores, total/available RAM (cgroup-aware) and guidance warnings;
+   the admin console shows it under System status, and provider dropdowns
+   label the RAM cost of each speech option.
+6. **Bug found and fixed:** faster-whisper was broken in the Docker image —
+   it imports `requests`, which transformers 5.x no longer pulls in
+   transitively. `requests==2.32.5` pinned in requirements-speech.txt.
+7. **Measurements (24-core/16 GB host, full local shape):** idle ~0.9 GB
+   total (api 0.47 GB, ollama 0.25 GB, infra ~95 MB); after first chat
+   ollama ~1.2 GB; first chat latency 45 s (model load + eval), ready
+   afterwards. Verdict for 2 CPU / 4 GB: full local stack fits with
+   browser speech + lazy preload; adding whisper-small (≈1 GB) pushes it
+   to the edge — hosted LLM or browser speech recommended there.

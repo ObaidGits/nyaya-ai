@@ -9,7 +9,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { SpeakerIcon, StopIcon } from './icons'
 import { toast } from '../lib/toast'
-import { synthesizeSpeech } from '../lib/speech'
+import {
+  browserTtsSupported,
+  fetchSpeechConfig,
+  synthesizeInBrowser,
+  synthesizeSpeech,
+} from '../lib/speech'
 
 interface ListenButtonProps {
   sessionId: string
@@ -22,13 +27,24 @@ interface ListenButtonProps {
 export function ListenButton({ sessionId, text, language }: ListenButtonProps) {
   const [loading, setLoading] = useState(false)
   const [playing, setPlaying] = useState(false)
+  const [browserMode, setBrowserMode] = useState<boolean | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const busyRef = useRef(false)
+
+  // Route by the server's non-secret speech config: "browser" uses
+  // speechSynthesis client-side (zero server RAM); anything else fetches
+  // audio from the configured server provider.
+  useEffect(() => {
+    fetchSpeechConfig()
+      .then((config) => setBrowserMode(config.tts_provider === 'browser'))
+      .catch(() => setBrowserMode(false))
+  }, [])
 
   useEffect(() => {
     return () => {
       audioRef.current?.pause()
       audioRef.current = null
+      if (browserTtsSupported()) window.speechSynthesis.cancel()
     }
   }, [])
 
@@ -38,6 +54,18 @@ export function ListenButton({ sessionId, text, language }: ListenButtonProps) {
     audioRef.current?.pause()
     setLoading(true)
     try {
+      if (browserMode) {
+        if (!browserTtsSupported()) {
+          toast.error(
+            'Browser speech synthesis is not supported here. Ask the administrator to switch TTS to a server provider.',
+          )
+          return
+        }
+        setPlaying(true)
+        await synthesizeInBrowser(text, language)
+        setPlaying(false)
+        return
+      }
       const blob = await synthesizeSpeech(sessionId, text, language)
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
@@ -56,6 +84,7 @@ export function ListenButton({ sessionId, text, language }: ListenButtonProps) {
     } catch (err) {
       const detail = err instanceof Error ? err.message : ''
       toast.error(`Speech playback is unavailable.${detail ? ` ${detail}` : ''}`)
+      setPlaying(false)
     } finally {
       setLoading(false)
       busyRef.current = false
@@ -64,6 +93,7 @@ export function ListenButton({ sessionId, text, language }: ListenButtonProps) {
 
   const stop = () => {
     audioRef.current?.pause()
+    if (browserMode && browserTtsSupported()) window.speechSynthesis.cancel()
     setPlaying(false)
   }
 

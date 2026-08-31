@@ -44,12 +44,20 @@ docker compose up -d          # api, worker, redis, qdrant, postgres,
                               # frontend
 ```
 
-**Two deployment shapes** (selected in `.env`, config-only):
+**Deployment shapes** (selected in `.env`, config-only — no code changes):
 
 | Shape | `.env` | Result |
 | --- | --- | --- |
 | Keyless local (default) | `COMPOSE_PROFILES=ollama`, `LLM_PROVIDER=ollama` | in-stack Ollama container + auto model pull |
-| API-key hosted LLM | `COMPOSE_PROFILES=` (empty), `LLM_PROVIDER=openai`/`gemini`/…, `LLM_API_KEY=…` | no Ollama container created at all; chat uses the hosted provider |
+| API-key hosted LLM | `COMPOSE_PROFILES=` (empty), `LLM_PROVIDER=openai`/`gemini`/`grok`/`openrouter`/`openai-compatible`, `LLM_API_KEY=…` | no Ollama container created at all; chat uses the hosted provider |
+
+Speech has the same split: `SPEECH_STT_PROVIDER`/`SPEECH_TTS_PROVIDER`
+accept `browser` (Web Speech API / speechSynthesis run client-side — zero
+server RAM, recommended for small servers), the local models
+(`faster-whisper`, `piper`, …, lazy-loaded since `SPEECH_PRELOAD=0`), or an
+OpenAI-compatible cloud endpoint. The `/settings` admin console exposes
+all of this at runtime, shows detected CPU/RAM, and warns when a local
+speech model is likely to exceed available resources.
 
 # one-shot, idempotent data bootstrap (ingestion + forms extraction):
 ./scripts/bootstrap.sh        # requires a local Python 3.12 venv, see below
@@ -229,9 +237,42 @@ upload/refusal counters, estimated query cost
 ## Deployment
 
 - `docker-compose.yml` — api, worker (shared image, arq entrypoint), redis,
-  qdrant, postgres, ollama (default-on), prometheus (metrics at
+  qdrant, postgres, ollama (opt-in `ollama` profile — on by default via
+  `COMPOSE_PROFILES=ollama` in `.env`), prometheus (metrics at
   http://localhost:9090), frontend; named volumes; healthchecks; `restart:
   unless-stopped`.
+
+### Small-server deployment (~2 CPU cores / 4 GB RAM)
+
+Measured on the full stack (24-core host, 16 GB RAM — your numbers on a
+smaller server will be at least as high):
+
+| Component | Idle RAM | Loaded / peak |
+| --- | --- | --- |
+| api (BGE embedder resident, speech lazy) | ~0.5 GB | +~1 GB once whisper loads |
+| worker (arq, max_jobs=2) | ~15 MB | ~0.5-1 GB during document embedding |
+| ollama + qwen2.5:3b (profile on) | ~0.25 GB | ~1.2 GB after first chat |
+| postgres / qdrant / redis / prometheus / frontend | ~95 MB combined | similar |
+| **Total, full local shape** | **~0.9 GB** | **~3-3.5 GB** |
+
+Recommended `.env` for 2 CPU / 4 GB:
+
+```bash
+COMPOSE_PROFILES=ollama            # keep; full local LLM fits (~1.2 GB after
+                                   # first chat). Drop to empty + a hosted
+                                   # LLM_API_KEY if you also want whisper.
+SPEECH_PRELOAD=0                   # default — speech models load lazily
+SPEECH_STT_PROVIDER=browser        # zero server RAM (Web Speech API)
+SPEECH_TTS_PROVIDER=browser        # zero server RAM (speechSynthesis)
+```
+
+Swap individual pieces as needed: any of `faster-whisper`/`whisper`/
+`indicconformer` for STT and `piper` (light, ~200 MB) for TTS still work,
+but keep them lazy (`SPEECH_PRELOAD=0`). Corpus dense vectors are cached at
+`storage/retrieval_dense_vectors.json` after the first start, so an API
+restart no longer re-embeds the BNS corpus. The admin console's System
+status panel shows the server's detected cores/RAM and warns before a
+local speech model is likely to exceed them.
 - Images: `nyaya/backend:local` ≈ 5.4 GB (multi-stage `python:3.12-slim`,
   non-root, pinned deps; the size is dominated by the CPU-only torch stack,
   the baked BGE embedding model and Piper voices — everything runs offline),

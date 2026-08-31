@@ -9,6 +9,7 @@ guarantee that voice never bypasses chat/RAG.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 
 import pytest
@@ -309,3 +310,62 @@ def test_transcribe_corrupt_audio_is_clean_400(
 
 def test_empty_transcription_error_code() -> None:
     assert EmptyTranscriptionError("no speech").status_code == 422
+
+
+# --- browser-delegated provider routing (resource-aware deployment) ---------
+
+
+def test_speech_config_reports_providers(speech_client: TestClient) -> None:
+    """GET /speech/config is public and non-secret so the client can route."""
+    response = speech_client.get("/api/v1/speech/config")
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {"stt_provider", "tts_provider"}
+    assert "api_key" not in json.dumps(payload)
+
+
+def test_speech_config_reports_browser_providers(settings) -> None:
+    from app.speech.service import create_speech_service
+
+    settings = settings.model_copy(
+        update={"speech_stt_provider": "browser", "speech_tts_provider": "browser"}
+    )
+    service: SpeechService = create_speech_service(settings)
+    app = create_app(settings=settings)
+    app.state.speech_service = service
+    with TestClient(app) as client:
+        payload = client.get("/api/v1/speech/config").json()
+    assert payload == {"stt_provider": "browser", "tts_provider": "browser"}
+
+
+def test_browser_stt_provider_fails_closed_with_clear_error(settings) -> None:
+    """SPEECH_STT_PROVIDER=browser: the server endpoint is disabled, not silent."""
+    from app.speech.service import create_speech_service
+
+    settings = settings.model_copy(update={"speech_stt_provider": "browser"})
+    service = create_speech_service(settings)
+    app = create_app(settings=settings)
+    app.state.speech_service = service
+    with TestClient(app) as client:
+        response = _post_audio(client, WAV, "audio/webm")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "SPEECH_PROVIDER_UNAVAILABLE"
+    assert "browser" in response.json()["error"]["message"]
+
+
+def test_browser_tts_provider_fails_closed_with_clear_error(settings) -> None:
+    from app.speech.service import create_speech_service
+
+    settings = settings.model_copy(update={"speech_tts_provider": "browser"})
+    service = create_speech_service(settings)
+    app = create_app(settings=settings)
+    app.state.speech_service = service
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/speech/synthesize",
+            json={"text": "Section 103.", "language": "en"},
+            headers=HEADERS,
+        )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "SPEECH_PROVIDER_UNAVAILABLE"
+    assert "browser" in response.json()["error"]["message"]

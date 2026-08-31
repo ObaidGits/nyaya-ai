@@ -81,3 +81,61 @@ def test_chunk_without_dense_candidate_still_searchable() -> None:
     for cid in results:
         chunk: Chunk | None = next((c for c in corpus if c.chunk_id == cid), None)
         assert chunk is not None
+
+
+# --- persisted vector cache (startup does not re-embed the corpus) ----------
+
+
+def test_vector_cache_roundtrip_skips_reembedding(tmp_path) -> None:
+    """Second build with a cache path embeds nothing and returns the same vectors."""
+    chunks = make_corpus()
+    spy = _SpyEmbedder()
+    cache = tmp_path / "dense_vectors.json"
+    first = CosineDenseIndex(chunks, spy, vector_cache_path=cache)
+    assert spy.embedded == [c.text for c in chunks]
+    assert cache.is_file()
+
+    spy2 = _SpyEmbedder()
+    second = CosineDenseIndex(chunks, spy2, vector_cache_path=cache)
+    assert spy2.embedded == []  # cache hit: no corpus re-embedding
+    assert first._vectors == second._vectors
+
+
+def test_vector_cache_invalidated_by_changed_text(tmp_path) -> None:
+    """A corpus whose text changed re-embeds instead of serving stale vectors."""
+    chunks = make_corpus()
+    cache = tmp_path / "dense_vectors.json"
+    CosineDenseIndex(chunks, _SpyEmbedder(), vector_cache_path=cache)
+
+    changed = [c.model_copy(update={"text": c.text + " amended"}) for c in chunks]
+    spy = _SpyEmbedder()
+    rebuilt = CosineDenseIndex(changed, spy, vector_cache_path=cache)
+    assert spy.embedded == [c.text for c in changed]  # full re-embed
+    assert all(rebuilt._vectors[c.chunk_id] for c in changed)
+
+
+def test_vector_cache_invalidated_by_different_embedder(tmp_path) -> None:
+    """A different embedder identity never reuses cached vectors."""
+    from tests.retrieval.fixtures import DeterministicEmbedder
+
+    chunks = make_corpus()
+    cache = tmp_path / "dense_vectors.json"
+    CosineDenseIndex(chunks, _SpyEmbedder(), vector_cache_path=cache)
+
+    class OtherEmbedder(DeterministicEmbedder):
+        pass
+
+    spy = _SpyEmbedder()
+    index = CosineDenseIndex(chunks, spy, vector_cache_path=cache)
+    assert spy.embedded == []  # same identity, still cached
+    # OtherEmbedder is a different identity: its build re-embeds and the
+    # cache file records the new embedder header (never reuse another
+    # embedder's vectors).
+    import json as _json
+
+    CosineDenseIndex(chunks, OtherEmbedder(), vector_cache_path=cache)
+    header = _json.loads(cache.read_text())["embedder"]
+    assert "OtherEmbedder" in header
+    rebuilt = CosineDenseIndex(chunks, spy, vector_cache_path=cache)
+    assert spy.embedded == [c.text for c in chunks]  # header changed -> re-embed
+    assert rebuilt._vectors.keys() == index._vectors.keys()

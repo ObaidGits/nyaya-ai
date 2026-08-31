@@ -32,9 +32,10 @@ services:
       SPEECH_TTS_DEVICE: ${SPEECH_TTS_DEVICE:-cpu}
       # Voices are baked into the image at build time (Dockerfile, D-081).
       SPEECH_TTS_VOICES_DIR: /app/piper-voices
-      # Load speech weights at startup: first request skips the ~30-60 s
-      # model-load (costs ~3 GB RAM held permanently).
-      SPEECH_PRELOAD: ${SPEECH_PRELOAD:-1}
+      # Speech models load lazily on first use by default: a small server
+      # does not pay whisper (~1 GB) RAM merely because Nyaya started. Set
+      # SPEECH_PRELOAD=1 for lower first-request latency on bigger servers.
+      SPEECH_PRELOAD: ${SPEECH_PRELOAD:-0}
       HF_HOME: /app/hf-cache
       # Admin console (D-080): credentials from env only — never hardcoded.
       # Set ADMIN_USERNAME/ADMIN_PASSWORD in .env to enable /#/settings.

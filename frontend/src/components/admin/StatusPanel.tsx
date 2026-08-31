@@ -64,6 +64,26 @@ export function StatusPanel() {
       </p>
       <div className="mt-3">
         <Row name="Backend" status={status.backend} detail={`v${String(status.backend.version ?? '?')}`} />
+        {status.resources && (
+          <div className="border-b border-ink-100 py-2 text-sm last:border-b-0 dark:border-ink-800">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-medium">Server resources</span>
+              <span className="text-ink-500 dark:text-ink-400">
+                {String(status.resources.cpu_cores)} CPU cores ·{' '}
+                {status.resources.available_ram_mb != null
+                  ? `${status.resources.available_ram_mb} MB free of ${status.resources.total_ram_mb ?? '?'} MB`
+                  : 'RAM unknown'}
+              </span>
+            </div>
+            {status.resources.warnings.length > 0 && (
+              <ul className="mt-1.5 list-disc pl-5 text-xs text-amber-700 dark:text-amber-300">
+                {status.resources.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         <Row name="PostgreSQL" status={status.postgres} />
         <Row name="Redis" status={status.redis} />
         <Row name="Qdrant" status={status.qdrant} />

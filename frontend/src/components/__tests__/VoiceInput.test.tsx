@@ -41,6 +41,28 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** Route /speech/config to a server-provider config; everything else to the responder. */
+function stubFetch(respond: () => Response) {
+  ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>) = vi.fn((url: unknown) =>
+    String(url).includes('/speech/config')
+      ? Promise.resolve(
+          new Response(JSON.stringify({ stt_provider: 'faster-whisper', tts_provider: 'piper' })),
+        )
+      : Promise.resolve(respond()),
+  )
+}
+
+/** Route /speech/config to browser speech; everything else to the responder. */
+function stubBrowserFetch(respond: () => Response) {
+  ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>) = vi.fn((url: unknown) =>
+    String(url).includes('/speech/config')
+      ? Promise.resolve(
+          new Response(JSON.stringify({ stt_provider: 'browser', tts_provider: 'browser' })),
+        )
+      : Promise.resolve(respond()),
+  )
+}
+
 function renderVoice(overrides: Partial<Parameters<typeof VoiceInput>[0]> = {}) {
   const onTranscript = vi.fn()
   render(
@@ -77,16 +99,51 @@ describe('VoiceInput', () => {
 
   it('reports unsupported browsers instead of failing silently', async () => {
     vi.stubGlobal('MediaRecorder', undefined)
+    stubFetch(() => new Response('{}', { status: 200 }))
     renderVoice()
     const button = screen.getByRole('button', { name: /speak your question/i }) as HTMLButtonElement
-    expect(button.disabled).toBe(true)
+    // Server-provider config resolved: no MediaRecorder -> disabled.
+    await waitFor(() => expect(button.disabled).toBe(true))
+  })
+
+  it('routes STT to the browser Web Speech API when configured', async () => {
+    const recognition: {
+      continuous: boolean
+      interimResults: boolean
+      lang: string
+      start: ReturnType<typeof vi.fn>
+      onresult: ((event: { results: ArrayLike<{ 0?: { transcript: string } }> }) => void) | null
+      onerror: ((event: { error?: string }) => void) | null
+      onend: (() => void) | null
+    } = {
+      continuous: false,
+      interimResults: false,
+      lang: '',
+      start: vi.fn(),
+      onresult: null,
+      onerror: null,
+      onend: null,
+    }
+    vi.stubGlobal('SpeechRecognition', function () {
+      return recognition
+    })
+    stubBrowserFetch(() => new Response('{}', { status: 200 }))
+    const { onTranscript } = renderVoice()
+    await userEvent.click(screen.getByRole('button', { name: /speak your question/i }))
+    await waitFor(() => expect(recognition.start).toHaveBeenCalled())
+    recognition.lang = 'en'
+    recognition.onresult?.({
+      results: [{ 0: { transcript: 'What does Section 103 say?' } }],
+    })
+    await waitFor(() => expect(onTranscript).toHaveBeenCalledWith('What does Section 103 say?'))
   })
 
   it('shows transcribing state and delivers the transcript', async () => {
-    ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ text: 'What does Section 103 say?', language: 'en' }), {
-        status: 200,
-      }),
+    stubFetch(
+      () =>
+        new Response(JSON.stringify({ text: 'What does Section 103 say?', language: 'en' }), {
+          status: 200,
+        }),
     )
     const { onTranscript } = renderVoice()
     await userEvent.click(screen.getByRole('button', { name: /speak your question/i }))
@@ -95,13 +152,14 @@ describe('VoiceInput', () => {
   })
 
   it('shows a clean message on transcription failure', async () => {
-    ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          error: { code: 'SPEECH_PROVIDER_UNAVAILABLE', message: 'Provider down.' },
-        }),
-        { status: 503 },
-      ),
+    stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            error: { code: 'SPEECH_PROVIDER_UNAVAILABLE', message: 'Provider down.' },
+          }),
+          { status: 503 },
+        ),
     )
     renderVoice()
     await userEvent.click(screen.getByRole('button', { name: /speak your question/i }))
@@ -110,9 +168,7 @@ describe('VoiceInput', () => {
   })
 
   it('reports empty transcription clearly', async () => {
-    ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ text: '', language: 'en' }), { status: 200 }),
-    )
+    stubFetch(() => new Response(JSON.stringify({ text: '', language: 'en' }), { status: 200 }))
     renderVoice()
     await userEvent.click(screen.getByRole('button', { name: /speak your question/i }))
     await userEvent.click(screen.getByRole('button', { name: /stop recording/i }))

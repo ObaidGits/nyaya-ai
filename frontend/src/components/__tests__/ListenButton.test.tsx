@@ -13,8 +13,8 @@ beforeEach(() => {
   // jsdom lacks blob URLs; the component only needs round-trip identity.
   URL.createObjectURL = vi.fn().mockReturnValue('blob:mock')
   URL.revokeObjectURL = vi.fn()
-  ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockResolvedValue(
-    new Response('wav', { status: 200, headers: { 'content-type': 'audio/wav' } }),
+  routeFetch(() =>
+    Promise.resolve(new Response('wav', { status: 200, headers: { 'content-type': 'audio/wav' } })),
   )
   vi.stubGlobal(
     'Audio',
@@ -34,6 +34,27 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+/** /speech/config always resolves a server-provider config (fresh Response); other calls route to `synthesize`. */
+function routeFetch(
+  synthesize: (url: string, init?: RequestInit) => Promise<Response> | Response,
+) {
+  ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>) = vi.fn(
+    (url: unknown, init?: RequestInit) =>
+      String(url).includes('/speech/config')
+        ? Promise.resolve(
+            new Response(JSON.stringify({ stt_provider: 'server', tts_provider: 'piper' })),
+          )
+        : Promise.resolve(synthesize(String(url), init)),
+  )
+}
+
+/** The synthesize call only (skips the config probe). */
+function synthesizeCalls(): unknown[][] {
+  return (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+    (call) => !String(call[0]).includes('/speech/config'),
+  )
+}
+
 describe('ListenButton', () => {
   it('renders a Listen button for the assistant answer', () => {
     render(
@@ -50,7 +71,7 @@ describe('ListenButton', () => {
     const gate = new Promise<Response>((resolve) => {
       release = resolve
     })
-    ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockReturnValue(gate)
+    routeFetch(() => gate)
     render(
       <>
         <ListenButton sessionId="sess" text="Section 103." language="en" />
@@ -79,8 +100,9 @@ describe('ListenButton', () => {
       </>,
     )
     await userEvent.click(screen.getByRole('button', { name: /listen to answer/i }))
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
-    const body = JSON.parse((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)
+    await waitFor(() => expect(synthesizeCalls().length).toBe(1))
+    const init = (synthesizeCalls()[0] as unknown[])[1] as RequestInit
+    const body = JSON.parse(init.body as string)
     expect(body).toEqual({ text: 'धारा 103।', language: 'hi' })
   })
 
@@ -95,15 +117,16 @@ describe('ListenButton', () => {
     const stop = await screen.findByRole('button', { name: /stop playback/i })
     await userEvent.click(stop)
     expect(pauseMock).toHaveBeenCalled()
-    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1)
+    expect(synthesizeCalls()).toHaveLength(1)
   })
 
   it('prevents duplicate requests while loading', async () => {
     let release: (value: Response) => void = () => {}
-    ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
-      new Promise<Response>((resolve) => {
-        release = resolve
-      }),
+    routeFetch(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
     )
     render(
       <>
@@ -115,18 +138,18 @@ describe('ListenButton', () => {
     void userEvent.click(button)
     release(new Response('wav', { status: 200, headers: { 'content-type': 'audio/wav' } }))
     await userEvent.click(screen.getByRole('button', { name: /listen to answer|stop playback/i }))
-    await waitFor(() =>
-      expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1),
-    )
+    await waitFor(() => expect(synthesizeCalls()).toHaveLength(1))
   })
 
   it('shows a clean error and stays usable when TTS fails', async () => {
-    ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          error: { code: 'SPEECH_PROVIDER_UNAVAILABLE', message: 'TTS down.' },
-        }),
-        { status: 503 },
+    routeFetch(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: { code: 'SPEECH_PROVIDER_UNAVAILABLE', message: 'TTS down.' },
+          }),
+          { status: 503 },
+        ),
       ),
     )
     render(
@@ -139,5 +162,50 @@ describe('ListenButton', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent ?? '').toMatch(/unavailable/i)
     expect((screen.getByRole('button', { name: /listen to answer/i }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('routes TTS to browser speechSynthesis when configured', async () => {
+    const spoken: { text: string; lang: string }[] = []
+    vi.stubGlobal(
+      'SpeechSynthesisUtterance',
+      class {
+        text: string
+        lang: string
+        onend: (() => void) | null = null
+        onerror: (() => void) | null = null
+        constructor(text: string, lang = '') {
+          this.text = text
+          this.lang = lang
+        }
+      },
+    )
+    vi.stubGlobal(
+      'speechSynthesis',
+      Object.assign(new EventTarget(), {
+        speak: (utterance: { text: string; lang: string; onend: (() => void) | null }) => {
+          spoken.push({ text: utterance.text, lang: utterance.lang })
+          utterance.onend?.()
+        },
+        cancel: vi.fn(),
+      }),
+    )
+    ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>) = vi.fn((url: unknown) =>
+      Promise.resolve(
+        String(url).includes('/speech/config')
+          ? new Response(JSON.stringify({ stt_provider: 'server', tts_provider: 'browser' }))
+          : new Response('wav', { status: 200 }),
+      ),
+    )
+    render(
+      <>
+        <ListenButton sessionId="sess" text="Section 103." language="en" />
+        <ToastHost />
+      </>,
+    )
+    await userEvent.click(screen.getByRole('button', { name: /listen to answer/i }))
+    await waitFor(() => expect(spoken).toHaveLength(1))
+    expect(spoken[0]).toEqual({ text: 'Section 103.', lang: 'en' })
+    // No server synthesis request was made.
+    expect(synthesizeCalls()).toHaveLength(0)
   })
 })

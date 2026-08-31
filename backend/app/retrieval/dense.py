@@ -15,8 +15,11 @@ embedded raw, queries are prefixed with
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
+from pathlib import Path
 from typing import Protocol
 
 from app.ingestion.embeddings import BgeEmbedder, EmbeddingProvider
@@ -102,17 +105,92 @@ class QdrantDenseRetriever:
 class CosineDenseIndex:
     """In-process cosine dense index (no vector store required).
 
-    Corpus vectors are embedded once at build time (cold start is a
-    one-time job, A2-013); queries reuse the loaded embedder. Filters are
-    applied before ranking — same D-018 server-side semantics.
+    Corpus vectors are embedded once (A2-013) and persisted to an optional
+    on-disk cache: subsequent startups validate the cache against the
+    current corpus (embedder identity + per-chunk text hashes) and reload
+    it instead of re-embedding, so an API restart does not pay the full
+    corpus embedding cost again. Filters are applied before ranking —
+    same D-018 server-side semantics.
     """
 
-    def __init__(self, chunks: list[Chunk], embedder: EmbeddingProvider) -> None:
+    def __init__(
+        self,
+        chunks: list[Chunk],
+        embedder: EmbeddingProvider,
+        *,
+        vector_cache_path: Path | None = None,
+    ) -> None:
         self._chunks = {c.chunk_id: c for c in chunks}
+        self._embedder = embedder
+        vectors = (
+            self._load_cache(chunks, embedder, vector_cache_path)
+            if vector_cache_path is not None
+            else None
+        )
+        if vectors is None:
+            vectors = self._embed_and_store(chunks, embedder, vector_cache_path)
+        self._vectors = vectors
+
+    # -- vector cache ---------------------------------------------------------
+
+    @staticmethod
+    def _embedder_identity(embedder: EmbeddingProvider) -> str:
+        model = getattr(embedder, "MODEL_NAME", None) or ""
+        return f"{type(embedder).__name__}:{model}"
+
+    @staticmethod
+    def _fingerprint(chunks: list[Chunk]) -> dict[str, str]:
+        return {c.chunk_id: hashlib.sha256(c.text.encode("utf-8")).hexdigest() for c in chunks}
+
+    def _load_cache(
+        self,
+        chunks: list[Chunk],
+        embedder: EmbeddingProvider,
+        path: Path,
+    ) -> dict[str, list[float]] | None:
+        """Return cached vectors when they match the corpus + embedder exactly."""
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(raw, dict) or raw.get("embedder") != self._embedder_identity(embedder):
+            return None
+        stored = raw.get("vectors")
+        fingerprint = self._fingerprint(chunks)
+        if not isinstance(stored, dict) or set(stored) != set(fingerprint):
+            return None
+        stored_hashes = raw.get("hashes")
+        if not isinstance(stored_hashes, dict) or any(
+            stored_hashes.get(cid) != digest for cid, digest in fingerprint.items()
+        ):
+            return None
+        logger.info("dense vector cache hit", extra={"path": str(path), "chunks": len(chunks)})
+        return {cid: list(stored[cid]) for cid in fingerprint}
+
+    def _embed_and_store(
+        self,
+        chunks: list[Chunk],
+        embedder: EmbeddingProvider,
+        path: Path | None,
+    ) -> dict[str, list[float]]:
         texts = [c.text for c in chunks]
         vectors = embedder.embed_texts(texts)
-        self._vectors = {c.chunk_id: vec for c, vec in zip(chunks, vectors, strict=True)}
-        self._embedder = embedder
+        result = {c.chunk_id: vec for c, vec in zip(chunks, vectors, strict=True)}
+        if path is not None:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                payload = {
+                    "embedder": self._embedder_identity(embedder),
+                    "hashes": self._fingerprint(chunks),
+                    "vectors": result,
+                }
+                tmp = path.with_suffix(path.suffix + ".tmp")
+                tmp.write_text(json.dumps(payload), encoding="utf-8")
+                tmp.replace(path)
+                logger.info("dense vector cache written", extra={"path": str(path)})
+            except OSError:
+                logger.warning("dense vector cache not writable", extra={"path": str(path)})
+        return result
 
     def search(self, query: str, flt: MetadataFilter | None, top_k: int) -> list[str]:
         if top_k <= 0:
