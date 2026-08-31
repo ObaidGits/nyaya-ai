@@ -212,20 +212,14 @@ jobs:
           BACKEND_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/nyaya-backend:${GITHUB_SHA}"
           FRONTEND_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/nyaya-frontend:${GITHUB_SHA}"
 
+          # Env vars go on the remote command line: sshd rejects SendEnv-style
+          # VAR=val arguments unless AcceptEnv allows them (it does not here).
+          # The remote script itself is piped over stdin (scripts/deploy-remote.sh).
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-            GHCR_PULL_TOKEN="$GHCR_PULL_TOKEN" \
-            GHCR_OWNER="$GHCR_OWNER" \
-            GITHUB_REPO="$GITHUB_REPOSITORY" \
-            BACKEND_IMAGE="$BACKEND_IMAGE" \
-            FRONTEND_IMAGE="$FRONTEND_IMAGE" \
-            'set -e
-             cd ~/nyaya-ai
-             git fetch https://x-access-token:${GHCR_PULL_TOKEN}@github.com/${GITHUB_REPO}.git main
-             git reset --hard FETCH_HEAD
-             git config remote.origin.url "https://github.com/${GITHUB_REPO}.git"
-             echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_OWNER" --password-stdin >/dev/null
-             BACKEND_IMAGE="$BACKEND_IMAGE" FRONTEND_IMAGE="$FRONTEND_IMAGE" docker compose pull api worker frontend
-             BACKEND_IMAGE="$BACKEND_IMAGE" FRONTEND_IMAGE="$FRONTEND_IMAGE" docker compose up -d --remove-orphans api worker frontend'
+            "GHCR_PULL_TOKEN='$GHCR_PULL_TOKEN' GHCR_OWNER='$GHCR_OWNER' \
+             GITHUB_REPO='$GITHUB_REPOSITORY' \
+             BACKEND_IMAGE='$BACKEND_IMAGE' FRONTEND_IMAGE='$FRONTEND_IMAGE' \
+             bash -s" < scripts/deploy-remote.sh
 
       - name: Verify rollout
         run: |
