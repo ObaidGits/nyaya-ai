@@ -191,9 +191,37 @@ async def handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def handle_dependency_error(request: Request, exc: Exception) -> JSONResponse:
+    """A backend dependency (e.g. Redis) is down: report 503, not 500.
+
+    Clients can distinguish "the service is broken" from "a backing store
+    is temporarily unreachable" and retry accordingly.
+    """
+    logger.warning(
+        "dependency error converted to 503",
+        extra={"exception_type": type(exc).__name__, "path": request.url.path},
+    )
+    return _build_error_response(
+        status_code=503,
+        code="DEPENDENCY_UNAVAILABLE",
+        message="A backing service is temporarily unavailable. Please retry.",
+    )
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Register the consistent error handlers on the application."""
     app.add_exception_handler(AppError, handle_app_error)  # type: ignore[arg-type]
     app.add_exception_handler(RequestValidationError, handle_validation_error)  # type: ignore[arg-type]
     app.add_exception_handler(StarletteHTTPException, handle_http_exception)  # type: ignore[arg-type]
+    try:
+        # Redis backs the document store/index in production (D-030). When it
+        # is down the API reports 503 DEPENDENCY_UNAVAILABLE instead of 500.
+        import redis
+
+        app.add_exception_handler(
+            redis.RedisError,  # type: ignore[arg-type]
+            handle_dependency_error,
+        )
+    except ImportError:
+        pass
     app.add_exception_handler(Exception, handle_unexpected_error)

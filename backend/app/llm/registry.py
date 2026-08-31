@@ -3,10 +3,6 @@
 Providers are registered by name and resolved from the typed settings object
 (``LLM_PROVIDER`` environment variable), so the provider is swappable through
 configuration without touching application code.
-
-Phase 1 registers no concrete providers: the Ollama and hosted generation
-implementations arrive in later phases. Resolving an unregistered provider
-raises a clear configuration error rather than falling back silently.
 """
 
 from collections.abc import Callable
@@ -56,7 +52,24 @@ class ProviderRegistry:
 def create_default_registry() -> ProviderRegistry:
     """Build the default registry.
 
-    Phase 1 intentionally registers no providers. Later phases register the
-    concrete implementations (Ollama first, D-033) here.
+    Ollama is the keyless default generation path (D-033); hosted generation
+    providers (D-034/D-080) are registered alongside it, all selected through
+    ``LLM_PROVIDER`` configuration.
     """
-    return ProviderRegistry()
+    from app.llm.gemini import create_gemini_provider
+    from app.llm.ollama import create_ollama_provider
+    from app.llm.openai_compat import (
+        create_grok_provider,
+        create_openai_compatible_provider,
+        create_openai_provider,
+        create_openrouter_provider,
+    )
+
+    registry = ProviderRegistry()
+    registry.register("ollama", create_ollama_provider)
+    registry.register("openai", create_openai_provider)
+    registry.register("gemini", create_gemini_provider)
+    registry.register("grok", create_grok_provider)
+    registry.register("openrouter", create_openrouter_provider)
+    registry.register("openai-compatible", create_openai_compatible_provider)
+    return registry

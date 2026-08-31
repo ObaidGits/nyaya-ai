@@ -99,9 +99,9 @@ def test_unknown_provider_raises_clear_error() -> None:
     assert isinstance(excinfo.value, AppError)
 
 
-def test_default_registry_has_no_providers() -> None:
-    """Phase 1 ships no concrete providers (LLM-002 boundary only)."""
-    assert create_default_registry().available() == []
+def test_default_registry_registers_ollama() -> None:
+    """Phase 4 registers the keyless Ollama provider (D-033); more may follow."""
+    assert "ollama" in create_default_registry().available()
 
 
 def test_dependency_injection_resolves_configured_provider() -> None:
@@ -118,7 +118,8 @@ def test_dependency_injection_resolves_configured_provider() -> None:
 
 
 def test_unregistered_provider_yields_503(app: FastAPI, client: TestClient) -> None:
-    """Default settings (ollama) with an empty registry surface a 503."""
+    """A provider name missing from the registry surfaces a 503."""
+    app.state.settings = app.state.settings.model_copy(update={"llm_provider": "does-not-exist"})
     _mount_provider_route(app)
     response = client.get("/api/v1/_test/provider")
     assert response.status_code == 503

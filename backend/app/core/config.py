@@ -72,6 +72,25 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://localhost:11434"
     llm_model: str = ""
     llm_api_key: SecretStr | None = None
+    # Per-request HTTP timeout for the LLM provider. Local Ollama on a
+    # modest GPU can exceed 120 s for a full grounded generation (large
+    # evidence prompt); deployments tune this instead of failing mid-stream.
+    llm_timeout_seconds: float = Field(default=300.0, gt=0.0)
+    # Sampling temperature passed to providers that support it. Kept low by
+    # default: grounded legal answers must stay conservative.
+    llm_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    # Ollama context window (None = the model's default). Grounded prompts
+    # with 10 evidence chunks exceed the ~4k default, and Ollama truncates
+    # silently — set this to cover system prompt + evidence + answer.
+    llm_num_ctx: int | None = Field(default=8192, gt=0)
+    # Max generated tokens per response (None = model default). A small
+    # local model occasionally rambles past any useful length on grounded
+    # prompts; a cap bounds latency and keeps the answer finite.
+    llm_num_predict: int | None = Field(default=768, gt=0)
+    # Estimated query cost (F-034/F-035): (tokens / 1000) x rate. Local
+    # Ollama generation is free by default; hosted providers set real rates.
+    llm_cost_per_1k_input_tokens: float = Field(default=0.0, ge=0.0)
+    llm_cost_per_1k_output_tokens: float = Field(default=0.0, ge=0.0)
 
     # --- Embeddings (DECISIONS.md D-011/D-012) -----------------------------
     embedding_model: str = "BAAI/bge-base-en-v1.5"
@@ -86,21 +105,110 @@ class Settings(BaseSettings):
     # Evidence sufficiency threshold in [0, 1]; 0 disables refusal. Tunable,
     # never a hidden final answer-quality claim (ARCHITECTURE §15).
     retrieval_confidence_threshold: float = Field(default=0.1, ge=0.0, le=1.0)
+    # Same contract for session document retrieval (cosine similarity of the
+    # top hit). Without it any nonzero-overlap chunk would count as
+    # sufficient evidence; 0 disables the gate. Note the scale difference:
+    # this is a raw HashingEmbedder cosine, where a genuinely matching
+    # chunk scores ~0.08 — NOT the RRF-normalized confidence the statute
+    # threshold uses — so the floor sits lower by design.
+    document_retrieval_confidence_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
+
+    # --- Languages (multilingual support, DECISIONS.md D-077) -------------
+    # Detection backend: "script" (default, zero dependencies) or
+    # "fasttext" (statistical, needs fasttext package + lid.176.bin model,
+    # ~130 MB, CC BY-SA 4.0; distinguishes hi/mr and bn/as lexically).
+    language_detection_backend: str = Field(default="script")
+    fasttext_model_path: str | None = None
+    # Optional AI4Bharat IndicTrans2 translation backend (MIT license,
+    # ~1.2 GB per direction, GPU recommended). None = use the configured
+    # local LLM provider for query translation instead. Never a paid API.
+    indictrans2_model_dir: str | None = None
 
     # --- Storage (DECISIONS.md D-029) --------------------------------------
     storage_dir: str = "./storage"
 
+    # --- Statutory forms library (REQUIREMENTS B-*; DECISIONS D-002) -------
+    # Exact source PDF and generated library directory. The library is
+    # produced out-of-band by scripts/extract_forms.py; the API serves from
+    # forms_output_dir and fails closed (503) until a manifest exists.
+    forms_source_path: str = str(_REPO_ROOT / "data" / "raw" / "BNS_bare_act_2023.pdf")
+    forms_output_dir: str = str(_REPO_ROOT / "data" / "forms")
+    forms_page_start: int = Field(default=190, ge=1)
+    forms_page_end: int = Field(default=249, ge=1)
+
     # --- Upload limits (REQUIREMENTS.md D-044/D-045; DECISIONS.md D-043) ---
     max_upload_size_mb: int = Field(default=20, gt=0)
     allowed_upload_types: str = "application/pdf"
+    # User-document state backend: "memory" (dev/tests) or "redis" (production
+    # worker path, D-030 — API and arq worker share the Redis store/index).
+    documents_backend: str = Field(default="memory", pattern="^(memory|redis)$")
+
+    # --- Speech (STT/TTS, DECISIONS.md D-079) -------------------------------
+    # Providers are independently configurable and replaceable; defaults are
+    # the keyless local AI4Bharat models. Heavy model weights load lazily on
+    # first use so API startup never depends on torch being installed.
+    speech_stt_provider: str = Field(default="faster-whisper", min_length=1)
+    speech_tts_provider: str = Field(default="piper", min_length=1)
+    speech_stt_model: str = "small"
+    # Piper English voice (D-081); Hindi is pinned to hi_IN-pratham-medium.
+    speech_tts_model: str = "en_US-lessac-medium"
+    # Directory holding baked/downloaded Piper .onnx voices (empty = storage/piper-voices).
+    speech_tts_voices_dir: str = ""
+    # Optional cloud (OpenAI-compatible) endpoints — opt-in, never default.
+    # Example: https://api.openai.com/v1 (OpenAI), https://api.groq.com/openai/v1
+    speech_stt_base_url: str = "https://api.openai.com/v1"
+    speech_tts_base_url: str = "https://api.openai.com/v1"
+    speech_stt_api_key: SecretStr | None = None
+    speech_tts_api_key: SecretStr | None = None
+    speech_tts_voice: str = "alloy"
+    # auto|cuda|cpu — STT and TTS are configured separately because both
+    # models must not sit permanently on a small GPU (6 GB VRAM).
+    speech_stt_device: str = Field(default="auto", pattern="^(auto|cuda|cpu)$")
+    speech_tts_device: str = Field(default="auto", pattern="^(auto|cuda|cpu)$")
+    # IndicConformer adapter codes tried for auto-detection (acoustic
+    # scoring picks the winner); comma-separated two-letter codes.
+    speech_stt_auto_languages: str = "en,hi,bn,ta"
+    # Max accepted audio upload size for transcription.
+    max_audio_upload_mb: int = Field(default=15, gt=0)
+    # Eagerly load STT/TTS weights at startup (background thread) so the
+    # first speech request doesn't pay the model-load latency (~30-60 s on
+    # CPU). Off by default: it costs ~3 GB RAM held permanently.
+    speech_preload: bool = False
+
+    # --- Admin console (Settings page; DECISIONS.md D-080) ------------------
+    # Credentials come from the environment only — never hardcoded, never in
+    # the frontend, never returned by any API. When unset the admin API is
+    # disabled entirely (login returns 503 ADMIN_DISABLED).
+    admin_username: str | None = None
+    admin_password: SecretStr | None = None
+    # Secret used to sign admin session cookies; derived from the password
+    # when unset (documented fallback — set it explicitly in production).
+    admin_session_secret: SecretStr | None = None
+    # Where the persisted admin configuration lives (JSON, 0600). Empty
+    # disables persistence (settings changes are process-local only).
+    admin_settings_path: str = ""
+
+    # --- Chat history (memory configuration; DECISIONS.md D-080) ------------
+    # Conversation memory is client-side (localStorage) and sent per request;
+    # history is untrusted input and never a source of legal authority. This
+    # caps how many turns the server accepts.
+    chat_history_max_turns: int = Field(default=20, ge=1, le=50)
 
     # --- Rate limits (DECISIONS.md D-043: numeric limits are configuration) -
     rate_limit_chat_per_minute: int = Field(default=20, gt=0)
     rate_limit_upload_per_minute: int = Field(default=5, gt=0)
+    rate_limit_speech_per_minute: int = Field(default=10, gt=0)
 
     # --- Retrieval (DECISIONS.md D-015: initial candidate values) ----------
     dense_top_k: int = Field(default=20, gt=0)
     sparse_top_k: int = Field(default=20, gt=0)
+    # Phase 2 chunk artifact serving statute retrieval. Empty disables the
+    # chat retrieval seam (503) until a corpus is ingested.
+    retrieval_corpus_path: str = ""
+    # Dense embedding backend (D-011/D-012): "bge" = the open-weight
+    # BAAI/bge-base-en-v1.5 model via sentence-transformers (semantic, 768-dim);
+    # "hashing" = deterministic bag-of-words fallback (dev/tests, no model).
+    embedding_backend: str = Field(default="bge", pattern="^(bge|hashing)$")
 
     @field_validator("log_level")
     @classmethod

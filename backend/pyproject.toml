@@ -15,14 +15,35 @@ select = [
     "C4",  # flake8-comprehensions
     "RUF", # ruff-specific rules
 ]
+[tool.ruff.lint.per-file-ignores]
+# Fixed translated copy: line length reflects the translation, not the
+# code structure; wrapping would mangle the strings.
+"app/language/conversation.py" = ["E501", "RUF001"]
+"app/language/service.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["app"]
+# The speech layer's deps are optional (requirements-speech.txt): installed
+# in the Docker image, absent in CI. Conditional import guards therefore
+# carry `type: ignore` comments that are used in ONE environment and unused
+# in the other — flagging them breaks whichever env is missing the deps.
+warn_unused_ignores = false
+
+# Optional speech modules — see above.
+[[tool.mypy.overrides]]
+module = ["soundfile", "torchaudio", "parler_tts"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+filterwarnings = [
+    # Third-party: raised by fastapi.testclient's own import chain
+    # (starlette deprecating httpx). Not actionable in this repo; tracked
+    # upstream. Revisit on the next fastapi/starlette upgrade.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:Warning",
+]

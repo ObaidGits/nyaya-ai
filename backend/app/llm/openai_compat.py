@@ -1,0 +1,226 @@
+"""OpenAI-compatible chat-completions LLM provider (DECISIONS.md D-034/D-080).
+
+One implementation covers OpenAI, Grok (x.ai), OpenRouter and any
+OpenAI-compatible gateway: they differ only in base URL, default model and
+API key. Streaming uses SSE ``data:`` lines. Errors are normalized to the
+application's 503 LLM_PROVIDER_UNAVAILABLE AppError; provider bodies are
+never leaked to clients.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import AsyncIterator
+from typing import Any
+
+import httpx
+
+from app.core.config import Settings
+from app.core.errors import AppError
+from app.llm.base import (
+    GenerationRequest,
+    GenerationResult,
+    LLMProvider,
+    ProviderMetadata,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class CloudProviderError(AppError):
+    status_code = 503
+    code = "LLM_PROVIDER_UNAVAILABLE"
+
+
+# name -> (default base url, default model, display name)
+PROFILES: dict[str, tuple[str, str, str]] = {
+    "openai": ("https://api.openai.com/v1", "gpt-4o-mini", "OpenAI"),
+    "openai-compatible": ("", "", "OpenAI-compatible"),
+    "grok": ("https://api.x.ai/v1", "grok-2-latest", "Grok"),
+    "openrouter": ("https://openrouter.ai/api/v1", "openai/gpt-4o-mini", "OpenRouter"),
+}
+
+
+class OpenAICompatibleProvider(LLMProvider):
+    """Chat-completions provider for OpenAI-compatible endpoints."""
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        base_url: str,
+        model: str,
+        api_key: str,
+        timeout_seconds: float = 120.0,
+        temperature: float = 0.2,
+        max_output_tokens: int | None = None,
+    ) -> None:
+        self._provider = provider
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        self._api_key = api_key
+        self._timeout = timeout_seconds
+        self._temperature = temperature
+        self._max_output_tokens = max_output_tokens
+
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        if self._provider == "openrouter":
+            headers["HTTP-Referer"] = "https://nyaya.local"
+            headers["X-Title"] = "Nyaya"
+        return headers
+
+    def _payload(self, request: GenerationRequest, *, stream: bool) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": [
+                {"role": message.role.value, "content": message.content}
+                for message in request.messages
+            ],
+            "temperature": self._temperature,
+            "stream": stream,
+        }
+        if self._max_output_tokens is not None:
+            payload["max_tokens"] = self._max_output_tokens
+        return payload
+
+    def _require_key(self) -> None:
+        if not self._api_key:
+            raise CloudProviderError(
+                f"The '{self._provider}' provider is selected but no API key is configured."
+            )
+
+    def _require_endpoint(self) -> None:
+        if not self._base_url or not self._model:
+            raise CloudProviderError(
+                f"The '{self._provider}' provider needs a base URL and a model name."
+            )
+
+    async def generate(self, request: GenerationRequest) -> GenerationResult:
+        self._require_key()
+        self._require_endpoint()
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    f"{self._base_url}/chat/completions",
+                    headers=self._headers(),
+                    json=self._payload(request, stream=False),
+                )
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPStatusError:
+            logger.warning(
+                "cloud llm rejected request",
+                extra={"provider": self._provider, "error_type": "HTTPStatusError"},
+            )
+            raise CloudProviderError("The generation provider rejected the request.") from None
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "cloud llm unreachable",
+                extra={"provider": self._provider, "error_type": type(exc).__name__},
+            )
+            raise CloudProviderError("The generation provider is currently unavailable.") from exc
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        usage = data.get("usage") or {}
+        return GenerationResult(
+            text=str(message.get("content", "")),
+            model=self._model,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        )
+
+    async def _stream_chunks(self, request: GenerationRequest) -> AsyncIterator[str]:
+        self._require_key()
+        self._require_endpoint()
+        try:
+            async with (
+                httpx.AsyncClient(timeout=self._timeout) as client,
+                client.stream(
+                    "POST",
+                    f"{self._base_url}/chat/completions",
+                    headers=self._headers(),
+                    json=self._payload(request, stream=True),
+                ) as response,
+            ):
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[len("data:") :].strip()
+                    if not payload or payload == "[DONE]":
+                        continue
+                    try:
+                        chunk = json.loads(payload)
+                    except ValueError:
+                        continue
+                    delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+                    token = delta.get("content")
+                    if token:
+                        yield str(token)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "cloud llm streaming failed",
+                extra={"provider": self._provider, "error_type": type(exc).__name__},
+            )
+            raise CloudProviderError("The generation provider is currently unavailable.") from exc
+
+    def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
+        return self._stream_chunks(request)
+
+    def metadata(self) -> ProviderMetadata:
+        return ProviderMetadata(provider=self._provider, model=self._model, supports_streaming=True)
+
+    async def health_check(self) -> bool:
+        if not self._api_key or not self._base_url:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                response = await client.get(f"{self._base_url}/models", headers=self._headers())
+                return response.status_code < 500
+        except httpx.HTTPError:
+            return False
+
+
+def create_openai_provider(settings: Settings) -> LLMProvider:
+    return _create_compat(settings, "openai")
+
+
+def create_openai_compatible_provider(settings: Settings) -> LLMProvider:
+    return _create_compat(settings, "openai-compatible")
+
+
+def create_grok_provider(settings: Settings) -> LLMProvider:
+    return _create_compat(settings, "grok")
+
+
+def create_openrouter_provider(settings: Settings) -> LLMProvider:
+    return _create_compat(settings, "openrouter")
+
+
+def _create_compat(settings: Settings, provider: str) -> LLMProvider:
+    default_url, default_model, _ = PROFILES[provider]
+    # Cap the timeout at 300 s so a bad setting cannot hang requests forever.
+    return OpenAICompatibleProvider(
+        provider=provider,
+        base_url=settings.llm_base_url or default_url,
+        model=settings.llm_model or default_model,
+        api_key=(settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""),
+        timeout_seconds=min(settings.llm_timeout_seconds, 300.0),
+        temperature=settings.llm_temperature,
+        max_output_tokens=settings.llm_num_predict,
+    )
+
+
+__all__ = [
+    "PROFILES",
+    "OpenAICompatibleProvider",
+    "create_grok_provider",
+    "create_openai_compatible_provider",
+    "create_openai_provider",
+    "create_openrouter_provider",
+]
