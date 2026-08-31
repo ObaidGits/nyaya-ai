@@ -361,14 +361,12 @@ class TestPromptEchoDetection:
         """Grounding rule 3 tells the model to quote statutory wording
         verbatim — a full quoted provision with a citation is a GOOD
         answer (the nemotron-3-ultra-free shape), never an echo."""
-        request = build_generation_request(
-            "What is section 103 BNS?", make_evidence().results
-        )
+        request = build_generation_request("What is section 103 BNS?", make_evidence().results)
         answer = (
             "Section 103 of the Bharatiya Nyaya Sanhita prescribes the "
-            "punishment for murder. It states: \"Whoever commits murder shall "
+            'punishment for murder. It states: "Whoever commits murder shall '
             "be punished with death or imprisonment for life, and shall also "
-            "be liable to fine.\" [TS s.103]."
+            'be liable to fine." [TS s.103].'
         )
         assert not is_prompt_echo(answer, request.messages)
 
