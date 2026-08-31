@@ -42,6 +42,14 @@ docker compose build
 docker compose up -d          # api, worker, redis, qdrant, postgres,
                               # ollama (+ one-shot model pull), prometheus,
                               # frontend
+```
+
+**Two deployment shapes** (selected in `.env`, config-only):
+
+| Shape | `.env` | Result |
+| --- | --- | --- |
+| Keyless local (default) | `COMPOSE_PROFILES=ollama`, `LLM_PROVIDER=ollama` | in-stack Ollama container + auto model pull |
+| API-key hosted LLM | `COMPOSE_PROFILES=` (empty), `LLM_PROVIDER=openai`/`gemini`/…, `LLM_API_KEY=…` | no Ollama container created at all; chat uses the hosted provider |
 
 # one-shot, idempotent data bootstrap (ingestion + forms extraction):
 ./scripts/bootstrap.sh        # requires a local Python 3.12 venv, see below
@@ -74,7 +82,7 @@ starts with `docker compose up` alone.
 | 6333 | Qdrant (internal) |
 | 6379 | Redis (internal) |
 | 5432 | PostgreSQL (internal) |
-| 11434 | Ollama (optional `llm` profile, internal) |
+| 11434 | Ollama (opt-in `ollama` profile, internal) |
 
 ## Environment variables
 
