@@ -28,6 +28,7 @@ def _chunk(
     *,
     chapter: str = "I",
     chapter_title: str = "TEST",
+    subsection: str | None = None,
 ) -> Chunk:
     return Chunk(
         chunk_id=chunk_id,
@@ -37,7 +38,7 @@ def _chunk(
         chapter_title=chapter_title,
         section_number=section,
         section_title=title,
-        subsection=None,
+        subsection=subsection,
         clause=None,
         text=text,
         has_illustration=False,
@@ -81,6 +82,7 @@ def make_corpus() -> list[Chunk]:
             "Provided that where a person is under eighteen years, the penalty is reduced.",
             chapter="XXVII",
             chapter_title="OFFENCES AGAINST LIFE",
+            subsection="(1)",
         ),
         _chunk(
             "ts-s9-001",

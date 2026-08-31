@@ -1,5 +1,6 @@
 """Retrieval service tests (A3-003..A3-014; ARCHITECTURE §11-§15)."""
 
+from app.documents.models import DocumentEvidence, DocumentHit
 from app.retrieval.dense import CosineDenseIndex
 from app.retrieval.models import MetadataFilter, RetrievalRoute
 from app.retrieval.service import RetrievalService
@@ -121,13 +122,15 @@ def test_threshold_zero_never_refuses() -> None:
     assert evidence.sufficient
 
 
-def test_document_route_is_honest_stub() -> None:
+def test_document_route_fails_closed_without_session() -> None:
+    """Document route without a session id or index yields no evidence (§21)."""
     service = _service()
     evidence = service.retrieve("What does my notice say?")
     assert evidence.route == RetrievalRoute.DOCUMENT
     assert evidence.results == []
+    assert evidence.document_hits == []
     assert not evidence.sufficient
-    assert any("Phase 5" in r for r in evidence.reasons)
+    assert any("session" in r for r in evidence.reasons)
 
 
 def test_combined_route_retrieves_statute_side() -> None:
@@ -148,3 +151,101 @@ def test_lookup_respects_filter() -> None:
     service = _service()
     evidence = service.retrieve("What is section 103 BNS?", MetadataFilter(section_number="1"))
     assert evidence.results == []  # filter wins over lookup intent
+
+
+# ---------------------------------------------------------------------------
+# Session document retrieval confidence gate (§15, §34)
+# ---------------------------------------------------------------------------
+
+
+class _StubDocumentRetrieval:
+    """Scripted session document retrieval returning fixed hits."""
+
+    def __init__(self, hits: list[DocumentHit]) -> None:
+        self._hits = hits
+
+    def retrieve(self, session_id: str, query: str) -> DocumentEvidence:
+        return DocumentEvidence(hits=self._hits)
+
+
+def _doc_hit(score: float) -> DocumentHit:
+    return DocumentHit(
+        chunk_id="d-p0001-000",
+        document_id="d31f",
+        text="Legal notice: the tenant must vacate the premises within thirty days.",
+        page_start=1,
+        page_end=1,
+        score=score,
+    )
+
+
+def test_document_route_sufficient_when_confidence_meets_threshold() -> None:
+    service = _service(document_retrieval=_StubDocumentRetrieval([_doc_hit(0.9)]))
+    evidence = service.retrieve("What does my notice say?", session_id="sess-1")
+    assert evidence.route == RetrievalRoute.DOCUMENT
+    assert evidence.document_hits
+    assert evidence.sufficient
+
+
+def test_document_route_refuses_when_confidence_below_threshold() -> None:
+    """Low-similarity document hits are not sufficient evidence: the gate
+    fails closed instead of letting weak overlap ground an answer."""
+    service = _service(
+        document_retrieval=_StubDocumentRetrieval([_doc_hit(0.05)]),
+        document_confidence_threshold=0.1,
+    )
+    evidence = service.retrieve("What does my notice say?", session_id="sess-1")
+    assert evidence.document_hits  # hits exist...
+    assert not evidence.sufficient  # ...but confidence gates them out
+    assert any("below threshold" in r for r in evidence.reasons)
+
+
+def test_document_gate_default_calibrated_to_hashing_cosine_scale() -> None:
+    """Default threshold regression (D-073): HashingEmbedder cosines are
+    structurally low — a genuinely matching notice chunk scores ~0.08 — so
+    the default gate must sit below that (0.05) while still rejecting
+    near-zero junk overlap."""
+    # Real-match-level score passes with the default threshold.
+    passing = _service(document_retrieval=_StubDocumentRetrieval([_doc_hit(0.08)]))
+    evidence = passing.retrieve("What does my notice say?", session_id="sess-1")
+    assert evidence.sufficient
+    # Junk-level overlap is still gated out by the same default.
+    junk = _service(document_retrieval=_StubDocumentRetrieval([_doc_hit(0.02)]))
+    evidence = junk.retrieve("What does my notice say?", session_id="sess-1")
+    assert not evidence.sufficient
+
+
+# ---------------------------------------------------------------------------
+# Act-mismatch fallback guard (D-071)
+# ---------------------------------------------------------------------------
+
+
+def test_act_alias_fallback_in_single_act_corpus() -> None:
+    """Single-act corpus: the user's act label is an alias, so the lookup
+    retries without the act restriction."""
+    service = _service()
+    evidence = service.retrieve("What is section 103 of BNS?")
+    assert evidence.results  # TS corpus answers the BNS-labelled query
+
+
+def test_act_mismatch_refuses_in_multi_act_corpus() -> None:
+    """Multi-act corpus: a missing act must not silently substitute another
+    act's text for the requested authority."""
+
+    def with_act(act_short: str) -> list:
+        return [
+            c.model_copy(update={"act_short": act_short, "act": f"Act {act_short}"})
+            for c in make_corpus()
+        ]
+
+    chunks = [*with_act("BNSS"), *with_act("TS")]
+    store = ChunkStore(chunks)
+    service = RetrievalService(
+        store=store,
+        dense=FakeDenseRetriever({}),
+        sparse=Bm25SparseIndex(chunks),
+    )
+    evidence = service.retrieve("What is section 103 of BNS?")
+    assert evidence.results == []
+    assert not evidence.sufficient
+    assert any("BNS" in r for r in evidence.reasons)
