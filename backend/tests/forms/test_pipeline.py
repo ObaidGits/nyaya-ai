@@ -157,3 +157,26 @@ def test_range_shorter_than_source_fails_clearly(tmp_path: Path) -> None:
     with pytest.raises(FormsExtractionError) as excinfo:
         extractor.extract(str(source), tmp_path / "out")
     assert excinfo.value.code == "FORMS_RANGE_INVALID"
+
+
+def test_glued_form_header_number_survives_cleaning(tmp_path: Path) -> None:
+    """Regression (2026-08-31): "FORM No.1" — number glued to the label —
+    had its ".1" stripped by the generic glued-page-number chrome rule, so
+    FORM No. 1 was silently dropped from the manifest (58 -> 57 forms on
+    the real source). The pipeline normalizes the header before cleaning.
+    """
+    pages = [
+        [
+            "THE SECOND SCHEDULE",
+            "(See section 522)",
+            "FORM  No.1",
+            "NOTICE FOR APPEARANCE BY THE POLICE",
+            "body",
+        ],
+        ["FORM No. 2", "SUMMONS TO AN ACCUSED PERSON", "body"],
+    ]
+    source = _write_source(tmp_path, pages)
+    manifest = _extractor().extract(str(source), tmp_path / "forms")
+
+    assert [f.form_number for f in manifest.forms] == [1, 2]
+    assert manifest.forms[0].title == "NOTICE FOR APPEARANCE BY THE POLICE"

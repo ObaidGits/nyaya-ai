@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from itertools import pairwise
 from pathlib import Path
 
@@ -28,6 +29,17 @@ from app.ingestion.cleaning import clean_page_lines
 from app.ingestion.models import PageText
 
 logger = logging.getLogger(__name__)
+
+# "FORM No.1" (number glued to the label, no space — Gazette p.190): the
+# generic inline-chrome rule that strips glued page numbers (".46" at line
+# end) would eat ".1" and the detector would lose FORM No. 1. Normalize the
+# header to the spaced form BEFORE cleaning so the number survives.
+_FORM_HEADER_GLUE_RE = re.compile(r"^(\s*FORM\s+No\.?)\s*(\d+)\s*$", re.IGNORECASE)
+
+
+def _normalize_form_header(raw_lines: list[str]) -> list[str]:
+    return [_FORM_HEADER_GLUE_RE.sub(r"\1 \2", line) for line in raw_lines]
+
 
 # Assignment-defined processing range (DECISIONS D-002). Content drives the
 # extraction; this range only bounds it.
@@ -89,6 +101,7 @@ class FormsExtractor:
         pages: list[PageText] = []
         for index, page in enumerate(reader.pages):
             raw = (page.extract_text() or "").splitlines()
+            raw = _normalize_form_header(raw)
             printed = index + 1
             if raw and raw[0].strip().isdigit():
                 printed = int(raw[0].strip())
