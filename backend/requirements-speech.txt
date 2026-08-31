@@ -9,17 +9,24 @@
 
 torch==2.6.0
 torchaudio==2.6.0
-transformers==4.46.1
-tokenizers==0.20.3
+# 5.5.4: Trivy fail-closed on CRITICAL/HIGH found CVE-2024-11392..94,
+# CVE-2026-4372, CVE-2026-5241 in 4.46.1 (fix ≥5.5.0) — CI run 33384078128.
+transformers==5.5.4
+tokenizers>=0.22
 soundfile==0.14.0
 faster-whisper==1.1.0
 # Open-weight BGE dense embeddings (D-011/D-012): semantic retrieval.
-sentence-transformers==3.4.1
+# 6.0.1: supports transformers 5.x (3.4.1 pins transformers<5).
+sentence-transformers==6.0.1
 # Lightweight local TTS default (D-081): ~100 ms CPU synthesis, ~200 MB RAM.
 # Voices are baked into the image at /app/piper-voices (see Dockerfile).
 piper-tts==1.7.0
-# Heavy fallback TTS (optional; selectable via SPEECH_TTS_PROVIDER=parler-tts).
-parler_tts==0.2.3
+# Heavy fallback TTS REMOVED (D-084): parler-tts 0.2.3 pins
+# transformers==4.46.1 exactly, which is blocked by the CVEs above.
+# app/speech/parler_tts.py keeps the lazy provider; selecting
+# SPEECH_TTS_PROVIDER=parler-tts without the package installed fails
+# closed (503) like any optional speech dependency.
 accelerate==1.14.0
 sentencepiece==0.2.2
-protobuf==4.25.9
+# 5.29.6: CVE-2026-0994 (DoS) fixed in 5.29.6 / 6.33.5.
+protobuf==5.29.6

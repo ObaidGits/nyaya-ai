@@ -16,6 +16,9 @@ FROM python:3.12-slim AS runtime
 # OCR fallback (B-026..B-028) so image-only form pages are extractable.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libsndfile1 ffmpeg tesseract-ocr poppler-utils \
+    # CVE-2026-14456 (OpenSSL DoS): the base image's libssl3t64 predates the
+    # 3.5.7-1~deb13u2 fix; upgrade it explicitly so Trivy stays fail-closed.
+    && apt-get install -y --only-upgrade libssl3t64 \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root runtime user (D-058).
