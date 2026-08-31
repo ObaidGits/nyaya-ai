@@ -5,7 +5,9 @@
 services:
   api:
     build: ./backend
-    image: nyaya/backend:local
+    # CI deploys pin the registry ref via BACKEND_IMAGE (docs: DECISIONS D-054);
+    # local builds keep the default tag.
+    image: ${BACKEND_IMAGE:-nyaya/backend:local}
     environment:
       ENVIRONMENT: production
       DOCUMENTS_BACKEND: redis
@@ -67,7 +69,7 @@ services:
     restart: unless-stopped
 
   worker:
-    image: nyaya/backend:local
+    image: ${BACKEND_IMAGE:-nyaya/backend:local}
     build: ./backend
     # arq worker shares the API image but runs the queue entrypoint (D-030).
     command: ["arq", "app.workers.arq_worker.WorkerSettings"]
@@ -100,7 +102,7 @@ services:
 
   frontend:
     build: ./frontend
-    image: nyaya/frontend:local
+    image: ${FRONTEND_IMAGE:-nyaya/frontend:local}
     ports:
       - "${FRONTEND_PORT:-3000}:8080"
     depends_on:

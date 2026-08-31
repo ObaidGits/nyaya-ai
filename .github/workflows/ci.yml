@@ -180,27 +180,68 @@ jobs:
           tags: ${{ steps.images.outputs.frontend }}:${{ github.sha }}
           cache-from: type=gha
 
-  # Deployment interface (E-016, Full-Stack track): publish of the
-  # deployment summary is automatic on main once the images are pushed; the
-  # actual server rollout is gated behind the `production` GitHub
-  # environment, which a repository administrator must create with the
-  # DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY secrets. Until then this job
-  # stays queued (never fails, never pretends to have deployed).
+  # Deployment (E-016, Full-Stack track; DECISIONS D-054): on push to main,
+  # once images are published to GHCR, roll them out on the production server
+  # over SSH. Requires repository secrets: DEPLOY_HOST, DEPLOY_USER,
+  # DEPLOY_SSH_KEY (private key), GHCR_PULL_TOKEN (PAT with read:packages).
   deploy:
-    name: Deploy (gated)
+    name: Deploy to production
     runs-on: ubuntu-latest
     needs: docker
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment: production
     permissions:
       contents: read
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      GHCR_OWNER: ${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Record deployable release
+      - name: Roll out on server
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         run: |
-          echo "## Nyaya release ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+          BACKEND_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/nyaya-backend:${GITHUB_SHA}"
+          FRONTEND_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/nyaya-frontend:${GITHUB_SHA}"
+
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            GHCR_PULL_TOKEN="$GHCR_PULL_TOKEN" \
+            GHCR_OWNER="$GHCR_OWNER" \
+            GITHUB_REPO="$GITHUB_REPOSITORY" \
+            BACKEND_IMAGE="$BACKEND_IMAGE" \
+            FRONTEND_IMAGE="$FRONTEND_IMAGE" \
+            'set -e
+             cd ~/nyaya-ai
+             git fetch https://x-access-token:${GHCR_PULL_TOKEN}@github.com/${GITHUB_REPO}.git main
+             git reset --hard FETCH_HEAD
+             git config remote.origin.url "https://github.com/${GITHUB_REPO}.git"
+             echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_OWNER" --password-stdin >/dev/null
+             BACKEND_IMAGE="$BACKEND_IMAGE" FRONTEND_IMAGE="$FRONTEND_IMAGE" docker compose pull api worker frontend
+             BACKEND_IMAGE="$BACKEND_IMAGE" FRONTEND_IMAGE="$FRONTEND_IMAGE" docker compose up -d --remove-orphans api worker frontend'
+
+      - name: Verify rollout
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            'for i in $(seq 1 30); do
+               if [ "$(curl -sf http://localhost:8000/api/v1/health | grep -c "\"status\":\"ok\"")" = 1 ]; then
+                 echo "API healthy"; exit 0
+               fi
+               sleep 10
+             done
+             echo "API failed health check after rollout"; exit 1'
+
+      - name: Record deployment
+        run: |
+          echo "## Nyaya release ${{ github.sha }} deployed" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Backend image: \`ghcr.io/${GITHUB_REPOSITORY,,}/nyaya-backend:${GITHUB_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Frontend image: \`ghcr.io/${GITHUB_REPOSITORY,,}/nyaya-frontend:${GITHUB_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Rollout: run \`docker compose pull api worker frontend && docker compose up -d\` on the server (see README 'Deployment')." >> "$GITHUB_STEP_SUMMARY"
+          echo "- Rolled out on \`${DEPLOY_USER}@${DEPLOY_HOST}\` and health-verified." >> "$GITHUB_STEP_SUMMARY"
