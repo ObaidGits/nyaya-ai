@@ -1,0 +1,25 @@
+# Optional speech (STT/TTS) layer — installed in the Docker image so the
+# containerized stack can transcribe/synthesize (DECISIONS.md D-079). The API
+# itself only imports these lazily; without them speech endpoints fail closed
+# (503) and everything else keeps working.
+#
+# CPU-only torch keeps the image ~half the size of a CUDA build; the speech
+# devices default to cpu in docker-compose for the same reason.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.6.0
+torchaudio==2.6.0
+transformers==4.46.1
+tokenizers==0.20.3
+soundfile==0.14.0
+faster-whisper==1.1.0
+# Open-weight BGE dense embeddings (D-011/D-012): semantic retrieval.
+sentence-transformers==3.4.1
+# Lightweight local TTS default (D-081): ~100 ms CPU synthesis, ~200 MB RAM.
+# Voices are baked into the image at /app/piper-voices (see Dockerfile).
+piper-tts==1.7.0
+# Heavy fallback TTS (optional; selectable via SPEECH_TTS_PROVIDER=parler-tts).
+parler_tts==0.2.3
+accelerate==1.14.0
+sentencepiece==0.2.2
+protobuf==4.25.9
