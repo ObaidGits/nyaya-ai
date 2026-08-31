@@ -114,7 +114,12 @@ beforeEach(() => {
   window.location.hash = '#settings'
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // Flush in-flight panel fetches (corpus/memory/status load on mount) while
+  // the stub is still active. Without this, a fetch settling after teardown
+  // hits the real undici fetch, which cannot parse relative URLs and fails
+  // the run as an unhandled error (flaky, CI run 33390059547).
+  await new Promise((resolve) => setTimeout(resolve, 0))
   vi.unstubAllGlobals()
 })
 
