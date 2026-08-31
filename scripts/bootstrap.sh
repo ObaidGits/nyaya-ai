@@ -29,7 +29,7 @@ elif [[ -f "$CORPUS_OUT" ]]; then
   echo "bootstrap: $CORPUS_OUT exists — skipping statute ingestion"
 else
   echo "bootstrap: ingesting statute corpus"
-  python scripts/ingest.py --spec bns --source "$STATUTE_SOURCE"
+  python scripts/ingest.py --spec bns --source "$STATUTE_SOURCE" --output "$CORPUS_OUT"
 fi
 
 if [[ -f "$FORMS_SOURCE" ]]; then
