@@ -3134,3 +3134,49 @@ assignment compliance first.
    afterwards. Verdict for 2 CPU / 4 GB: full local stack fits with
    browser speech + lazy preload; adding whisper-small (≈1 GB) pushes it
    to the edge — hosted LLM or browser speech recommended there.
+
+## D-086 — Reasoning/prompt-echo isolation (2026-09-01)
+
+**Context.** Production leak: a reasoning-capable free-tier model placed its
+chain-of-thought into `choices[].message.content`, echoing the system prompt,
+evidence headers and the internal regeneration instruction to end users.
+
+**Decision.** Three-layer, provider-agnostic defense:
+1. Provider layer (`app/llm/sanitize.py`): reasoning fields
+   (reasoning/reasoning_content/reasoning_details/thinking, Gemini thought
+   parts) never read; `<think>`-style wrappers stripped, including tags split
+   across stream chunks (`ReasoningStreamFilter`); applies to openai_compat,
+   ollama and gemini alike.
+2. Generation layer: `is_prompt_echo` — structural markers (evidence block
+   headers, STRICT RULES, regeneration instruction, "Here's a thinking
+   process") plus ≥60-char verbatim runs of the SYSTEM prompt only
+   (statutory quoting from evidence is legitimate grounding, rule 3).
+   Contaminated attempts are retried; all-contaminated → code-level refusal.
+3. Citation guard unchanged — echoes carrying valid labels are still caught
+   upstream.
+34 regression tests (`tests/test_reasoning_isolation.py`). The original
+production repro now yields a cited, clean answer.
+
+## D-087 — Citation-label regeneration hardening (2026-09-01)
+
+**Context.** Free-tier models intermittently answered section lookups
+correctly but dropped the inline `[BNS s.N]` labels; the citation guard then
+stripped every sentence and valid answers became refusals.
+
+**Decision.** (a) Rule 2 of the grounding prompt now carries a worked example
+("…shall be punished with death [BNS s.103].") and states uncited answers are
+discarded — same rules, unambiguous format. (b) The regeneration instruction
+restates the exact label forms from the evidence blocks instead of "as
+instructed". (c) Attempt budget 2 → 3. Validation unchanged: label-free
+answers still refuse.
+
+## D-088 — Loopback-only API/Prometheus ports (2026-09-01)
+
+**Context.** Compose published :8000 (API) and :9090 (Prometheus) on all
+interfaces — unnecessary public attack surface; the frontend proxy is the
+sole public entry point.
+
+**Decision.** Bind both to 127.0.0.1 in docker-compose.yml. CI health
+verification (localhost:8000) and Prometheus scraping (api:8000 in-network)
+unaffected. Verified post-deploy: both ports loopback-only, frontend :3000
+unchanged.
