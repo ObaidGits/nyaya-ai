@@ -61,7 +61,11 @@ class QdrantChunkIndex:
     """Upsert chunks (and vectors) into a Qdrant collection.
 
     Payload metadata keeps the full required chunk schema (AI_RULES §9);
-    vectors are stored when an embedder produced them.
+    vectors are stored when an embedder produced them. Each upsert is a
+    FULL REPLACE (the collection is dropped and recreated), mirroring the
+    atomic-rewrite semantics of ``JsonlChunkSink``: re-ingesting a corpus
+    that shrank (e.g. 433 -> 425 chunks) must not leave stale points from
+    the previous run retrievable.
     """
 
     def __init__(self, url: str, collection: str = "bns_chunks") -> None:
@@ -85,12 +89,14 @@ class QdrantChunkIndex:
 
         client = self._client()
         dim = len(vectors[0]) if vectors else 1
-        existing = client.collection_exists(self.collection)  # type: ignore[attr-defined]
-        if not existing:
-            client.create_collection(  # type: ignore[attr-defined]
-                collection_name=self.collection,
-                vectors_config=rest.VectorParams(size=dim, distance=rest.Distance.COSINE),
-            )
+        # Full replace: stale points from a previous (larger) corpus would
+        # otherwise stay retrievable after a shrinking re-ingest.
+        if client.collection_exists(self.collection):  # type: ignore[attr-defined]
+            client.delete_collection(self.collection)  # type: ignore[attr-defined]
+        client.create_collection(  # type: ignore[attr-defined]
+            collection_name=self.collection,
+            vectors_config=rest.VectorParams(size=dim, distance=rest.Distance.COSINE),
+        )
         points = [
             rest.PointStruct(
                 id=idx + 1,

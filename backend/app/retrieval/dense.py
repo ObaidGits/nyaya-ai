@@ -20,11 +20,14 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.ingestion.embeddings import BgeEmbedder, EmbeddingProvider
 from app.ingestion.models import Chunk
 from app.retrieval.models import MetadataFilter
+
+if TYPE_CHECKING:
+    from qdrant_client import QdrantClient
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +53,9 @@ class QdrantDenseRetriever:
 
     The collection is populated by the Phase 2 ingestion pipeline
     (``QdrantChunkIndex``); each point payload carries the full chunk
-    schema, including ``chunk_id``.
+    schema, including ``chunk_id``. The HTTP client is created lazily and
+    reused across searches (one TCP pool per API process, not per query);
+    ``client`` is an injection seam for tests.
     """
 
     def __init__(
@@ -58,10 +63,20 @@ class QdrantDenseRetriever:
         url: str,
         collection: str,
         embedder: EmbeddingProvider,
+        *,
+        client: QdrantClient | None = None,
     ) -> None:
         self.url = url
         self.collection = collection
         self.embedder = embedder
+        self._client = client
+
+    def _qdrant(self) -> QdrantClient:
+        if self._client is None:
+            from qdrant_client import QdrantClient
+
+            self._client = QdrantClient(url=self.url)
+        return self._client
 
     def _filter(self, flt: MetadataFilter | None) -> object | None:
         if flt is None:
@@ -88,9 +103,7 @@ class QdrantDenseRetriever:
         return rest.Filter(must=conditions) if conditions else None  # type: ignore[arg-type]
 
     def search(self, query: str, flt: MetadataFilter | None, top_k: int) -> list[str]:
-        from qdrant_client import QdrantClient
-
-        client = QdrantClient(url=self.url)
+        client = self._qdrant()
         vector = embed_query(self.embedder, query)
         response = client.query_points(
             collection_name=self.collection,
@@ -100,6 +113,26 @@ class QdrantDenseRetriever:
             with_payload=["chunk_id"],
         )
         return [str((hit.payload or {}).get("chunk_id")) for hit in response.points]
+
+    def top_similarity(self, query: str, flt: MetadataFilter | None) -> float | None:
+        """Cosine similarity of the best matching chunk (None when empty).
+
+        Feeds the semantic-relevance confidence gate (remediation of the
+        RRF-overlap-only confidence): a Qdrant cosine-space score is already
+        the cosine similarity, so it is returned as-is.
+        """
+        client = self._qdrant()
+        vector = embed_query(self.embedder, query)
+        response = client.query_points(
+            collection_name=self.collection,
+            query=vector,
+            query_filter=self._filter(flt),  # type: ignore[arg-type]
+            limit=1,
+            with_payload=False,
+        )
+        if not response.points:
+            return None
+        return float(response.points[0].score)
 
 
 class CosineDenseIndex:
@@ -122,6 +155,10 @@ class CosineDenseIndex:
     ) -> None:
         self._chunks = {c.chunk_id: c for c in chunks}
         self._embedder = embedder
+        # One-entry query-embedding cache (see _query_vector): a retrieval
+        # pass embeds the same query for search and top_similarity.
+        self._last_query: str | None = None
+        self._last_query_vector: list[float] | None = None
         vectors = (
             self._load_cache(chunks, embedder, vector_cache_path)
             if vector_cache_path is not None
@@ -206,12 +243,44 @@ class CosineDenseIndex:
                 and (flt.section_number is None or chunk.section_number == flt.section_number)
             )
         ]
-        query_vec = embed_query(self._embedder, query)
+        query_vec = self._query_vector(query)
         scored = sorted(
             ((cid, _cosine(query_vec, self._vectors[cid])) for cid in candidates),
             key=lambda pair: (-pair[1], pair[0]),
         )
         return [cid for cid, score in scored[:top_k] if score > 0]
+
+    def top_similarity(self, query: str, flt: MetadataFilter | None) -> float | None:
+        """Cosine similarity of the best matching chunk (None when empty).
+
+        Feeds the semantic-relevance confidence gate (remediation of the
+        RRF-overlap-only confidence signal). Shares the query embedding with
+        a subsequent ``search`` call through a one-entry cache so the hybrid
+        path does not embed the same query twice.
+        """
+        candidates = [cid for cid in self._chunks if self._matches(cid, flt)]
+        if not candidates:
+            return None
+        query_vec = self._query_vector(query)
+        return max(_cosine(query_vec, self._vectors[cid]) for cid in candidates)
+
+    def _matches(self, chunk_id: str, flt: MetadataFilter | None) -> bool:
+        chunk = self._chunks[chunk_id]
+        return flt is None or (
+            (flt.act is None or chunk.act == flt.act)
+            and (flt.act_short is None or chunk.act_short == flt.act_short)
+            and (flt.chapter is None or chunk.chapter == flt.chapter)
+            and (flt.section_number is None or chunk.section_number == flt.section_number)
+        )
+
+    def _query_vector(self, query: str) -> list[float]:
+        """Embed ``query`` with a one-entry cache (last query, last vector)."""
+        if self._last_query != query or self._last_query_vector is None:
+            self._last_query = query
+            self._last_query_vector = embed_query(self._embedder, query)
+        vector = self._last_query_vector
+        assert vector is not None  # set in the branch above
+        return vector
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

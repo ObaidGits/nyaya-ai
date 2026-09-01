@@ -32,6 +32,23 @@ else
   python scripts/ingest.py --spec bns --source "$STATUTE_SOURCE" --output "$CORPUS_OUT"
 fi
 
+# Populate the Qdrant bns_chunks collection (D-010/D-092) so the API's
+# "auto" dense backend can serve statute queries from Qdrant. Best-effort:
+# no Qdrant (or unreachable) → the API falls back to the in-process cosine
+# index over the JSONL artifact and logs why.
+QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
+if [[ -f "$STATUTE_SOURCE" ]] && curl -fsS "${QDRANT_URL%/}/healthz" >/dev/null 2>&1; then
+  if curl -fsS "${QDRANT_URL%/}/collections/bns_chunks" >/dev/null 2>&1; then
+    echo "bootstrap: Qdrant collection bns_chunks already populated — skipping upsert"
+  else
+    echo "bootstrap: upserting corpus vectors to Qdrant at $QDRANT_URL"
+    python scripts/ingest.py --spec bns --source "$STATUTE_SOURCE" \
+      --output "$CORPUS_OUT" --embed bge --qdrant-url "$QDRANT_URL"
+  fi
+else
+  echo "bootstrap: Qdrant not reachable at $QDRANT_URL — skipping vector upsert (API will use the in-process dense index)" >&2
+fi
+
 if [[ -f "$FORMS_SOURCE" ]]; then
   if [[ -f "$FORMS_OUT/forms_manifest.json" ]]; then
     echo "bootstrap: forms manifest exists — skipping forms extraction"

@@ -43,6 +43,10 @@ from app.observability.metrics import (
 
 if TYPE_CHECKING:
     from app.documents.retrieval import DocumentRetrievalService
+    from app.ingestion.models import Chunk
+    from app.llm.base import LLMProvider
+    from app.llm.registry import ProviderRegistry
+    from app.retrieval.dense import DenseRetriever
 
 API_V1_PREFIX = "/api/v1"
 
@@ -97,13 +101,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # the readiness "model" check always reflects the console's current
     # provider (a startup-time check would go stale the moment settings are
     # saved) and uses the provider's authenticated probe, never a bare ping.
-    def _resolve_active_provider() -> "object":
+    def _resolve_active_provider() -> "LLMProvider":
         from app.core.errors import LLMProviderNotConfiguredError
         from app.llm.registry import UnknownProviderError
 
         current = app.state.settings
+        registry: ProviderRegistry = app.state.llm_registry
         try:
-            return app.state.llm_registry.create(current.llm_provider, current)
+            return registry.create(current.llm_provider, current)
         except UnknownProviderError as exc:
             raise LLMProviderNotConfiguredError(str(exc)) from exc
 
@@ -205,6 +210,56 @@ def _build_embedder(settings: Settings) -> EmbeddingProvider:
     return build_embedder(settings.embedding_backend)
 
 
+def _qdrant_collection_ready(url: str, collection: str) -> tuple[bool, str]:
+    """Qdrant dense backend is usable when reachable and populated (D-010)."""
+    try:
+        from qdrant_client import QdrantClient
+    except ImportError:
+        return False, "qdrant-client is not installed"
+    try:
+        client = QdrantClient(url=url, timeout=5)
+        if not client.collection_exists(collection):
+            return False, f"collection {collection!r} does not exist"
+        if client.count(collection_name=collection, exact=True).count <= 0:
+            return False, f"collection {collection!r} is empty"
+    except Exception as exc:
+        return False, f"qdrant unreachable: {type(exc).__name__}"
+    return True, ""
+
+
+def _build_dense_retriever(
+    settings: Settings,
+    chunks: "list[Chunk]",
+    embedder: EmbeddingProvider,
+    cache_path: Path | None,
+) -> "tuple[DenseRetriever, str]":
+    """Select the dense backend (D-092): Qdrant when configured and usable,
+    in-process cosine otherwise. ``qdrant`` mode raises (the caller fails
+    closed → chat 503) so an explicit Qdrant deployment never silently
+    degrades to a backend it was not configured for."""
+    backend = settings.retrieval_dense_backend
+    if backend != "in-process":
+        ready, reason = _qdrant_collection_ready(
+            settings.qdrant_url, settings.qdrant_bns_collection
+        )
+        if ready:
+            from app.retrieval.dense import QdrantDenseRetriever
+
+            return (
+                QdrantDenseRetriever(settings.qdrant_url, settings.qdrant_bns_collection, embedder),
+                "qdrant",
+            )
+        if backend == "qdrant":
+            raise RuntimeError(f"Qdrant dense backend unusable: {reason}")
+        logger.warning(
+            "qdrant dense backend unavailable; using in-process cosine",
+            extra={"reason": reason, "collection": settings.qdrant_bns_collection},
+        )
+    from app.retrieval.dense import CosineDenseIndex
+
+    return CosineDenseIndex(chunks, embedder, vector_cache_path=cache_path), "in-process"
+
+
 def build_retrieval_service(
     settings: Settings,
     document_retrieval: "DocumentRetrievalService | None" = None,
@@ -218,7 +273,6 @@ def build_retrieval_service(
     if not settings.retrieval_corpus_path:
         return None
     try:
-        from app.retrieval.dense import CosineDenseIndex
         from app.retrieval.service import RetrievalService
         from app.retrieval.sparse import Bm25SparseIndex
         from app.retrieval.store import ChunkStore
@@ -234,9 +288,10 @@ def build_retrieval_service(
             cache_path = Path(settings.retrieval_vector_cache_path)
         else:
             cache_path = Path(settings.storage_dir) / "retrieval_dense_vectors.json"
-        dense = CosineDenseIndex(
-            store.chunks, _build_embedder(settings), vector_cache_path=cache_path
+        dense, dense_backend = _build_dense_retriever(
+            settings, store.chunks, _build_embedder(settings), cache_path
         )
+        logger.info("dense retrieval backend selected", extra={"backend": dense_backend})
         return RetrievalService(
             store,
             dense,

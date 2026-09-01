@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     llm_provider: str = Field(min_length=1, default="ollama")
     llm_base_url: str = "http://localhost:11434"
     llm_model: str = ""
+    # Environment value = the bootstrap default AND the restart fallback. A
+    # key entered in the /settings admin console wins for the running
+    # process (D-090) but is held in memory only — it is never written to
+    # disk and does not survive a restart.
     llm_api_key: SecretStr | None = None
     # Per-request HTTP timeout for the LLM provider. Local Ollama on a
     # modest GPU can exceed 120 s for a full grounded generation (large
@@ -118,6 +122,14 @@ class Settings(BaseSettings):
     # chunk scores ~0.08 — NOT the RRF-normalized confidence the statute
     # threshold uses — so the floor sits lower by design.
     document_retrieval_confidence_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
+    # Dense retrieval backend (D-010/D-092). "auto" uses the Qdrant
+    # bns_chunks collection when it is reachable and populated (filled by
+    # scripts/ingest.py --qdrant-url) and falls back to the in-process
+    # cosine index otherwise; "qdrant" requires Qdrant and fails closed
+    # (chat 503) when it is unusable; "in-process" never contacts Qdrant.
+    # The sparse BM25 index and the deterministic section lookup always run
+    # in-process over the JSONL corpus artifact either way.
+    retrieval_dense_backend: str = Field(default="auto", pattern="^(auto|qdrant|in-process)$")
 
     # --- Languages (multilingual support, DECISIONS.md D-077) -------------
     # Detection backend: "script" (default, zero dependencies) or
@@ -190,8 +202,9 @@ class Settings(BaseSettings):
     # Secret used to sign admin session cookies; derived from the password
     # when unset (documented fallback — set it explicitly in production).
     admin_session_secret: SecretStr | None = None
-    # Where the persisted admin configuration lives (JSON, 0600). Empty
-    # disables persistence (settings changes are process-local only).
+    # Where the persisted admin configuration lives (JSON, 0600, always
+    # SECRET-FREE: console-entered API keys are memory-only). Empty disables
+    # persistence (settings changes are process-local only).
     admin_settings_path: str = ""
 
     # --- Chat history (memory configuration; DECISIONS.md D-080) ------------

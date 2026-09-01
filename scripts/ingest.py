@@ -36,7 +36,7 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 
 from app.ingestion.embeddings import BgeEmbedder, NullEmbedder
 from app.ingestion.extract import PypdfPageExtractor
-from app.ingestion.index_store import JsonlChunkSink, QdrantChunkIndex
+from app.ingestion.index_store import ChunkIndex, JsonlChunkSink, QdrantChunkIndex
 from app.ingestion.models import CorpusSpec
 from app.ingestion.pipeline import IngestionPipeline
 from app.ingestion.validation import SourceValidationError
@@ -47,6 +47,19 @@ SPECS: dict[str, type[CorpusSpec]] = {
     "bns": CorpusSpec.bns,
     "bnss-dev": CorpusSpec.bnss_dev_fixture,
 }
+
+
+class _DualSink:
+    """Write the corpus artifact AND upsert vectors to Qdrant in one run."""
+
+    def __init__(self, jsonl: JsonlChunkSink, qdrant: QdrantChunkIndex) -> None:
+        self.jsonl = jsonl
+        self.qdrant = qdrant
+
+    def upsert(self, chunks: list, vectors: list[list[float]] | None) -> int:
+        written = self.jsonl.upsert(chunks, None)
+        self.qdrant.upsert(chunks, vectors)
+        return written
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -78,7 +91,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--qdrant-url",
         default=None,
-        help="upsert to a Qdrant instance at this URL instead of the JSONL sink",
+        help=(
+            "ALSO upsert chunks and vectors to a Qdrant instance at this URL "
+            "(the JSONL artifact is always written — runtime retrieval needs "
+            "it for the sparse index, chunk store, and section lookup)"
+        ),
     )
     parser.add_argument(
         "--collection",
@@ -100,13 +117,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    if args.qdrant_url and args.embed != "bge":
+        print("--qdrant-url requires --embed bge (real vectors)", file=sys.stderr)
+        return 2
+    index: ChunkIndex = JsonlChunkSink(output)
     if args.qdrant_url:
-        if args.embed != "bge":
-            print("--qdrant-url requires --embed bge (real vectors)", file=sys.stderr)
-            return 2
-        index = QdrantChunkIndex(url=args.qdrant_url, collection=args.collection)
-    else:
-        index = JsonlChunkSink(output)
+        # Dual sink: the JSONL artifact stays the auditable corpus of record
+        # (SRC-009) and Qdrant gets the searchable vectors (D-010/D-092).
+        index = _DualSink(
+            JsonlChunkSink(output),
+            QdrantChunkIndex(url=args.qdrant_url, collection=args.collection),
+        )
     embedder = BgeEmbedder() if args.embed == "bge" else NullEmbedder()
 
     pipeline = IngestionPipeline(

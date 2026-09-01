@@ -14,6 +14,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
       DATABASE_URL: postgresql+asyncpg://nyaya:${POSTGRES_PASSWORD:-nyaya}@postgres:5432/nyaya
+      # Bootstrap LLM defaults only (D-090): settings saved in the /settings
+      # admin console (storage volume admin.json) WIN over these env values
+      # until cleared in the console. The startup log and /api/v1/health/llm
+      # ("config_source") state which source is effective.
       LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434}
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b}
       STORAGE_DIR: /app/storage
@@ -127,7 +131,14 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:v1.15.1
+    # Pinned to the same minor as qdrant-client (requirements.txt) — a
+    # client/server minor gap > 1 makes the client warn on every request.
+    image: qdrant/qdrant:v1.19.0
+    # Loopback only: host scripts (bootstrap.sh vector upsert) reach Qdrant
+    # here; it is never exposed publicly. Direct access is not needed by the
+    # API (compose network) or by anything outside this host.
+    ports:
+      - "127.0.0.1:6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:

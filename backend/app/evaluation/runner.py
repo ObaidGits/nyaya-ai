@@ -28,7 +28,7 @@ from app.generation.service import GenerationService
 from app.ingestion.embeddings import HashingEmbedder
 from app.retrieval.dense import CosineDenseIndex
 from app.retrieval.models import RetrievedEvidence
-from app.retrieval.service import RetrievalService
+from app.retrieval.service import RELEVANCE_FLOOR, RELEVANCE_SATURATION, RetrievalService
 from app.retrieval.sparse import Bm25SparseIndex
 from app.retrieval.store import ChunkStore
 
@@ -121,6 +121,12 @@ def build_retrieval_service(
     store = ChunkStore.from_jsonl(corpus_path)
     sparse = Bm25SparseIndex(store.chunks)
     dense = CosineDenseIndex(store.chunks, embedder or HashingEmbedder())
+    # The semantic-relevance confidence band (RELEVANCE_FLOOR/SATURATION) is
+    # calibrated for BGE cosine scores. The offline HashingEmbedder baseline
+    # has a different cosine scale (on-target hits score ~0.3), so reusing
+    # the band would zero every confidence and refuse every case — the gate
+    # is disabled here; a real embedder (BGE) keeps the production band.
+    use_gate = embedder is not None
     return RetrievalService(
         store,
         dense,
@@ -129,6 +135,8 @@ def build_retrieval_service(
         sparse_top_k=sparse_top_k,
         confidence_threshold=0.1,
         document_retrieval=document_retrieval,
+        relevance_floor=RELEVANCE_FLOOR if use_gate else None,
+        relevance_saturation=RELEVANCE_SATURATION if use_gate else None,
     )
 
 
