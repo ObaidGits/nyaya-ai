@@ -377,13 +377,13 @@ class TestPromptEchoDetection:
 
 class TestGenerationEchoDefense:
     async def test_prompt_echo_first_attempt_refused_after_retry(self) -> None:
-        provider = ScriptedProvider([PRODUCTION_ECHO, PRODUCTION_ECHO])
+        provider = ScriptedProvider([PRODUCTION_ECHO] * 3)
         outcome = await GenerationService(provider).answer(
             "What does section 230 says", make_evidence()
         )
         assert outcome.refused
         assert outcome.answer == REFUSAL_RESPONSE
-        assert len(provider.requests) == 2  # one controlled retry
+        assert len(provider.requests) == 3  # two controlled retries
         assert "thinking process" not in outcome.answer
         assert "STATUTE EVIDENCE" not in outcome.answer
 

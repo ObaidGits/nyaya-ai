@@ -92,7 +92,7 @@ def _is_refusal_text(answer: str) -> bool:
 class GenerationService:
     """Evidence-grounded answering with code-level citation enforcement."""
 
-    def __init__(self, provider: LLMProvider, *, max_attempts: int = 2) -> None:
+    def __init__(self, provider: LLMProvider, *, max_attempts: int = 3) -> None:
         self._provider = provider
         self._max_attempts = max_attempts
 
@@ -142,6 +142,15 @@ class GenerationService:
             document_hits=evidence.document_hits,
             answer_language_instruction=instruction,
         )
+        # Concrete citation-label forms for the regeneration instruction —
+        # the same labels the evidence blocks carry (prompt.py).
+        labels = list(
+            dict.fromkeys(
+                [f"[{s.chunk.act_short} s.{s.chunk.section_number}]" for s in evidence.results]
+                + [f"[Document {h.document_id}]" for h in evidence.document_hits or []]
+            )
+        )
+        label_examples = ", ".join(labels[:3])
         check = CitationCheck()
         answer = ""
         model: str | None = None
@@ -207,7 +216,10 @@ class GenerationService:
             )
             # Regeneration gets the same evidence and rules; append the
             # sanitized prefix as the assistant context so the model does not
-            # repeat the removed claim.
+            # repeat the removed claim. The exact citation-label forms are
+            # restated concretely: some models honor "as instructed" only on
+            # the first turn and drop the labels on regeneration, which would
+            # strip every sentence again and turn a good answer into a refusal.
             request = GenerationRequest(
                 messages=[
                     *request.messages,
@@ -217,7 +229,8 @@ class GenerationService:
                         content=(
                             "Continue the answer using ONLY the evidence above. "
                             "Do not repeat removed statements; cite every legal "
-                            "claim as instructed."
+                            "claim in the exact inline form of the evidence "
+                            f"labels, e.g. {label_examples}."
                         ),
                     ),
                 ]

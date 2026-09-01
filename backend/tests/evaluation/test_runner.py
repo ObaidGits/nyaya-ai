@@ -193,7 +193,9 @@ async def test_llm_mode_scores_citations(
     synthetic_setup: tuple[Path, Path],
 ) -> None:
     corpus, golden = synthetic_setup
-    provider = ScriptedProvider(["The charge must state the offence [SYN s.1]."] * 40)
+    # Up to 3 generation attempts per case, two configurations, 22 cases —
+    # capacity far above what the run can consume.
+    provider = ScriptedProvider(["The charge must state the offence [SYN s.1]."] * 400)
     results = await run_evaluation(golden, corpus, provider=provider)
     assert results["llm_mode"] is True
     assert results["deterministic"] is False

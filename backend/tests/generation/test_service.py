@@ -43,14 +43,14 @@ async def test_grounded_answer_with_valid_citations() -> None:
 async def test_invalid_citation_sentences_are_stripped_after_retry() -> None:
     # First answer has a fabricated citation; the retry repeats the offence,
     # so the final answer is the sanitized first-pass text.
-    provider = ScriptedProvider([MIXED_ANSWER, MIXED_ANSWER])
+    provider = ScriptedProvider([MIXED_ANSWER, MIXED_ANSWER, MIXED_ANSWER])
     outcome = await GenerationService(provider).answer(
         "What is theft?", make_evidence(query="what is theft?")
     )
     assert "s.999" not in outcome.answer
     assert "[TS s.103]." in outcome.answer
     assert outcome.citations.invalid_citations
-    assert len(provider.requests) == 2  # one regeneration attempt
+    assert len(provider.requests) == 3  # two regeneration attempts
 
 
 async def test_generation_only_receives_retrieved_evidence() -> None:
