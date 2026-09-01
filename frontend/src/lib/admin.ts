@@ -22,6 +22,10 @@ export interface LlmProviderInfo {
   name: string
   label: string
   requires_api_key: boolean
+  /** True only when the provider has no known official API URL. */
+  requires_base_url?: boolean
+  default_base_url?: string
+  default_model?: string
 }
 
 export interface AdminSettingsView {
@@ -150,6 +154,13 @@ export async function testConnection(kind: 'llm' | 'stt' | 'tts'): Promise<TestR
     method: 'POST',
     headers: ADMIN_MUTATING,
   })
+  if (!response.ok) throw await parseError(response)
+  return response.json()
+}
+
+/** Model ids offered by the configured provider (settings combobox). */
+export async function fetchLlmModels(): Promise<{ provider: string; models: string[] }> {
+  const response = await adminFetch('/llm/models')
   if (!response.ok) throw await parseError(response)
   return response.json()
 }

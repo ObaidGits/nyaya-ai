@@ -190,6 +190,145 @@ class TestAdminSettings:
         names = {provider["name"] for provider in providers}
         assert {"ollama", "openai", "gemini", "grok", "openrouter", "openai-compatible"} <= names
 
+    def test_provider_list_marks_base_url_requirements(self, client: TestClient) -> None:
+        """Only the generic openai-compatible profile requires a base URL;
+        every provider with a fixed official API URL does not."""
+        login(client)
+        providers = {
+            provider["name"]: provider
+            for provider in client.get("/api/v1/admin/settings").json()["llm_providers"]
+        }
+        for name in ("ollama", "openai", "gemini", "grok", "openrouter"):
+            assert providers[name]["requires_base_url"] is False, name
+            assert providers[name]["default_base_url"], name
+            assert providers[name]["default_model"], name
+        assert providers["openai-compatible"]["requires_base_url"] is True
+
+
+class TestLlmModelList:
+    def test_requires_authentication(self, client: TestClient) -> None:
+        response = client.get("/api/v1/admin/llm/models")
+        assert response.status_code == 401
+
+    def test_returns_provider_models(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_list(settings: Settings) -> list[str]:
+            return ["gemini-2.0-flash", "gemini-2.5-pro"]
+
+        from app.api.v1 import admin as admin_module
+
+        monkeypatch.setattr(admin_module, "_list_llm_models", fake_list)
+        login(client)
+        response = client.get("/api/v1/admin/llm/models")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["provider"] == client.app.state.settings.llm_provider  # type: ignore[attr-defined]
+        assert body["models"] == ["gemini-2.0-flash", "gemini-2.5-pro"]
+
+    def test_provider_errors_surface_cleanly(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.api.v1 import admin as admin_module
+        from app.core.errors import AppError
+
+        async def failing_list(settings: Settings) -> list[str]:
+            raise AppError(
+                "Could not reach the provider to list models.",
+                status_code=503,
+                code="LLM_MODELS_UNAVAILABLE",
+            )
+
+        monkeypatch.setattr(admin_module, "_list_llm_models", failing_list)
+        login(client)
+        response = client.get("/api/v1/admin/llm/models")
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "LLM_MODELS_UNAVAILABLE"
+
+    @pytest.mark.parametrize(
+        ("provider", "base_url", "expected_path"),
+        [
+            ("ollama", "", "/api/tags"),
+            ("openai", "https://api.openai.com/v1", "/models"),
+            ("gemini", "", "/models"),
+        ],
+    )
+    def test_model_listing_endpoint_per_provider(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        provider: str,
+        base_url: str,
+        expected_path: str,
+    ) -> None:
+        """_list_llm_models queries each provider's native listing endpoint
+        (httpx mocked at the transport level)."""
+        from typing import ClassVar
+
+        import app.api.v1.admin as admin_module
+        from app.core.config import Settings as AppSettings
+
+        class FakeResponse:
+            def __init__(self, payload: dict[str, Any]) -> None:
+                self._payload = payload
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, Any]:
+                return self._payload
+
+        class FakeClient:
+            calls: ClassVar[list[str]] = []
+
+            def __init__(self, **kwargs: Any) -> None:
+                pass
+
+            async def __aenter__(self) -> FakeClient:
+                return self
+
+            async def __aexit__(self, *args: Any) -> None:
+                return None
+
+            async def get(self, url: str, **kwargs: Any) -> FakeResponse:
+                FakeClient.calls.append(url)
+                if provider == "ollama":
+                    return FakeResponse({"models": [{"name": "llama3.1:8b"}]})
+                if provider == "gemini":
+                    return FakeResponse(
+                        {
+                            "models": [
+                                {
+                                    "name": "models/gemini-2.0-flash",
+                                    "supportedGenerationMethods": ["generateContent"],
+                                },
+                                {
+                                    "name": "models/embedding-001",
+                                    "supportedGenerationMethods": ["embedContent"],
+                                },
+                            ]
+                        }
+                    )
+                return FakeResponse({"data": [{"id": "gpt-4o-mini"}]})
+
+        monkeypatch.setattr("httpx.AsyncClient", FakeClient)
+        settings = AppSettings(
+            _env_file=None,
+            llm_provider=provider,
+            # "" (falsy) makes the listing fall back to the provider default.
+            llm_base_url=base_url,
+        )
+        import asyncio
+
+        models = asyncio.run(admin_module._list_llm_models(settings))
+        assert FakeClient.calls and expected_path in FakeClient.calls[0]
+        if provider == "ollama":
+            assert models == ["llama3.1:8b"]
+        elif provider == "gemini":
+            assert models == ["gemini-2.0-flash"]  # embedding model filtered out
+        else:
+            assert models == ["gpt-4o-mini"]
+
 
 class TestPersistencePrecedence:
     def test_persisted_settings_survive_rebuild(self, tmp_path: Path) -> None:

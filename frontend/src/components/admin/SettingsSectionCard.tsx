@@ -6,7 +6,12 @@ import {
   type SettingField,
   type SettingSection,
 } from '../../lib/adminSchema'
-import { testConnection, type LlmProviderInfo, type TestResult } from '../../lib/admin'
+import {
+  fetchLlmModels,
+  testConnection,
+  type LlmProviderInfo,
+  type TestResult,
+} from '../../lib/admin'
 import { SecretField } from './SecretField'
 
 type Values = Record<string, string | number | boolean>
@@ -96,6 +101,36 @@ export function SettingsSectionCard({
 }: Props) {
   const [test, setTest] = useState<TestResult | null>(null)
   const [testing, setTesting] = useState(false)
+  // LLM model combobox state (loaded from the provider's model list).
+  const [models, setModels] = useState<string[]>([])
+  const [modelsMessage, setModelsMessage] = useState<string | null>(null)
+  const [loadingModels, setLoadingModels] = useState(false)
+  // Base-URL override: providers with a fixed API URL hide the field until
+  // the admin explicitly opts into a custom endpoint.
+  const [overrideUrl, setOverrideUrl] = useState(false)
+
+  const provider = providers.find((p) => p.name === String(values.llm_provider ?? ''))
+  const urlRequired = provider?.requires_base_url ?? false
+
+  const loadModels = async () => {
+    setLoadingModels(true)
+    setModelsMessage(null)
+    try {
+      const result = await fetchLlmModels()
+      setModels(result.models)
+      setModelsMessage(
+        result.models.length > 0
+          ? `${result.models.length} models loaded from the provider.`
+          : 'The provider returned no models.',
+      )
+    } catch (error) {
+      setModelsMessage(
+        error instanceof Error ? error.message : 'Could not load models.',
+      )
+    } finally {
+      setLoadingModels(false)
+    }
+  }
 
   const runTest = async () => {
     setTesting(true)
@@ -153,6 +188,90 @@ export function SettingsSectionCard({
         {section.fields
           .filter((field) => fieldVisible(field, values))
           .map((field) => {
+            // LLM base URL: hidden unless the provider has no fixed API URL
+            // (or the admin opts into a custom endpoint).
+            if (field.key === 'llm_base_url' && section.id === 'llm') {
+              if (provider && !urlRequired && !overrideUrl) {
+                return (
+                  <div key={field.key} className="sm:col-span-2">
+                    <label className="mt-1 flex items-center gap-2 text-xs text-ink-500 dark:text-ink-400">
+                      <input
+                        type="checkbox"
+                        checked={false}
+                        onChange={() => setOverrideUrl(true)}
+                        className="size-4 accent-brand-600"
+                      />
+                      Use a custom API URL instead of the provider default
+                      {provider.default_base_url ? ` (${provider.default_base_url})` : ''}
+                    </label>
+                  </div>
+                )
+              }
+              return (
+                <div key={field.key} className="sm:col-span-2">
+                  <label className="block text-sm font-medium" htmlFor={`set-${field.key}`}>
+                    {field.label}
+                    {urlRequired && <span className="text-red-600"> *</span>}
+                  </label>
+                  <input
+                    id={`set-${field.key}`}
+                    type="text"
+                    value={String(values[field.key] ?? '')}
+                    placeholder={provider?.default_base_url || field.placeholder}
+                    onChange={(e) => onValueChange(field.key, e.target.value)}
+                    className={inputClass}
+                  />
+                  {field.help && (
+                    <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">{field.help}</p>
+                  )}
+                </div>
+              )
+            }
+            // LLM model: combobox — pick from the provider's list or type any id.
+            if (field.key === 'llm_model' && section.id === 'llm') {
+              return (
+                <div key={field.key} className="sm:col-span-2">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-sm font-medium" htmlFor={`set-${field.key}`}>
+                      {field.label}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={loadModels}
+                      disabled={loadingModels}
+                      className="rounded-lg border border-brand-600 px-2.5 py-1 text-xs font-medium text-brand-700 transition-colors hover:bg-brand-50 disabled:opacity-50 dark:border-brand-400 dark:text-brand-300 dark:hover:bg-brand-950/40"
+                    >
+                      {loadingModels ? 'Loading…' : 'Load models'}
+                    </button>
+                  </div>
+                  <input
+                    id={`set-${field.key}`}
+                    type="text"
+                    list="llm-model-options"
+                    value={String(values[field.key] ?? '')}
+                    placeholder={provider?.default_model || field.placeholder}
+                    onChange={(e) => onValueChange(field.key, e.target.value)}
+                    className={inputClass}
+                  />
+                  <datalist id="llm-model-options">
+                    {models.map((model) => (
+                      <option key={model} value={model} />
+                    ))}
+                  </datalist>
+                  {modelsMessage && (
+                    <p
+                      role="status"
+                      className="mt-1 text-xs text-ink-500 dark:text-ink-400"
+                    >
+                      {modelsMessage}
+                    </p>
+                  )}
+                  {field.help && (
+                    <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">{field.help}</p>
+                  )}
+                </div>
+              )
+            }
             if (field.kind === 'secret') {
               return (
                 <SecretField

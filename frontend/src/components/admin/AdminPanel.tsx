@@ -86,7 +86,14 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
     ) || Object.values(draftSecrets).some((value) => value !== '')
 
   const onValueChange = (key: string, value: string | number | boolean) =>
-    setDraftValues((prev) => ({ ...prev, [key]: value }))
+    setDraftValues((prev) => {
+      const next = { ...prev, [key]: value }
+      // Switching provider resets a custom base URL: providers with a fixed
+      // API endpoint ignore an empty URL, and a stale one from the previous
+      // provider would silently override the default.
+      if (key === 'llm_provider') next.llm_base_url = ''
+      return next
+    })
 
   const onSecretChange = (key: string, value: string) =>
     setDraftSecrets((prev) => ({ ...prev, [key]: value }))

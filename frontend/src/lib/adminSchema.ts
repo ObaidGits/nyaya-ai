@@ -45,13 +45,14 @@ export const ADMIN_SECTIONS: SettingSection[] = [
         label: 'Model',
         kind: 'text',
         placeholder: 'e.g. llama3.1 or gpt-4o-mini',
+        help: 'Pick a loaded model or type any model id.',
       },
       {
         key: 'llm_base_url',
         label: 'Base URL',
         kind: 'text',
-        placeholder: 'http://host.docker.internal:11434',
-        showWhen: { key: 'llm_provider', notEquals: 'ollama' },
+        placeholder: 'https://api.example.com/v1',
+        help: 'Only needed for providers without a fixed API URL; leave blank otherwise.',
       },
       {
         key: 'llm_api_key',

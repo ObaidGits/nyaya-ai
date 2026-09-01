@@ -12,7 +12,7 @@ import contextlib
 import logging
 import time
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
 from pydantic import BaseModel, Field
@@ -63,14 +63,51 @@ def _settings_view(settings: Settings, store: AdminSettingsStore) -> dict[str, A
 
 
 def request_llm_providers() -> list[dict[str, Any]]:
+    """Provider metadata for the settings UI.
+
+    ``requires_base_url`` is True only for providers without a known official
+    API URL (plain "openai-compatible") — for everything else the console asks
+    for the API key (when needed) and hides the URL field unless the admin
+    explicitly overrides it. ``default_base_url``/``default_model`` mirror the
+    provider factories so the UI can prefill placeholders.
+    """
+    from app.llm.gemini import DEFAULT_BASE_URL as GEMINI_BASE_URL
+    from app.llm.gemini import DEFAULT_MODEL as GEMINI_MODEL
+    from app.llm.ollama import DEFAULT_MODEL as OLLAMA_MODEL
     from app.llm.openai_compat import PROFILES
 
-    providers = [{"name": "ollama", "label": "Ollama (local, keyless)", "requires_api_key": False}]
-    for name, (url, _default_model, label) in sorted(PROFILES.items()):
+    providers = [
+        {
+            "name": "ollama",
+            "label": "Ollama (local, keyless)",
+            "requires_api_key": False,
+            "requires_base_url": False,
+            "default_base_url": "http://localhost:11434",
+            "default_model": OLLAMA_MODEL,
+        }
+    ]
+    for name, (url, default_model, label) in sorted(PROFILES.items()):
         providers.append(
-            {"name": name, "label": label, "requires_api_key": True, "default_base_url": url}
+            {
+                "name": name,
+                "label": label,
+                "requires_api_key": True,
+                # Only the generic "openai-compatible" profile has no fixed URL.
+                "requires_base_url": not url,
+                "default_base_url": url,
+                "default_model": default_model,
+            }
         )
-    providers.append({"name": "gemini", "label": "Google Gemini", "requires_api_key": True})
+    providers.append(
+        {
+            "name": "gemini",
+            "label": "Google Gemini",
+            "requires_api_key": True,
+            "requires_base_url": False,
+            "default_base_url": GEMINI_BASE_URL,
+            "default_model": GEMINI_MODEL,
+        }
+    )
     return providers
 
 
@@ -211,6 +248,81 @@ async def update_settings(
 
 
 # --- connection tests ------------------------------------------------------------
+
+
+async def _list_llm_models(settings: Settings) -> list[str]:
+    """Model ids offered by the configured provider (settings combobox data).
+
+    Uses each provider's native model-listing endpoint: ``/api/tags`` for
+    Ollama, ``/models`` with a bearer key for the OpenAI-compatible family,
+    and Gemini's ``models`` collection (generation-capable entries only).
+    """
+    import httpx
+
+    provider = settings.llm_provider
+    api_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""
+    timeout = 15.0
+    try:
+        if provider == "gemini":
+            from app.llm.gemini import DEFAULT_BASE_URL
+
+            base = (settings.llm_base_url or DEFAULT_BASE_URL).rstrip("/")
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(f"{base}/models", params={"key": api_key})
+                response.raise_for_status()
+            models = []
+            for entry in response.json().get("models", []):
+                methods = entry.get("supportedGenerationMethods") or []
+                if "generateContent" in methods:
+                    models.append(str(entry.get("name", "")).removeprefix("models/"))
+            return sorted(m for m in models if m)
+        if provider == "ollama":
+            base = (settings.llm_base_url or "http://localhost:11434").rstrip("/")
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(f"{base}/api/tags")
+                response.raise_for_status()
+            return sorted(
+                str(entry.get("name"))
+                for entry in response.json().get("models", [])
+                if entry.get("name")
+            )
+        # OpenAI-compatible family (openai, grok, openrouter, openai-compatible).
+        from app.llm.openai_compat import PROFILES
+
+        default_url = PROFILES.get(provider, ("", "", ""))[0]
+        base = (settings.llm_base_url or default_url).rstrip("/")
+        if not base:
+            raise AppError(
+                "Set the base URL before loading models.",
+                status_code=422,
+                code="LLM_BASE_URL_REQUIRED",
+            )
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(f"{base}/models", headers=headers)
+            response.raise_for_status()
+        return sorted(
+            str(entry.get("id")) for entry in response.json().get("data", []) if entry.get("id")
+        )
+    except httpx.HTTPError as exc:
+        raise AppError(
+            "Could not reach the provider to list models.",
+            status_code=503,
+            code="LLM_MODELS_UNAVAILABLE",
+        ) from exc
+    except ValueError as exc:
+        raise AppError(
+            "The provider returned an unexpected models response.",
+            status_code=502,
+            code="LLM_MODELS_UNPARSEABLE",
+        ) from exc
+
+
+@router.get("/llm/models")
+async def list_llm_models(request: Request, _: AdminDep) -> dict[str, Any]:
+    """Model ids for the currently configured provider (admin console combobox)."""
+    settings = cast("Settings", request.app.state.settings)
+    return {"provider": settings.llm_provider, "models": await _list_llm_models(settings)}
 
 
 class TestResult(BaseModel):

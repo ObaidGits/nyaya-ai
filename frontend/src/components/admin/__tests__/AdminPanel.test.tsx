@@ -36,9 +36,30 @@ const SETTINGS_VIEW = {
   secrets: { llm_api_key: 'set', speech_stt_api_key: '', speech_tts_api_key: '' },
   persisted: [],
   llm_providers: [
-    { name: 'ollama', label: 'Ollama (local, keyless)', requires_api_key: false },
-    { name: 'openai', label: 'OpenAI', requires_api_key: true },
-    { name: 'gemini', label: 'Gemini', requires_api_key: true },
+    {
+      name: 'ollama',
+      label: 'Ollama (local, keyless)',
+      requires_api_key: false,
+      requires_base_url: false,
+      default_base_url: 'http://localhost:11434',
+      default_model: 'llama3.1:8b',
+    },
+    {
+      name: 'openai',
+      label: 'OpenAI',
+      requires_api_key: true,
+      requires_base_url: false,
+      default_base_url: 'https://api.openai.com/v1',
+      default_model: 'gpt-4o-mini',
+    },
+    {
+      name: 'openai-compatible',
+      label: 'OpenAI-compatible',
+      requires_api_key: true,
+      requires_base_url: true,
+      default_base_url: '',
+      default_model: '',
+    },
   ],
 }
 
@@ -212,11 +233,45 @@ describe('AdminPanel settings', () => {
     expect(screen.queryByLabelText('API key')).toBeNull()
   })
 
-  it('reveals API key + base URL fields when switching to a cloud provider', async () => {
+  it('reveals the API key for fixed-URL cloud providers but hides the base URL field', async () => {
     await renderConsole()
     await userEvent.selectOptions(screen.getByLabelText('Provider'), 'openai')
-    expect(screen.getByLabelText('Base URL')).toBeTruthy()
     expect(screen.getByLabelText('API key')).toBeTruthy()
+    // OpenAI has an official API URL — the field stays hidden behind an
+    // explicit override instead of being asked for.
+    expect(screen.queryByLabelText('Base URL')).toBeNull()
+    expect(
+      screen.getByText(/Use a custom API URL instead of the provider default/),
+    ).toBeTruthy()
+  })
+
+  it('asks for the base URL only for providers without a fixed one', async () => {
+    await renderConsole()
+    await userEvent.selectOptions(screen.getByLabelText('Provider'), 'openai-compatible')
+    // Label carries a required marker ("Base URL *").
+    expect(screen.getByLabelText(/Base URL/)).toBeTruthy()
+    expect(screen.getByLabelText('API key')).toBeTruthy()
+  })
+
+  it('loads the provider model list into a datalist and still accepts typed ids', async () => {
+    stubAdmin({
+      'GET /api/v1/admin/settings': () => jsonResponse(SETTINGS_VIEW),
+      'GET /api/v1/admin/llm/models': () =>
+        jsonResponse({ provider: 'ollama', models: ['llama3.1:8b', 'qwen2.5:7b'] }),
+    })
+    render(<Harness />)
+    await screen.findByText('AI / LLM provider')
+    const input = screen.getByLabelText('Model') as HTMLInputElement
+    expect(input.getAttribute('list')).toBe('llm-model-options')
+    await userEvent.click(screen.getByRole('button', { name: 'Load models' }))
+    expect(await screen.findByText('2 models loaded from the provider.')).toBeTruthy()
+    const datalist = document.getElementById('llm-model-options') as HTMLDataListElement
+    const optionValues = Array.from(datalist.options).map((o) => o.value)
+    expect(optionValues).toContain('qwen2.5:7b')
+    // Typing an arbitrary model id is still allowed.
+    await userEvent.clear(input)
+    await userEvent.type(input, 'llama3.1')
+    expect(input.value).toBe('llama3.1')
   })
 
   it('masks secrets and never displays stored values', async () => {
