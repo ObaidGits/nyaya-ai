@@ -1,5 +1,6 @@
 """Retrieval service tests (A3-003..A3-014; ARCHITECTURE §11-§15)."""
 
+import pytest
 from app.documents.models import DocumentEvidence, DocumentHit
 from app.retrieval.dense import CosineDenseIndex
 from app.retrieval.models import MetadataFilter, RetrievalRoute
@@ -249,3 +250,120 @@ def test_act_mismatch_refuses_in_multi_act_corpus() -> None:
     assert evidence.results == []
     assert not evidence.sufficient
     assert any("BNS" in r for r in evidence.reasons)
+
+
+# -- semantic-relevance confidence gate (remediation) -----------------------
+
+
+class _ScoredDenseRetriever(FakeDenseRetriever):
+    """Fake dense retriever with a scripted top cosine similarity.
+
+    Exercises the relevance gate without a real embedding model.
+    """
+
+    def __init__(self, mapping: dict[str, list[str]], similarity: float) -> None:
+        super().__init__(mapping)
+        self._similarity = similarity
+
+    def top_similarity(self, query: str, flt: MetadataFilter | None) -> float:
+        return self._similarity
+
+
+def test_relevance_gate_scales_confidence() -> None:
+    """Top cosine between floor (0.48) and saturation (0.60) multiplies the
+    RRF confidence by the linear relevance factor."""
+    # ts-s2-001 ranks first in BOTH lists → RRF confidence 1.0.
+    store = ChunkStore(make_corpus())
+    service = RetrievalService(
+        store=store,
+        dense=_ScoredDenseRetriever({"release on bond": ["ts-s2-001", "ts-s9-001"]}, 0.54),
+        sparse=Bm25SparseIndex(store.chunks),
+    )
+    evidence = service.retrieve("release on bond")
+    assert evidence.sufficient
+    # (0.54 - 0.48) / (0.60 - 0.48) == 0.5, applied to a 1.0 RRF confidence.
+    assert evidence.confidence == pytest.approx(0.5)
+    assert any("semantic relevance factor 0.500" in r for r in evidence.reasons)
+
+
+def test_below_relevance_floor_refuses() -> None:
+    """Top cosine at/below the floor zeroes confidence: confidently
+    irrelevant evidence (RRF overlap ~1.0) must not be answered."""
+    store = ChunkStore(make_corpus())
+    service = RetrievalService(
+        store=store,
+        dense=_ScoredDenseRetriever({"release on bond": ["ts-s2-001"]}, 0.40),
+        sparse=Bm25SparseIndex(store.chunks),
+    )
+    evidence = service.retrieve("release on bond")
+    assert evidence.confidence == 0.0
+    assert not evidence.sufficient
+
+
+def test_relevance_saturation_is_unity() -> None:
+    store = ChunkStore(make_corpus())
+    service = RetrievalService(
+        store=store,
+        dense=_ScoredDenseRetriever({"release on bond": ["ts-s2-001", "ts-s9-001"]}, 0.90),
+        sparse=Bm25SparseIndex(store.chunks),
+    )
+    evidence = service.retrieve("release on bond")
+    assert evidence.confidence == pytest.approx(1.0)
+
+
+def test_dense_retriever_without_similarity_signal_keeps_rrf_confidence() -> None:
+    """Legacy doubles without top_similarity: the gate is skipped and the
+    confidence stays the pure RRF-overlap signal (backward compatible)."""
+    store = ChunkStore(make_corpus())
+    service = RetrievalService(
+        store=store,
+        dense=FakeDenseRetriever({"release on bond": ["ts-s2-001", "ts-s9-001"]}),
+        sparse=Bm25SparseIndex(store.chunks),
+    )
+    evidence = service.retrieve("release on bond")
+    assert evidence.sufficient
+    assert evidence.confidence == pytest.approx(1.0)
+
+
+# -- foreign-statute out-of-scope detection (remediation) --------------------
+
+
+def test_foreign_statute_query_refuses() -> None:
+    """A question about a statute the corpus does not hold fails closed —
+    no look-alike sections from the indexed act (SRC-013 metadata-driven)."""
+    service = _service()
+    evidence = service.retrieve("How do I file for divorce under the Hindu Marriage Act?")
+    assert evidence.results == []
+    assert not evidence.sufficient
+    assert evidence.confidence == 0.0
+    assert any("Hindu Marriage Act" in r for r in evidence.reasons)
+
+
+def test_foreign_statute_lookup_refuses() -> None:
+    """Even a section-number query about a foreign act must not substitute
+    the indexed act's same-numbered section."""
+    service = _service()
+    evidence = service.retrieve("What does section 103 of the Hindu Marriage Act say?")
+    assert evidence.results == []
+    assert not evidence.sufficient
+
+
+def test_corpus_act_mention_is_not_foreign() -> None:
+    """Naming the indexed act (or a word of its title) keeps normal
+    retrieval; the check must not refuse legitimate in-corpus questions."""
+    service = _service()
+    evidence = service.retrieve("What does the Test Sanhita Act say about release on bond?")
+    # Not refused by the foreign-statute gate: retrieval actually ran.
+    assert all("not the indexed corpus" not in r for r in evidence.reasons)
+    assert any("retrieved" in r for r in evidence.reasons)
+
+
+def test_constitution_and_amendment_mentions_refuse() -> None:
+    service = _service()
+    for query in (
+        "What does the Fourth Amendment of the US Constitution protect?",
+        "What are the sections of the Indian Contract Act governing bailment?",
+    ):
+        evidence = service.retrieve(query)
+        assert not evidence.sufficient, query
+        assert evidence.results == [], query

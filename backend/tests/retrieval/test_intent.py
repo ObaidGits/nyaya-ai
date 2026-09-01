@@ -75,6 +75,35 @@ def test_quantities_and_identifiers_are_not_section_intents(query: str) -> None:
     assert detect_section_intent(query) is None
 
 
+@pytest.mark.parametrize(
+    ("query", "route"),
+    [
+        # Procedural mentions of FIR/complaint/notice are statute questions.
+        ("What if a police officer refuses to file my FIR?", RetrievalRoute.STATUTE),
+        ("How do I file my FIR?", RetrievalRoute.STATUTE),
+        (
+            "My neighbour filed a false complaint against me. What law applies?",
+            RetrievalRoute.STATUTE,
+        ),
+        ("The police lost my FIR. What can I do?", RetrievalRoute.STATUTE),
+        ("How do I give notice to my landlord?", RetrievalRoute.STATUTE),
+        ("The police refused to register the FIR. What remedy do I have?", RetrievalRoute.STATUTE),
+        # Questions about the artifact's content still route to documents.
+        ("What does my uploaded FIR say?", RetrievalRoute.DOCUMENT),
+        ("Summarize my FIR.", RetrievalRoute.DOCUMENT),
+        ("What does my notice say?", RetrievalRoute.DOCUMENT),
+        ("What does my document say?", RetrievalRoute.DOCUMENT),
+        ("Explain this agreement.", RetrievalRoute.DOCUMENT),
+        ("What does my uploaded file contain?", RetrievalRoute.DOCUMENT),
+        ("What does the attached document say?", RetrievalRoute.DOCUMENT),
+        # Possessive document noun + section reference stays combined.
+        ("Does my notice comply with section 35 BNS?", RetrievalRoute.COMBINED),
+    ],
+)
+def test_filing_procedure_vs_document_content(query: str, route: RetrievalRoute) -> None:
+    assert classify_route(query) == route
+
+
 def test_route_statute_default() -> None:
     assert classify_route("What is bail?") == RetrievalRoute.STATUTE
 

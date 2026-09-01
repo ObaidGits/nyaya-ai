@@ -18,6 +18,7 @@ Cross-encoder reranking is deliberately deferred (D-016).
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from app.retrieval.dense import DenseRetriever
@@ -38,6 +39,38 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Semantic-relevance confidence gate (remediation of the RRF-overlap-only
+# confidence signal). Measured on the BNS corpus with BAAI/bge-base-en-v1.5:
+# on-target indirect questions score >= 0.50 top cosine ("Someone stole my
+# scooter. What does BNS say?" 0.504 — the hardest observed in-scope case;
+# typical conduct questions 0.6-0.72), while clearly out-of-scope or
+# non-legal questions score <= 0.47 ("What is the rate of GST on restaurant
+# bills?" 0.469; "capital of France" 0.347; injection payloads ~0.49* — see
+# below). The floor/saturation band maps top cosine onto a [0, 1] relevance
+# factor multiplied into the RRF confidence: high confidence then requires
+# BOTH list overlap AND semantic relevance. The threshold (0.1) is
+# unchanged — the signal became honest, not stricter on paper.
+#
+# The narrow gray zone above the floor (e.g. "What is Newton's second law
+# of motion?" 0.547, whose "law/force/motion" vocabulary resembles BNS
+# criminal-force text) is NOT resolvable by retrieval signals: it is
+# delegated to the generation contract — the system prompt's rule 4 makes
+# the model answer "I don't know based on the available source material."
+# when the evidence does not contain the answer, which is the assignment's
+# intended fail-closed behavior (A4-012) for subtly out-of-scope questions.
+RELEVANCE_FLOOR = 0.48
+RELEVANCE_SATURATION = 0.60
+
+# Statute-title mentions ("Hindu Marriage Act", "US Constitution", "Fourth
+# Amendment"): used to detect questions about a statute other than the
+# indexed corpus. Title case is required so ordinary uses of the words
+# ("the act of cruelty") never match. The comparison itself is against the
+# corpus act metadata (SRC-013: no hardcoded statute assumptions).
+_STATUTE_TITLE_RE = re.compile(
+    r"\b((?:[A-Z][a-z]+|US|USA|UK|IPC)\s+(?:[A-Z][a-z]+\s+){0,3}"
+    r"(?:Act|Code|Constitution|Amendment))\b"
+)
+
 
 class RetrievalService:
     """Query → structured evidence, statute corpus only at this phase."""
@@ -55,6 +88,14 @@ class RetrievalService:
         final_top_k: int = 10,
         document_confidence_threshold: float = 0.05,
         document_retrieval: DocumentRetrievalService | None = None,
+        # Semantic-relevance gate band. The defaults are calibrated for
+        # BAAI/bge-base-en-v1.5 cosine scores (see RELEVANCE_FLOOR). An
+        # embedder with a different cosine scale (e.g. the deterministic
+        # HashingEmbedder, where an on-target hit scores ~0.3) must NOT
+        # reuse them: pass ``relevance_floor=None`` to disable the gate
+        # and fall back to the RRF-overlap confidence signal alone.
+        relevance_floor: float | None = RELEVANCE_FLOOR,
+        relevance_saturation: float | None = RELEVANCE_SATURATION,
     ) -> None:
         self._store = store
         self._dense = dense
@@ -66,6 +107,8 @@ class RetrievalService:
         self._final_top_k = final_top_k
         self._document_confidence_threshold = document_confidence_threshold
         self._document_retrieval = document_retrieval
+        self._relevance_floor = relevance_floor
+        self._relevance_saturation = relevance_saturation
 
     def retrieve(
         self,
@@ -173,6 +216,56 @@ class RetrievalService:
         self._log(query, retrieved)
         return retrieved
 
+    def _foreign_statute(self, query: str) -> str | None:
+        """Name of a statute the query asks about that is not the corpus.
+
+        Compares Title-case statute mentions against the indexed acts'
+        names (from chunk metadata, SRC-013). A mention that shares a
+        content word with the corpus act name ("Bharatiya Nyaya Sanhita
+        Act") is in scope; anything else ("Hindu Marriage Act", "US
+        Constitution", "Indian Contract Act") is out of scope — the corpus
+        cannot ground it, so retrieval must fail closed rather than
+        substitute look-alike BNS sections. Document evidence is not
+        affected: a user's own upload may legitimately cite other statutes.
+        """
+        match = _STATUTE_TITLE_RE.search(query)
+        if match is None:
+            return None
+        mentioned = set(re.findall(r"[a-z]+", match.group(1).lower()))
+        mentioned -= {"act", "code", "constitution", "amendment"}
+        if not mentioned:
+            return None
+        for act in self._store.act_names():
+            corpus_words = set(re.findall(r"[a-z]+", act.lower())) - {"act", "code", "2023"}
+            if mentioned & corpus_words:
+                return None
+        return match.group(1)
+
+    def _relevance_factor(self, query: str, flt: MetadataFilter | None) -> float | None:
+        """Semantic relevance in [0, 1], or None when unavailable.
+
+        Unavailable means the dense retriever exposes no similarity signal
+        (test doubles, degraded wiring) or the gate is disabled for this
+        embedder's cosine scale (``relevance_floor=None``): the confidence
+        then falls back to the RRF-overlap signal alone.
+        """
+        if self._relevance_floor is None or self._relevance_saturation is None:
+            return None
+        top_similarity = getattr(self._dense, "top_similarity", None)
+        if top_similarity is None:
+            return None
+        raw = top_similarity(query, flt)
+        if raw is None:
+            return None
+        cosine = float(raw)
+        if cosine <= self._relevance_floor:
+            return 0.0
+        if cosine >= self._relevance_saturation:
+            return 1.0
+        return (cosine - self._relevance_floor) / (
+            self._relevance_saturation - self._relevance_floor
+        )
+
     def _statute_evidence(
         self,
         query: str,
@@ -184,6 +277,24 @@ class RetrievalService:
         resolved_route = route
         if resolved_route == RetrievalRoute.DOCUMENT:  # pragma: no cover - defensive
             resolved_route = RetrievalRoute.STATUTE
+
+        foreign = self._foreign_statute(query)
+        if foreign is not None:
+            # The question is about a statute the corpus cannot ground:
+            # fail closed (A4-011) instead of substituting look-alike
+            # sections from the indexed act.
+            reasons.append(f"query names statute '{foreign}' which is not the indexed corpus")
+            evidence = RetrievedEvidence(
+                query=query,
+                route=resolved_route,
+                intent=intent,
+                results=[],
+                sufficient=False,
+                confidence=0.0,
+                reasons=reasons,
+            )
+            self._log(query, evidence)
+            return evidence
 
         if intent is not None:
             # Deterministic precedence for exact identifiers (A3-014).
@@ -251,6 +362,13 @@ class RetrievalService:
             )
 
         confidence = self._confidence(results)
+        relevance = self._relevance_factor(query, flt)
+        if relevance is not None:
+            # RRF overlap alone reports ~1.0 for confidently irrelevant
+            # evidence; the semantic factor makes high confidence mean
+            # relevance (remediation of the blind confidence signal).
+            confidence = confidence * relevance
+            reasons.append(f"semantic relevance factor {relevance:.3f} from top dense similarity")
         reasons.append(
             f"retrieved {len(results)} chunk(s) via "
             f"dense({len(dense_ids)}) + sparse({len(sparse_ids)})"

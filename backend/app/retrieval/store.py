@@ -53,6 +53,14 @@ class ChunkStore:
         """Distinct act short codes present in the corpus."""
         return {c.act_short for c in self._chunks}
 
+    def act_names(self) -> set[str]:
+        """Distinct full act titles present in the corpus (SRC-013).
+
+        Corpus identity for out-of-scope statute detection: a query naming
+        an act absent from this set cannot be grounded by the corpus.
+        """
+        return {c.act for c in self._chunks if c.act}
+
     def section_lookup(self, section_number: str, *, act_short: str | None = None) -> list[Chunk]:
         """Deterministic section lookup (D-017) — no similarity involved.
 

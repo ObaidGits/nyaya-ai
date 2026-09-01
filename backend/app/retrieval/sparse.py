@@ -26,10 +26,191 @@ B = 0.75
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+(?:\([0-9]+\))?")
 
+# Function words removed at tokenize time. Deliberately excludes words with
+# legal meaning ("will" = testament, "shall"/"may"/"must" = statutory
+# obligation) — those stay indexed; BM25's IDF already discounts them.
+_STOPWORDS = frozenset(
+    [
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "nor",
+        "so",
+        "yet",
+        "if",
+        "then",
+        "than",
+        "that",
+        "these",
+        "those",
+        "of",
+        "at",
+        "by",
+        "for",
+        "with",
+        "about",
+        "against",
+        "between",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "to",
+        "from",
+        "up",
+        "down",
+        "in",
+        "out",
+        "on",
+        "off",
+        "over",
+        "under",
+        "again",
+        "further",
+        "once",
+        "here",
+        "there",
+        "when",
+        "where",
+        "why",
+        "how",
+        "all",
+        "any",
+        "both",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "not",
+        "only",
+        "own",
+        "same",
+        "too",
+        "very",
+        "just",
+        "now",
+        "i",
+        "you",
+        "he",
+        "she",
+        "it",
+        "we",
+        "they",
+        "me",
+        "him",
+        "us",
+        "them",
+        "my",
+        "your",
+        "his",
+        "hers",
+        "its",
+        "ours",
+        "theirs",
+        "mine",
+        "yours",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "am",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "having",
+        "do",
+        "does",
+        "did",
+        "doing",
+        "would",
+        "could",
+        "should",
+    ]
+)
+
+# Layman word → statutory term (sparse-precision audit, remediation C).
+# Applied to the STEMMED token, symmetrically to documents and queries.
+# Entries are limited to high-frequency pairs where the corpus wording and
+# the layman phrasing share no stem:
+#   kill*  → "murder"  — BNS s.103 says "murder", never "kill".
+#   thief/steal/stole/stolen → "theft" — BNS s.303 says "theft".
+#   cruel  → "cruelty" — BNS s.85 says "cruelty by husband".
+_LAYMAN_STATUTORY_MAP = {
+    "kill": "murder",
+    "thief": "theft",
+    "steal": "theft",
+    "stol": "theft",  # "stole" (trailing-e stem)
+    "stolen": "theft",
+    "cruel": "cruelty",
+}
+
+
+def _stem(token: str) -> str:
+    """Light suffix stemmer: plurals, -ing/-ed/-ly, trailing 'e'.
+
+    Deliberately conservative (no -er/-ation stripping): legal terms such
+    as "murder", "possession" or "defamation" must not be distorted. The
+    trailing-'e' strip unifies "file"/"filed"/"filing" and
+    "notice"/"notices" onto one stem, which heavier rules would miss.
+    """
+    if len(token) <= 3 or token[-1].isdigit():
+        return token
+    if token.endswith("ies") and len(token) >= 5:
+        token = token[:-3] + "y"
+    elif token.endswith("sses") or (token.endswith("es") and len(token) >= 5):
+        token = token[:-2]
+    elif token.endswith("s") and not token.endswith(("ss", "us", "is")):
+        token = token[:-1]
+    for suffix, min_len in (("ing", 6), ("ed", 5)):
+        if token.endswith(suffix) and len(token) >= min_len:
+            token = token[: -len(suffix)]
+            if len(token) >= 2 and token[-1] == token[-2] and token[-1] not in "lsz":
+                token = token[:-1]  # planned → plan
+            break
+    else:
+        if token.endswith("ly") and len(token) >= 6:
+            token = token[:-2]
+    if token.endswith("e") and len(token) >= 4:
+        token = token[:-1]
+    return token
+
 
 def tokenize(text: str) -> list[str]:
-    """Lowercase word tokens; keeps legal identifiers intact ("103(1)")."""
-    return _TOKEN_RE.findall(text.lower())
+    """Lowercase word tokens, stemmed and stop-worded.
+
+    Keeps legal identifiers intact ("103(1)") — digits are never stemmed.
+    Stopword removal, stemming and the layman→statutory map are applied
+    identically to documents and queries so BM25 term matching stays
+    symmetric.
+    """
+    tokens: list[str] = []
+    for raw in _TOKEN_RE.findall(text.lower()):
+        if raw in _STOPWORDS:
+            continue
+        if raw[0].isdigit():
+            tokens.append(raw)  # legal identifiers ("103(1)") are never stemmed
+            continue
+        stem = _stem(raw)
+        tokens.append(_LAYMAN_STATUTORY_MAP.get(stem, stem))
+    return tokens
 
 
 def _chunk_document(chunk: Chunk) -> list[str]:

@@ -25,6 +25,7 @@ _INLINE_CHROME_RES = (
     re.compile(r"\d{1,3}\s+THE\s+GAZETTE.*$"),  # "…alone.20 THE GAZETTE…"
     re.compile(r"\d{1,3}\s+THE$"),  # "…application.2 THE" (header fragment tail)
     re.compile(r"\.\d{1,3}$"),  # "…begging.46" (page number glued to line end)
+    re.compile(r"\.?Sec\.\s*$"),  # "…fine.Sec" (header fragment tail, no "]")
 )
 
 # Whole-line chrome fragments left over when the header splits across lines

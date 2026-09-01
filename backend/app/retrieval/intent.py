@@ -48,11 +48,37 @@ _NON_STATUTE_PRECEDER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Document nouns: artifacts a user may hold and ask about. Grouped so the
+# hint pattern and the procedural-exception patterns below stay in sync.
+_DOCUMENT_NOUN_RE = (
+    r"(?:documents?|notices?|agreements?|contracts?|letters?|complaints?"
+    r"|firs?|f\.i\.r\.|files?|pdfs?)"
+)
+_DOCUMENT_DETERMINER_RE = r"(?:my|our|this|that|these|those|his|her|their|the|uploaded|attached)"
+
+# A document hint is a determiner + document noun ("my notice", "the
+# uploaded FIR"): the query references the user's own artifact.
 _DOCUMENT_HINT_RE = re.compile(
-    r"\b(my|this|the|uploaded|attached)\s+"
-    r"(\w+\s+){0,2}"
-    r"(document|notice|agreement|contract|letter|complaint|fir|f\.i\.r\.|file|pdf)\b"
-    r"|\bmy\s+(notice|document|agreement|file)\b",
+    rf"\b{_DOCUMENT_DETERMINER_RE}\s+(?:\w+\s+){{0,2}}{_DOCUMENT_NOUN_RE}\b",
+    re.IGNORECASE,
+)
+
+# Procedural exceptions (routing audit, remediation C): a document noun is
+# NOT a document hint when it is the object of a filing verb ("file my
+# FIR", "lodged a complaint", "give notice") — that is procedure, asked of
+# the statute corpus, not a request to read an artifact.
+_FILING_VERB_RE = re.compile(
+    rf"\b(?:fil\w*|lodg\w*|register\w*|submi\w*|serv\w*|giv\w*|issu\w*|draft\w*|withdraw\w*)\s+"
+    rf"(?:an?\s+|the\s+|my\s+|our\s+|this\s+|that\s+|his\s+|her\s+|their\s+|any\s+|another\s+|no\s+)?"
+    rf"(?:\w+\s+)?{_DOCUMENT_NOUN_RE}\b",
+    re.IGNORECASE,
+)
+
+# ...nor when the query is about the artifact's administrative fate rather
+# than its content ("the police lost my FIR") — remedies are statute law.
+_DOCUMENT_FATE_RE = re.compile(
+    rf"\b(?:lost|missing|misplaced|stolen|destroyed|damaged|torn|rejected|returned|withheld)\s+"
+    rf"(?:the\s+|my\s+|our\s+|this\s+|that\s+|his\s+|her\s+|their\s+)?{_DOCUMENT_NOUN_RE}\b",
     re.IGNORECASE,
 )
 
@@ -152,13 +178,32 @@ def detect_section_intent(query: str) -> SectionIntent | None:
     return None
 
 
+def _is_document_hint(query: str) -> bool:
+    """True when the query asks about the user's own document artifact.
+
+    A determiner + document-noun phrase is a hint unless the same noun is
+    consumed by a procedural pattern (filing verb or administrative fate):
+    the hint match must not overlap those spans.
+    """
+    hint = _DOCUMENT_HINT_RE.search(query)
+    if hint is None:
+        return False
+    for procedural in (_FILING_VERB_RE, _DOCUMENT_FATE_RE):
+        for match in procedural.finditer(query):
+            if match.start() < hint.end() and hint.start() < match.end():
+                return False
+    return True
+
+
 def classify_route(query: str) -> RetrievalRoute:
     """Statute / document / combined routing (ARCHITECTURE §14).
 
     Document hints are matched in English and in the supported Indic
-    languages (D-077); the English patterns are unchanged.
+    languages (D-077); English hints are suppressed when the document noun
+    is used procedurally (filing an FIR, giving notice) rather than as a
+    reference to an artifact whose content is being asked about.
     """
-    document = bool(_DOCUMENT_HINT_RE.search(query)) or bool(_INDIC_DOCUMENT_HINT_RE.search(query))
+    document = _is_document_hint(query) or bool(_INDIC_DOCUMENT_HINT_RE.search(query))
     statute = bool(_ACT_MENTION_RE.search(query)) or detect_section_intent(query) is not None
     if document and statute:
         return RetrievalRoute.COMBINED
