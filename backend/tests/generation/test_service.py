@@ -28,6 +28,20 @@ def test_grounding_prompt_contains_evidence_and_rules() -> None:
     assert REFUSAL_RESPONSE in SYSTEM_PROMPT
 
 
+def test_system_prompt_has_no_unreplaced_placeholders() -> None:
+    # The citation-format rule used literal {section}/{subsection} tokens that
+    # were never substituted — models saw raw braces and could echo them into
+    # answers (failing citation validation). Format placeholders addressed TO
+    # the model must be descriptive (<section number>), not {curly}.
+    evidence = make_evidence()
+    request = build_generation_request("What is the punishment for murder?", evidence.results)
+    system = request.messages[0].content
+    assert "{section}" not in system
+    assert "{subsection}" not in system
+    assert "{act_short}" not in system
+    assert "<section number>" in system  # the format rule stays intact
+
+
 async def test_grounded_answer_with_valid_citations() -> None:
     provider = ScriptedProvider([GOOD_ANSWER])
     outcome = await GenerationService(provider).answer(
@@ -191,3 +205,50 @@ async def test_answer_without_any_citation_refuses() -> None:
     outcome = await GenerationService(provider).answer("question", make_evidence())
     assert outcome.refused
     assert outcome.answer == REFUSAL_RESPONSE
+
+
+def _provider_down_error() -> Exception:
+    from app.core.errors import AppError
+
+    class _ProviderDown(AppError):
+        status_code = 503
+        code = "LLM_PROVIDER_UNAVAILABLE"
+
+    return _ProviderDown("The generation provider is currently unavailable.")
+
+
+async def test_regeneration_failure_preserves_valid_answer() -> None:
+    """Live repro: attempt 1 produces a valid sanitized answer, the guard
+    triggers a regeneration, and the regeneration call raises (provider
+    429/exception). The valid answer must be returned, not swallowed by the
+    propagating error ("chat service unavailable" instead of a good answer)."""
+    provider = ScriptedProvider([MIXED_ANSWER, _provider_down_error()])
+    outcome = await GenerationService(provider).answer(
+        "What is theft?", make_evidence(query="what is theft?")
+    )
+    assert not outcome.refused
+    assert outcome.answer == "Murder is punishable with death [TS s.103]."
+    assert len(outcome.citations.valid_citations) == 1
+    assert len(provider.requests) == 2  # regeneration was attempted, then failed
+
+
+async def test_regeneration_failure_without_valid_answer_propagates() -> None:
+    """Attempt 1 is entirely ungrounded (every sentence stripped) and the
+    regeneration raises: no valid answer exists, so the provider error
+    propagates — real failures are never swallowed."""
+    from app.core.errors import AppError
+
+    provider = ScriptedProvider(
+        ["Theft is punishable with imprisonment [TS s.999].", _provider_down_error()]
+    )
+    with pytest.raises(AppError):
+        await GenerationService(provider).answer("question", make_evidence())
+
+
+async def test_first_attempt_provider_failure_propagates() -> None:
+    """A provider failure before ANY text was produced is a real failure."""
+    from app.core.errors import AppError
+
+    provider = ScriptedProvider([_provider_down_error(), GOOD_ANSWER])
+    with pytest.raises(AppError):
+        await GenerationService(provider).answer("question", make_evidence())

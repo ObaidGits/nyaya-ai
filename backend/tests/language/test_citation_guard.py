@@ -194,3 +194,35 @@ def test_plural_sections_prose_claim_is_gated() -> None:
     sanitized, check = validate_citations(answer, _evidence())
     assert sanitized == ""
     assert check.uncited_section_claims
+
+
+def test_indic_act_name_sentence_keeps_citation() -> None:
+    # D-095 live incident: "न्याय" is the brand word AND part of the corpus
+    # act's own name (भारतीय न्याय संहिता). Naming the act must never mark
+    # the sentence self-referential — the citation stays valid.
+    answer = "भारतीय न्याय संहिता की धारा 103 मृत्युदंड से संबंधित है [TS s.103]।"
+    sanitized, check = validate_citations(answer, _evidence())
+    assert "[TS s.103]" in sanitized
+    assert [c.label for c in check.valid_citations] == ["[TS s.103]"]
+    assert not check.removed_sentences
+    assert not check.irrelevant_citations
+
+
+def test_english_act_name_sentence_keeps_citation() -> None:
+    # Same collision in English: "Bharatiya Nyaya Sanhita" contains the
+    # brand word "Nyaya" — the standalone-brand self-reference match used
+    # to strip these citations too.
+    answer = "Section 103 of the Bharatiya Nyaya Sanhita deals with punishment [TS s.103]."
+    sanitized, check = validate_citations(answer, _evidence())
+    assert "[TS s.103]" in sanitized
+    assert [c.label for c in check.valid_citations] == ["[TS s.103]"]
+    assert not check.irrelevant_citations
+
+
+def test_script_pronoun_inside_larger_word_not_self_reference() -> None:
+    # "मी" inside "समीक्षा" (review) is not the Marathi first-person
+    # pronoun: block-aware boundaries prevent the substring match.
+    answer = "धारा 103 की समीक्षा करें [TS s.103]।"
+    sanitized, check = validate_citations(answer, _evidence())
+    assert "[TS s.103]" in sanitized
+    assert [c.label for c in check.valid_citations] == ["[TS s.103]"]

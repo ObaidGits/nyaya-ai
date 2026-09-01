@@ -159,7 +159,30 @@ class GenerationService:
         saw_text = False
         contaminated = False
         for attempt in range(self._max_attempts):
-            result = await self._provider.generate(request)
+            try:
+                result = await self._provider.generate(request)
+            except Exception:
+                # A failed REGENERATION (provider 429/timeout/exception)
+                # must not destroy an already-valid sanitized answer from an
+                # earlier attempt — observed live: guard triggered a regen,
+                # the rate-limited provider raised, and the user saw "chat
+                # service unavailable" instead of the good answer. Preserve
+                # only a fully valid answer (non-empty, cited, not refused);
+                # with nothing valid to preserve the error propagates.
+                if (
+                    saw_text
+                    and answer.strip()
+                    and (check.valid_citations or check.cited_document_ids)
+                ):
+                    logger.warning(
+                        "regeneration failed; preserving earlier validated answer",
+                        extra={
+                            "event": "generation_regeneration_failed_answer_preserved",
+                            "attempt": attempt + 1,
+                        },
+                    )
+                    break
+                raise
             model = result.model or model
             prompt_tokens = (result.prompt_tokens or 0) + (prompt_tokens or 0) or None
             completion_tokens = (result.completion_tokens or 0) + (completion_tokens or 0) or None

@@ -7,6 +7,8 @@ from collections.abc import Iterator
 
 import pytest
 from app.core.config import Settings
+from app.core.errors import LLMRateLimitError, LLMTimeoutError
+from app.llm.base import GenerationRequest, GenerationResult
 from app.main import create_app
 from app.retrieval.service import RetrievalService
 from app.retrieval.sparse import Bm25SparseIndex
@@ -147,15 +149,80 @@ def test_chat_refuses_on_unknown_section_lookup() -> None:
     assert tokens.strip() == "I don't know based on the available source material."
 
 
+class _ErroringProvider(ScriptedProvider):
+    """ScriptedProvider that raises a fixed error instead of generating."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__([])
+        self._error = error
+
+    async def generate(self, request: GenerationRequest) -> GenerationResult:
+        raise self._error
+
+
 def test_chat_provider_failure_streams_safe_error() -> None:
     app = _app(FailingProvider())
     with TestClient(app) as client:
         text = _post(client, {"message": "What is the punishment for murder?"})
     events = _parse_sse(text)
     error = next(data for name, data in events if name == "error")
-    assert error["code"] == "SERVICE_UNAVAILABLE"
+    # The truthful provider code survives to the client (the blanket
+    # SERVICE_UNAVAILABLE masking is gone), and the event is correlatable.
+    assert error["code"] == "LLM_PROVIDER_UNAVAILABLE"
+    assert error["request_id"]
     assert "internal" not in str(error).lower()
     assert "exploded" not in str(error)
+
+
+def test_chat_rate_limit_streams_truthful_error() -> None:
+    app = _app(_ErroringProvider(LLMRateLimitError()))
+    with TestClient(app) as client:
+        text = _post(client, {"message": "What is the punishment for murder?"})
+    events = _parse_sse(text)
+    error = next(data for name, data in events if name == "error")
+    assert error["code"] == "LLM_RATE_LIMITED"
+    assert "rate limiting" in str(error["message"])
+    assert error["request_id"]
+
+
+def test_chat_timeout_streams_truthful_error() -> None:
+    app = _app(_ErroringProvider(LLMTimeoutError()))
+    with TestClient(app) as client:
+        text = _post(client, {"message": "What is the punishment for murder?"})
+    events = _parse_sse(text)
+    error = next(data for name, data in events if name == "error")
+    assert error["code"] == "LLM_TIMEOUT"
+    assert "timed out" in str(error["message"])
+    assert error["request_id"]
+
+
+def test_chat_unknown_failure_streams_generic_internal_error() -> None:
+    app = _app(_ErroringProvider(RuntimeError("secret provider detail")))
+    with TestClient(app) as client:
+        text = _post(client, {"message": "What is the punishment for murder?"})
+    events = _parse_sse(text)
+    error = next(data for name, data in events if name == "error")
+    assert error["code"] == "INTERNAL_ERROR"
+    assert error["request_id"]
+    assert "secret provider detail" not in str(error)
+    assert "RuntimeError" not in str(error)
+
+
+def test_chat_error_request_id_matches_header() -> None:
+    """The SSE error event carries the request's correlation id, so a
+    client-reported failure can be found in the server logs."""
+    app = _app(FailingProvider())
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/chat",
+            json={"message": "What is the punishment for murder?"},
+            headers={"X-Request-ID": "chat-error-correlation-1"},
+        )
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    error = next(data for name, data in events if name == "error")
+    assert error["request_id"] == "chat-error-correlation-1"
+    assert response.headers["x-request-id"] == "chat-error-correlation-1"
 
 
 def test_chat_multi_turn_history_accepted(chat_client: TestClient) -> None:

@@ -35,16 +35,22 @@ UNCITED_ANSWER = "Section 999 of BNS says theft is punishable with imprisonment.
 
 
 class ScriptedProvider(LLMProvider):
-    """Returns scripted texts in order; records every request it sees."""
+    """Returns scripted texts in order; records every request it sees.
 
-    def __init__(self, responses: Sequence[str]) -> None:
+    A scripted Exception instance is raised instead of returned, so a
+    scripted sequence can replay "first attempt OK, regeneration fails".
+    """
+
+    def __init__(self, responses: Sequence[str | Exception]) -> None:
         self._responses = list(responses)
         self.requests: list[GenerationRequest] = []
 
     async def generate(self, request: GenerationRequest) -> GenerationResult:
         self.requests.append(request)
-        text = self._responses.pop(0) if self._responses else ""
-        return GenerationResult(text=text, model="scripted")
+        response = self._responses.pop(0) if self._responses else ""
+        if isinstance(response, Exception):
+            raise response
+        return GenerationResult(text=response, model="scripted")
 
     def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
         async def _gen() -> AsyncIterator[str]:

@@ -9,12 +9,60 @@ from app.generation.citation_guard import (
     extract_citations,
     validate_citations,
 )
+from app.ingestion.models import Chunk
 from app.retrieval.models import ScoredChunk
 from tests.generation.fixtures import GOOD_ANSWER, MIXED_ANSWER, UNCITED_ANSWER, make_evidence
 
 
 def _evidence_chunks() -> list[ScoredChunk]:
     return make_evidence().results
+
+
+def _chunk(
+    chunk_id: str,
+    section: str,
+    title: str,
+    text: str,
+    *,
+    act_short: str = "BNS",
+    act: str = "Bharatiya Nyaya Sanhita, 2023",
+) -> Chunk:
+    return Chunk(
+        chunk_id=chunk_id,
+        act=act,
+        act_short=act_short,
+        chapter="VI",
+        chapter_title="OFFENCES AFFECTING LIFE",
+        section_number=section,
+        section_title=title,
+        subsection=None,
+        clause=None,
+        text=text,
+        has_illustration=False,
+        has_proviso=False,
+        has_exception=False,
+        page_start=29,
+        page_end=30,
+        source_uri="pdf:sha256-bns#page=29",
+        ingested_at="2026-08-30T00:00:00Z",
+    )
+
+
+#: BNS s.103 verbatim text — the live false-positive corpus ("What happens
+#: if anyone commits murder?").
+_BNS_103_TEXT = (
+    "Whoever commits murder shall be punished with death or imprisonment "
+    "for life, and shall also be liable to fine."
+)
+
+
+def _bns103_evidence() -> list[ScoredChunk]:
+    return [
+        ScoredChunk(
+            chunk=_chunk("bns-s103-001", "103", "Punishment for murder", _BNS_103_TEXT),
+            rrf_score=1.0,
+        )
+    ]
 
 
 def test_extract_bracket_citations_with_subsections() -> None:
@@ -215,15 +263,123 @@ def test_ipc_misattribution_with_citation_removed() -> None:
 
 
 def test_uncited_legal_claim_removed() -> None:
-    """Punishment vocabulary with no citation and no section reference is stripped."""
+    """Punishment vocabulary with no citation, no section reference and no
+    grounded sibling citation is stripped.
+
+    The claim must share NOTHING substantive with the adjacent cited section:
+    "punished"/"imprisonment" alone (generic penalty vocabulary shared with
+    every penalty section) do not make it traceable.
+    """
     answer = (
-        "The accused shall be punished with imprisonment for life. "
+        "The accused shall be punished with imprisonment for defamation. "
         "Murder is punishable with death [TS s.103]."
     )
     sanitized, check = validate_citations(answer, _evidence_chunks())
-    assert "imprisonment for life" not in sanitized
+    assert "defamation" not in sanitized
     assert len(check.uncited_legal_claims) == 1
     assert "TS s.103" in sanitized
+
+
+# --- Sibling-citation grounding (trailing citation on the next sentence) ---
+
+
+def test_trailing_sibling_citation_grounds_preceding_claim() -> None:
+    """Live false positive (BNS s.103): the model states the punishment rule
+    without a citation and cites the section on the following elaborating
+    sentence. The claim is traceable to the cited chunk → kept."""
+    answer = (
+        "Anyone who commits murder is punished with death or imprisonment "
+        "for life, and is also liable to a fine. "
+        "If the murder is committed by a group of five or more persons, every "
+        "member is equally liable [BNS s.103]."
+    )
+    sanitized, check = validate_citations(answer, _bns103_evidence())
+    assert "Anyone who commits murder is punished" in sanitized
+    assert "[BNS s.103]" in sanitized
+    assert check.uncited_legal_claims == []
+    assert check.removed_sentences == []
+
+
+def test_multiple_claims_one_trailing_citation_all_grounded_kept() -> None:
+    answer = (
+        "Murder is punished with death. "
+        "The offender is liable to imprisonment for life and to a fine [BNS s.103]."
+    )
+    sanitized, check = validate_citations(answer, _bns103_evidence())
+    assert sanitized == answer
+    assert check.removed_sentences == []
+    assert len(check.valid_citations) == 1
+
+
+def test_multiple_trailing_citations_ground_preceding_claim() -> None:
+    evidence = [
+        *_bns103_evidence(),
+        ScoredChunk(
+            chunk=_chunk(
+                "bns-s104-001",
+                "104",
+                "Attempt to murder",
+                "Whoever attempts to commit murder shall be punished with imprisonment for life.",
+            ),
+            rrf_score=0.9,
+        ),
+    ]
+    answer = (
+        "Anyone who commits murder is punished with death. "
+        "Attempted murder is punishable with imprisonment [BNS s.104], "
+        "and murder with death [BNS s.103]."
+    )
+    sanitized, check = validate_citations(answer, evidence)
+    assert "commits murder is punished" in sanitized
+    assert {c.label for c in check.valid_citations} == {"[BNS s.103]", "[BNS s.104]"}
+    assert check.removed_sentences == []
+
+
+def test_unrelated_claim_next_to_real_citation_still_removed() -> None:
+    """A hallucinated claim sharing only generic punishment vocabulary with
+    the cited section is NOT grounded by the adjacent citation."""
+    answer = (
+        "The tenant shall be punished with imprisonment if he sublets the flat. "
+        "Whoever commits murder shall be punished with death [BNS s.103]."
+    )
+    sanitized, check = validate_citations(answer, _bns103_evidence())
+    assert "tenant" not in sanitized
+    assert len(check.uncited_legal_claims) == 1
+    assert "commits murder" in sanitized
+
+
+def test_sibling_citation_does_not_cross_paragraph_boundary() -> None:
+    """A citation in a NEW paragraph cites that paragraph, not the previous one."""
+    answer = (
+        "Anyone who commits murder is punished with death.\n\n"
+        "Whoever commits murder shall be punished [BNS s.103]."
+    )
+    sanitized, check = validate_citations(answer, _bns103_evidence())
+    assert "commits murder is punished with death" not in sanitized
+    assert check.uncited_legal_claims
+
+
+def test_sibling_fabricated_citation_does_not_ground() -> None:
+    answer = (
+        "Anyone who commits murder is punished with death. "
+        "Theft is punishable with imprisonment [BNS s.999]."
+    )
+    sanitized, check = validate_citations(answer, _bns103_evidence())
+    assert sanitized == ""
+    assert check.uncited_legal_claims
+    assert check.invalid_citations[0].label == "[BNS s.999]"
+
+
+def test_sibling_parenthesized_citation_does_not_ground() -> None:
+    """A citation-shaped paren form cannot be validated, so it grounds nothing."""
+    answer = (
+        "Anyone who commits murder is punished with death or imprisonment for life. "
+        "The punishment is severe (BNS s.103)."
+    )
+    sanitized, check = validate_citations(answer, _bns103_evidence())
+    assert sanitized == ""
+    assert check.uncited_legal_claims
+    assert check.invalid_citations
 
 
 def test_supported_prose_section_reference_kept() -> None:

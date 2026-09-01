@@ -353,12 +353,16 @@ def test_system_role_in_history_is_rejected() -> None:
 
 def test_empty_provider_responses_stream_safe_error() -> None:
     """Every generation attempt returning empty text surfaces as a safe
-    SERVICE_UNAVAILABLE error event — never a silent empty answer."""
+    LLM_EMPTY_RESPONSE error event — never a silent empty answer.
+
+    (Remediation: the blanket SERVICE_UNAVAILABLE label was replaced with
+    the truthful per-class code; an empty provider response is an empty
+    response, not an outage.)"""
     with TestClient(_app(ScriptedProvider(["", ""]))) as test_client:
         events = _post(test_client, "What is the punishment for murder?")
     error = [d for n, d in events if n == "error"]
     assert len(error) == 1
-    assert error[0]["code"] == "SERVICE_UNAVAILABLE"
+    assert error[0]["code"] == "LLM_EMPTY_RESPONSE"
 
 
 def test_model_emitted_refusal_is_normalized() -> None:
@@ -384,20 +388,30 @@ def test_model_emitted_refusal_is_normalized() -> None:
 def test_injection_payloads_take_grounded_path(
     client: TestClient, provider: ScriptedProvider, message: str
 ) -> None:
-    """Injection-style messages never match the whitelist, so they enter
-    the grounded pipeline: the provider is called under the strict system
-    prompt, and no conversational greeting is emitted.
+    """Injection-style messages never match the whitelist, so they never
+    receive a conversational greeting, and never an ungrounded answer.
 
-    The scripted GOOD_ANSWER cites TS s.103, but this query's BM25 evidence
-    is the definitions section (s.2, matched on a function word) — so the
-    citation guard correctly strips both sentences and the pipeline ends
-    in the specification refusal. That is the truthful outcome for an
-    ungroundable scripted answer; the point under test is the ROUTING:
-    generation ran (provider called), never the smalltalk layer."""
+    Two truthful outcomes are both correct (remediation of the sparse
+    tokenizer): with function words no longer indexed, these payloads may
+    now fail the retrieval confidence gate and refuse BEFORE any LLM call
+    (cheaper and fail-closed); when retrieval does return evidence, the
+    provider runs under the strict system prompt and the citation guard
+    strips the ungroundable scripted answer into the specification
+    refusal. The property under test is the ROUTING: smalltalk never
+    answers an injection payload, and no ungrounded content is emitted."""
     events = _post(client, message)
     assert _tokens(events).startswith("Hello! I'm Nyaya.") is False
-    assert len(provider.requests) >= 1  # routed to generation, not smalltalk
     assert events[-1][0] == "done"
+    done = events[-1][1]
+    if provider.requests:
+        # Grounded path: generation ran; the ungroundable scripted answer
+        # must not survive as a fake grounded answer.
+        assert done["refused"] is True
+        assert done["citations"] == []
+    else:
+        # Pre-LLM refusal: retrieval failed closed without a provider call.
+        assert done["refused"] is True
+        assert _tokens(events) != ""
     assert events[-1][1]["refused"] is True  # citations failed validation
     assert events[-1][1]["citations"] == []
 

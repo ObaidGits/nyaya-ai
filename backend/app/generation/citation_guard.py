@@ -123,6 +123,30 @@ _LEGAL_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: The single-word vocabulary of ``_LEGAL_CLAIM_RE``. An uncited legal claim
+#: adjacent to a cited sentence shares these words with EVERY penalty section,
+#: so they cannot by themselves prove the claim is traceable to the cited
+#: chunk: sibling-citation grounding requires at least one substantive
+#: (non-claim-vocabulary) shared token in addition to the overlap threshold.
+_CLAIM_VOCABULARY = frozenset(
+    {
+        "punished",
+        "punishment",
+        "imprisonment",
+        "imprisoned",
+        "liable",
+        "offence",
+        "offense",
+        "fine",
+        "sentence",
+        "death",
+    }
+)
+
+#: Minimum shared content tokens between an uncited claim and the cited
+#: chunk for a trailing sibling citation to ground the claim.
+_SIBLING_MIN_SHARED_TOKENS = 2
+
 
 def _ascii_digits(text: str) -> str:
     """Map Indic-script digits (all supported scripts) to ASCII."""
@@ -134,10 +158,22 @@ def _ascii_digits(text: str) -> str:
 # citation. "i.e." / "e.g." are removed before the test so their "i" does
 # not trigger it. Indic first-person and "Nyaya" words are included so a
 # translated identity sentence is treated the same way (D-077).
+# Possessive/object "my"/"me" are deliberately EXCLUDED: a grounded answer
+# echoing the user's first-person phrasing ("my bail", "helps me") would
+# otherwise lose a perfectly relevant citation. Second-person forms are
+# excluded for the same reason (Tamil "நீங்கள்" = "you" — user-facing).
+#
+# The brand noun ("Nyaya"/"न्याय"/...) is NOT a marker by itself (D-095):
+# it is part of the corpus act's own name (Bharatiya Nyaya Sanhita) and
+# the ordinary word for "justice" — a grounded answer naming the act in
+# any language must keep its citations. Identity sentences still match
+# through their first-person pronouns ("मैं न्याय हूँ", "I am Nyaya").
+# Script tokens use Indic-block lookaround boundaries so a pronoun inside
+# a longer word (Marathi "मी" inside "समीक्षा") is not a match.
 _SELF_REFERENCE_RE = re.compile(
-    r"\b(?:i|i'm|im|my|me|myself|we|our|nyaya|assistant|chatbot|robot|bot|ai)\b"
-    r"|मैं|न्याय|मी|आम्ही|हुँ|हुं|હું|ન્યાય|আমি|ন্যায়|মই|நான்|நியாய|நீங்கள்|నేను|న్యాయ|"
-    r"ನಾನು|ನ್ಯಾಯ|ഞാൻ|ന്യായ|ਮੈਂ|ਨਿਆਯ|ମୁଁ|ନ୍ୟାୟ",
+    r"\b(?:i|i'm|im|myself|we|our|assistant|chatbot|robot|bot|ai)\b"
+    r"|(?<![ऀ-ൿ])(?:मैं|आम्ही|हुँ|हुं|હું|আমি|মই|நான்|నేను|ನಾನು|ഞാൻ|ਮੈਂ|ମୁଁ)"
+    r"(?![ऀ-ൿ])",
     re.IGNORECASE,
 )
 _ABBREVIATION_RE = re.compile(r"\b(?:i\.e|e\.g)\b\.?", re.IGNORECASE)
@@ -464,6 +500,29 @@ def _merge_label_fragments(sentences: list[str]) -> list[str]:
     return merged
 
 
+def _sentence_stream(text: str) -> list[tuple[str, bool]]:
+    """Split into ``(sentence, starts_paragraph)`` pairs, in order.
+
+    Paragraphs are blocks separated by a blank line; the flag marks the
+    first sentence of each paragraph. Sibling-citation grounding must never
+    cross a paragraph boundary — a citation in a new paragraph cites that
+    paragraph, not the previous one. Label-only fragments merge into their
+    predecessor exactly as in the flat split.
+    """
+    entries: list[tuple[str, bool]] = []
+    for paragraph in re.split(r"\n\s*\n", text):
+        for position, sentence in enumerate(_split_sentences(paragraph)):
+            entries.append((sentence, position == 0))
+    merged: list[tuple[str, bool]] = []
+    for sentence, starts_paragraph in entries:
+        if merged and _LABEL_ONLY_RE.match(sentence.strip()):
+            previous, previous_starts = merged[-1]
+            merged[-1] = (previous.rstrip() + " " + sentence.strip() + " ", previous_starts)
+            continue
+        merged.append((sentence, starts_paragraph))
+    return merged
+
+
 def _self_referential(sentence: str) -> bool:
     """True when the sentence is about the assistant, not the law."""
     return bool(_SELF_REFERENCE_RE.search(_ABBREVIATION_RE.sub("", sentence)))
@@ -602,6 +661,45 @@ def _prose_gate(sentence: str, index: _EvidenceIndex, check: CitationCheck) -> s
     return sentence
 
 
+def _sibling_citation_grounds(
+    sentences: list[tuple[str, bool]],
+    position: int,
+    claim_tokens: set[str],
+    index: _EvidenceIndex,
+) -> bool:
+    """True when the citation on the immediately FOLLOWING sentence of the
+    same paragraph also grounds THIS sentence's uncited legal claim.
+
+    Live shape (BNS s.103 false positive): the model states the punishment
+    rule without a citation and cites the section on the elaborating
+    sentence that follows. The claim keeps its traceability contract only
+    when it is actually traceable to the cited evidence — at least
+    ``_SIBLING_MIN_SHARED_TOKENS`` shared content tokens with the cited
+    chunk, of which at least one is substantive (not generic punishment
+    vocabulary, which every penalty claim shares with every penalty
+    section). Anything weaker is an unsupported claim parked next to a real
+    citation and is still removed.
+    """
+    if position + 1 >= len(sentences):
+        return False
+    following, starts_paragraph = sentences[position + 1]
+    if starts_paragraph or not claim_tokens:
+        return False
+    for citation in extract_citations(following):
+        if not index.statute_supported(citation):
+            continue
+        shared = index.statute_tokens(citation) & claim_tokens
+        if len(shared) >= _SIBLING_MIN_SHARED_TOKENS and shared - _CLAIM_VOCABULARY:
+            return True
+    for document_citation in extract_document_citations(following):
+        if not index.document_supported(document_citation):
+            continue
+        shared = index.document_tokens(document_citation) & claim_tokens
+        if len(shared) >= _SIBLING_MIN_SHARED_TOKENS and shared - _CLAIM_VOCABULARY:
+            return True
+    return False
+
+
 def validate_citations(
     answer: str,
     evidence: list[ScoredChunk],
@@ -617,12 +715,19 @@ def validate_citations(
     overlap with the cited chunk) are stripped from the kept sentence and
     reported as irrelevant. Document citations are validated the same way
     against the session's retrieved document hits.
+
+    A citation on one sentence extends grounding to the immediately
+    preceding sentence of the same paragraph (a legal claim stated without
+    a citation and cited on the elaborating sentence that follows) only
+    when the claim itself is traceable to the cited chunk — see
+    ``_sibling_citation_grounds``. Anything weaker is still removed.
     """
     index = _EvidenceIndex(evidence, document_hits)
     check = CitationCheck()
 
     kept: list[str] = []
-    for sentence in _merge_label_fragments(_split_sentences(_normalize_brackets(answer))):
+    sentences = _sentence_stream(_normalize_brackets(answer))
+    for position, (sentence, _starts_paragraph) in enumerate(sentences):
         act_name = _ACT_NAME_RE.search(sentence)
         if act_name and _ACT_NAME_ALIASES[act_name.group(0).lower()] not in index.acts:
             # A named Act the evidence does not contain is a misattribution
@@ -649,9 +754,16 @@ def validate_citations(
             has_section_ref = bool(
                 PROSE_CITATION_RE.search(bare) or _INDIC_PROSE_RE.search(_ascii_digits(bare))
             )
-            if _LEGAL_CLAIM_RE.search(bare) and not has_section_ref:
+            if (
+                _LEGAL_CLAIM_RE.search(bare)
+                and not has_section_ref
                 # Punishment/consequence vocabulary with no citation and no
-                # evidenced section reference: an uncited legal claim.
+                # evidenced section reference: an uncited legal claim —
+                # unless the citation on the immediately following sentence
+                # of the same paragraph grounds this claim in the same
+                # evidence (sibling-citation grounding).
+                and not _sibling_citation_grounds(sentences, position, _content_tokens(bare), index)
+            ):
                 check.uncited_legal_claims.append(bare)
                 check.removed_sentences.append(sentence.strip())
                 continue
