@@ -106,7 +106,9 @@ services:
     build: ./frontend
     image: ${FRONTEND_IMAGE:-nyaya/frontend:local}
     ports:
-      - "${FRONTEND_PORT:-3000}:8080"
+      # Loopback only: the public entry point is the host Nginx reverse
+      # proxy (80/443, indianyay.tech); direct :3000 exposure is closed.
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:8080"
     depends_on:
       api:
         condition: service_healthy
