@@ -8,7 +8,7 @@ submission-readiness rollup of the 2026-08-31 repository/submission pass.
 
 | Area | Requirements | Status | Evidence |
 |---|---:|---|---|
-| Product baseline | 10 | DONE | live stress test, 643 backend + 93 frontend tests |
+| Product baseline | 10 | DONE | live stress test, 671 backend + 95 frontend tests (CI run on 39b8c41) |
 | Source corpus | 13 | 11 DONE, 2 PARTIAL | SRC-002 (supplied bare-act is BNSS → forms source only; statute uses official BNS Gazette), SQ-004 (evaluator manifest unpublished) |
 | Part A — Retrieval & indexing | 99 | 97 DONE, 2 bonus NOT ATTEMPTED | cross-encoder rerank (A3-011), cross-ref resolution (A1-039) are bonus |
 | Part B — Forms | 40 | DONE | manifest, 58 forms, OCR fallback, idempotency; APIs live-tested |
@@ -16,7 +16,7 @@ submission-readiness rollup of the 2026-08-31 repository/submission pass.
 | Part D — Backend | 55 | DONE | API tests, security tests, live E2E |
 | Infrastructure / Docker | 22 | DONE | clean `down -v && up -d --build` verified, all healthy in 423 s incl. rebuild; fresh GitHub clone bootstrapped + E2E-green (D-084) |
 | LLM provider system | 5 | DONE | registry abstraction, env-driven config; hosted providers NOT VERIFIED live (no key) |
-| Part E — CI/CD | 40 | DONE — CI GREEN ON GITHUB (run 33390563891) | backend 628 passed / 85% cov ≥80, frontend 93 tests + build, gitleaks 8.24.3 clean, Docker build + Trivy fail-closed (after D-084 CVE remediation), SHA-tagged images live in `ghcr.io/obaidgits/nyaya-ai/*`, gated deploy summary |
+| Part E — CI/CD | 40 | DONE — CI GREEN ON GITHUB (run 33390563891) | backend 671 passed / 85.7% cov ≥80, frontend 95 tests + build, gitleaks 8.24.3 clean, Docker build + Trivy fail-closed (after D-084 CVE remediation), SHA-tagged images live in `ghcr.io/obaidgits/nyaya-ai/*`, gated deploy summary |
 | Secrets | 12 | 11 DONE, 1 NOT VERIFIED | gitleaks scan needs the remote to run on GitHub |
 | Part F — Evaluation & observability | 34 | DONE | golden set (29 q), recall/MRR/citation/refusal, p50/p95, Prometheus |
 | Testing | 12 | DONE | unit/integration/API/retrieval/forms/security/E2E/speech/multilingual/frontend |
