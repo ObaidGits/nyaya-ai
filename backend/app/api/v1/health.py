@@ -74,7 +74,10 @@ class LlmHealthResponse(BaseModel):
 
     ``state`` is one of: not_configured, invalid_configuration, unavailable,
     degraded, healthy, error. "healthy" means the active provider is
-    configured, authenticated AND its model is offered. Contains no secrets.
+    configured, authenticated AND its model is offered. ``config_source``
+    says where the effective provider config comes from — the persisted
+    admin console settings or the environment — so a stale env value can
+    never be misread as the runtime config. Contains no secrets.
     """
 
     state: Literal[
@@ -88,6 +91,15 @@ class LlmHealthResponse(BaseModel):
     provider: str | None = None
     model: str | None = None
     detail: str = ""
+    config_source: Literal["admin_console", "environment"] = "environment"
+
+
+def _llm_config_source(request: Request) -> str:
+    """ "admin_console" when persisted console settings select the provider."""
+    store = getattr(request.app.state, "admin_store", None)
+    if store is None:
+        return "environment"
+    return "admin_console" if "llm_provider" in store.load()["settings"] else "environment"
 
 
 @router.get("/health/llm", response_model=LlmHealthResponse, summary="Active LLM provider health")
@@ -101,7 +113,9 @@ async def llm_health(request: Request) -> LlmHealthResponse:
     """
     import time
 
-    cached = getattr(request.app.state, "llm_health_cache", None)
+    cached: tuple[float, LlmHealthResponse] | None = getattr(
+        request.app.state, "llm_health_cache", None
+    )
     now = time.monotonic()
     if cached is not None and now - cached[0] < LLM_HEALTH_CACHE_SECONDS:
         return cached[1]
@@ -109,12 +123,14 @@ async def llm_health(request: Request) -> LlmHealthResponse:
     from app.api.deps import get_llm_provider
     from app.llm.base import ProviderHealth
 
+    config_source = _llm_config_source(request)
     try:
         provider = get_llm_provider(request)
     except Exception:
         result = LlmHealthResponse(
             state="not_configured",
             detail="No usable LLM provider is configured.",
+            config_source=config_source,
         )
     else:
         try:
@@ -126,6 +142,7 @@ async def llm_health(request: Request) -> LlmHealthResponse:
                 provider=meta.provider,
                 model=meta.model,
                 detail="The provider health probe failed unexpectedly.",
+                config_source=config_source,
             )
         else:
             result = LlmHealthResponse(
@@ -133,6 +150,7 @@ async def llm_health(request: Request) -> LlmHealthResponse:
                 provider=health.provider,
                 model=health.model,
                 detail=health.detail,
+                config_source=config_source,
             )
     request.app.state.llm_health_cache = (now, result)
     return result

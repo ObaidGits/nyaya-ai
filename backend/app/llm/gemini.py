@@ -2,8 +2,10 @@
 
 Uses Gemini's ``generateContent`` REST API (``streamGenerateContent`` with
 SSE for streaming) via the ``google`` Python SDK-compatible endpoints — plain
-httpx keeps the dependency footprint minimal. Errors are normalized to the
-application's 503 AppError; provider bodies never reach clients.
+httpx keeps the dependency footprint minimal. Transient failures (HTTP 429
+rate limit, 5xx — Google serves 503 when overloaded) are retried with
+bounded backoff honoring ``Retry-After``; remaining errors are normalized
+to typed 503 AppErrors. Provider bodies never reach clients.
 """
 
 from __future__ import annotations
@@ -16,14 +18,18 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings
-from app.core.errors import AppError
+from app.core.errors import AppError, LLMRateLimitError, LLMTimeoutError
 from app.llm.base import (
+    RATE_LIMIT_MAX_RETRIES,
+    SERVER_ERROR_MAX_RETRIES,
     GenerationRequest,
     GenerationResult,
     LLMProvider,
     ProviderHealth,
     ProviderHealthState,
     ProviderMetadata,
+    retry_delay,
+    retry_sleep,
 )
 from app.llm.sanitize import ReasoningStreamFilter, sanitize_answer_text
 
@@ -82,21 +88,61 @@ class GeminiProvider(LLMProvider):
     async def generate(self, request: GenerationRequest) -> GenerationResult:
         self._require_config()
         url = f"{self._base_url}/models/{self._model}:generateContent"
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    url,
-                    params={"key": self._api_key},
-                    json=self._payload(request),
-                )
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError:
-            logger.warning("gemini rejected request", extra={"error_type": "HTTPStatusError"})
-            raise GeminiProviderError("The generation provider rejected the request.") from None
-        except httpx.HTTPError as exc:
-            logger.warning("gemini unreachable", extra={"error_type": type(exc).__name__})
-            raise GeminiProviderError("The generation provider is currently unavailable.") from exc
+        # Bounded retry for transient failures only: HTTP 429 (Google's rate
+        # limit, up to RATE_LIMIT_MAX_RETRIES retries) and 5xx (Google serves
+        # 503 when overloaded, one retry). Each HTTP attempt gets the full
+        # request timeout and every sleep is capped, so added latency stays
+        # small against the timeout budget.
+        rate_limit_retries = 0
+        server_error_retries = 0
+        while True:
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                    response = await client.post(
+                        url,
+                        params={"key": self._api_key},
+                        json=self._payload(request),
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    break
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status == 429 and rate_limit_retries < RATE_LIMIT_MAX_RETRIES:
+                    rate_limit_retries += 1
+                    await retry_sleep(
+                        retry_delay(
+                            rate_limit_retries,
+                            exc.response.headers.get("Retry-After"),
+                        )
+                    )
+                    continue
+                if status >= 500 and server_error_retries < SERVER_ERROR_MAX_RETRIES:
+                    server_error_retries += 1
+                    await retry_sleep(retry_delay(server_error_retries))
+                    continue
+                if status == 429:
+                    logger.warning("gemini rate limited", extra={"status": status})
+                    raise LLMRateLimitError() from None
+                if 400 <= status < 500:
+                    # Google answers 400 (not 401) for a bad key — never
+                    # transient.
+                    logger.warning("gemini rejected request", extra={"status": status})
+                    raise GeminiProviderError(
+                        "The generation provider rejected the request."
+                    ) from None
+                logger.warning("gemini server error", extra={"status": status})
+                raise GeminiProviderError(
+                    "The generation provider is currently unavailable."
+                ) from None
+            except httpx.TimeoutException as exc:
+                logger.warning("gemini timed out", extra={"error_type": type(exc).__name__})
+                raise LLMTimeoutError() from exc
+            except httpx.HTTPError as exc:
+                logger.warning("gemini unreachable", extra={"error_type": type(exc).__name__})
+                raise GeminiProviderError(
+                    "The generation provider is currently unavailable."
+                ) from exc
         candidates = data.get("candidates") or [{}]
         parts = (candidates[0].get("content") or {}).get("parts") or []
         # Thought-summary parts (thought: true) are Gemini's reasoning
@@ -114,44 +160,93 @@ class GeminiProvider(LLMProvider):
     async def _stream_chunks(self, request: GenerationRequest) -> AsyncIterator[str]:
         self._require_config()
         url = f"{self._base_url}/models/{self._model}:streamGenerateContent"
-        try:
-            async with (
-                httpx.AsyncClient(timeout=self._timeout) as client,
-                client.stream(
-                    "POST",
-                    url,
-                    params={"key": self._api_key, "alt": "sse"},
-                    json=self._payload(request),
-                ) as response,
-            ):
-                response.raise_for_status()
-                stream_filter = ReasoningStreamFilter()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[len("data:") :].strip()
-                    if not payload:
-                        continue
-                    try:
-                        chunk = json.loads(payload)
-                    except ValueError:
-                        continue
-                    candidates = chunk.get("candidates") or [{}]
-                    parts = (candidates[0].get("content") or {}).get("parts") or []
-                    for part in parts:
-                        if part.get("thought"):
-                            continue  # reasoning channel, never answer text
-                        token = part.get("text")
-                        if token:
-                            safe = stream_filter.push(str(token))
-                            if safe:
-                                yield safe
-                tail = stream_filter.flush()
-                if tail:
-                    yield tail
-        except httpx.HTTPError as exc:
-            logger.warning("gemini streaming failed", extra={"error_type": type(exc).__name__})
-            raise GeminiProviderError("The generation provider is currently unavailable.") from exc
+        # Same bounded retry as generate(); a retry is only possible BEFORE
+        # the first token is yielded — once the consumer has received
+        # anything, the SSE stream is committed and replaying the request
+        # would duplicate output.
+        rate_limit_retries = 0
+        server_error_retries = 0
+        yielded = False
+        while True:
+            try:
+                async with (
+                    httpx.AsyncClient(timeout=self._timeout) as client,
+                    client.stream(
+                        "POST",
+                        url,
+                        params={"key": self._api_key, "alt": "sse"},
+                        json=self._payload(request),
+                    ) as response,
+                ):
+                    response.raise_for_status()
+                    stream_filter = ReasoningStreamFilter()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[len("data:") :].strip()
+                        if not payload:
+                            continue
+                        try:
+                            chunk = json.loads(payload)
+                        except ValueError:
+                            continue
+                        candidates = chunk.get("candidates") or [{}]
+                        parts = (candidates[0].get("content") or {}).get("parts") or []
+                        for part in parts:
+                            if part.get("thought"):
+                                continue  # reasoning channel, never answer text
+                            token = part.get("text")
+                            if token:
+                                safe = stream_filter.push(str(token))
+                                if safe:
+                                    yielded = True
+                                    yield safe
+                    tail = stream_filter.flush()
+                    if tail:
+                        yielded = True
+                        yield tail
+                break
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if not yielded and status == 429 and rate_limit_retries < RATE_LIMIT_MAX_RETRIES:
+                    rate_limit_retries += 1
+                    await retry_sleep(
+                        retry_delay(
+                            rate_limit_retries,
+                            exc.response.headers.get("Retry-After"),
+                        )
+                    )
+                    continue
+                if (
+                    not yielded
+                    and status >= 500
+                    and server_error_retries < SERVER_ERROR_MAX_RETRIES
+                ):
+                    server_error_retries += 1
+                    await retry_sleep(retry_delay(server_error_retries))
+                    continue
+                if status == 429:
+                    logger.warning("gemini rate limited (stream)", extra={"status": status})
+                    raise LLMRateLimitError() from None
+                if 400 <= status < 500:
+                    logger.warning("gemini rejected request (stream)", extra={"status": status})
+                    raise GeminiProviderError(
+                        "The generation provider rejected the request."
+                    ) from None
+                logger.warning("gemini streaming failed", extra={"status": status})
+                raise GeminiProviderError(
+                    "The generation provider is currently unavailable."
+                ) from None
+            except httpx.TimeoutException as exc:
+                logger.warning(
+                    "gemini timed out (stream)", extra={"error_type": type(exc).__name__}
+                )
+                raise LLMTimeoutError() from exc
+            except httpx.HTTPError as exc:
+                logger.warning("gemini streaming failed", extra={"error_type": type(exc).__name__})
+                raise GeminiProviderError(
+                    "The generation provider is currently unavailable."
+                ) from exc
 
     def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
         return self._stream_chunks(request)

@@ -211,9 +211,7 @@ def test_active_model_check_ok_when_healthy() -> None:
     from app.llm.base import ProviderHealth, ProviderHealthState
 
     result = _active_check(
-        ProviderHealth(
-            state=ProviderHealthState.HEALTHY, provider="grok", model="grok-4.6"
-        )
+        ProviderHealth(state=ProviderHealthState.HEALTHY, provider="grok", model="grok-4.6")
     )
     assert result.status == CheckStatus.OK
 
@@ -317,3 +315,53 @@ def test_llm_health_not_configured_when_provider_unknown(app: FastAPI) -> None:
     response = TestClient(app).get("/api/v1/health/llm")
     assert response.status_code == 200
     assert response.json()["state"] == "not_configured"
+
+
+# ---------------------------------------------------------------------------
+# Effective-config source: env vs persisted admin console (drift honesty)
+# ---------------------------------------------------------------------------
+
+
+def test_llm_health_config_source_environment(app: FastAPI) -> None:
+    """No persisted console settings → the environment is the config source."""
+    from app.llm.base import ProviderHealth, ProviderHealthState
+
+    class _Registry:
+        def create(self, name: str, settings: object) -> _FakeActiveProvider:
+            return _FakeActiveProvider(
+                ProviderHealth(state=ProviderHealthState.HEALTHY, provider="ollama", model="m")
+            )
+
+    app.state.llm_registry = _Registry()
+    body = TestClient(app).get("/api/v1/health/llm").json()
+    assert body["config_source"] == "environment"
+
+
+def test_llm_health_config_source_admin_console(tmp_path: object) -> None:
+    """Persisted console settings select the provider → the source must say
+    so, even when the environment carries different (stale) LLM_* values."""
+    import json
+    from pathlib import Path
+
+    from app.core.config import Settings
+    from app.llm.base import ProviderHealth, ProviderHealthState
+    from app.main import create_app
+
+    path = Path(tmp_path) / "admin.json"
+    path.write_text(json.dumps({"settings": {"llm_provider": "groq"}, "secrets": {}}))
+    settings = Settings(_env_file=None, admin_settings_path=str(path))
+    app = create_app(settings=settings)
+
+    class _Registry:
+        def create(self, name: str, settings: object) -> _FakeActiveProvider:
+            return _FakeActiveProvider(
+                ProviderHealth(
+                    state=ProviderHealthState.HEALTHY, provider="groq", model="openai/gpt-oss-120b"
+                )
+            )
+
+    app.state.llm_registry = _Registry()
+    body = TestClient(app).get("/api/v1/health/llm").json()
+    assert body["config_source"] == "admin_console"
+    assert body["provider"] == "groq"
+    assert body["model"] == "openai/gpt-oss-120b"

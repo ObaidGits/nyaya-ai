@@ -2,9 +2,11 @@
 
 One implementation covers OpenAI, Grok (x.ai), OpenRouter and any
 OpenAI-compatible gateway: they differ only in base URL, default model and
-API key. Streaming uses SSE ``data:`` lines. Errors are normalized to the
-application's 503 LLM_PROVIDER_UNAVAILABLE AppError; provider bodies are
-never leaked to clients.
+API key. Streaming uses SSE ``data:`` lines. Transient failures (HTTP 429
+rate limit, 5xx) are retried with bounded backoff honoring ``Retry-After``;
+remaining errors are normalized to typed 503 AppErrors (LLM_RATE_LIMITED,
+LLM_TIMEOUT, LLM_PROVIDER_UNAVAILABLE). Provider bodies are never leaked
+to clients.
 """
 
 from __future__ import annotations
@@ -17,14 +19,18 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings
-from app.core.errors import AppError
+from app.core.errors import AppError, LLMRateLimitError, LLMTimeoutError
 from app.llm.base import (
+    RATE_LIMIT_MAX_RETRIES,
+    SERVER_ERROR_MAX_RETRIES,
     GenerationRequest,
     GenerationResult,
     LLMProvider,
     ProviderHealth,
     ProviderHealthState,
     ProviderMetadata,
+    retry_delay,
+    retry_sleep,
 )
 from app.llm.sanitize import ReasoningStreamFilter, sanitize_answer_text
 
@@ -117,27 +123,80 @@ class OpenAICompatibleProvider(LLMProvider):
     async def generate(self, request: GenerationRequest) -> GenerationResult:
         self._require_key()
         self._require_endpoint()
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    f"{self._base_url}/chat/completions",
-                    headers=self._headers(),
-                    json=self._payload(request, stream=False),
+        url = f"{self._base_url}/chat/completions"
+        # Bounded retry for transient failures only: HTTP 429 (rate limit,
+        # up to RATE_LIMIT_MAX_RETRIES retries) and 5xx (provider-side
+        # faults, one retry — they are usually transient gateway/model
+        # errors, but a longer loop only adds latency). Each HTTP attempt
+        # gets the full request timeout and every sleep is capped
+        # (base.RETRY_SLEEP_CAP_SECONDS), so the worst-case added latency
+        # stays small against the timeout budget.
+        rate_limit_retries = 0
+        server_error_retries = 0
+        while True:
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                    response = await client.post(
+                        url,
+                        headers=self._headers(),
+                        json=self._payload(request, stream=False),
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    break
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status == 429 and rate_limit_retries < RATE_LIMIT_MAX_RETRIES:
+                    rate_limit_retries += 1
+                    await retry_sleep(
+                        retry_delay(
+                            rate_limit_retries,
+                            exc.response.headers.get("Retry-After"),
+                        )
+                    )
+                    continue
+                if status >= 500 and server_error_retries < SERVER_ERROR_MAX_RETRIES:
+                    server_error_retries += 1
+                    await retry_sleep(retry_delay(server_error_retries))
+                    continue
+                if status == 429:
+                    logger.warning(
+                        "cloud llm rate limited",
+                        extra={"provider": self._provider, "status": status},
+                    )
+                    raise LLMRateLimitError() from None
+                if 400 <= status < 500:
+                    # Invalid key, model or request semantics: never transient.
+                    logger.warning(
+                        "cloud llm rejected request",
+                        extra={"provider": self._provider, "status": status},
+                    )
+                    raise CloudProviderError(
+                        "The generation provider rejected the request."
+                    ) from None
+                logger.warning(
+                    "cloud llm server error",
+                    extra={"provider": self._provider, "status": status},
                 )
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError:
-            logger.warning(
-                "cloud llm rejected request",
-                extra={"provider": self._provider, "error_type": "HTTPStatusError"},
-            )
-            raise CloudProviderError("The generation provider rejected the request.") from None
-        except httpx.HTTPError as exc:
-            logger.warning(
-                "cloud llm unreachable",
-                extra={"provider": self._provider, "error_type": type(exc).__name__},
-            )
-            raise CloudProviderError("The generation provider is currently unavailable.") from exc
+                raise CloudProviderError(
+                    "The generation provider is currently unavailable."
+                ) from None
+            except httpx.TimeoutException as exc:
+                logger.warning(
+                    "cloud llm timed out",
+                    extra={"provider": self._provider, "error_type": type(exc).__name__},
+                )
+                raise LLMTimeoutError() from exc
+            except httpx.HTTPError as exc:
+                # Network-level failure (connect/read errors and the like):
+                # indistinguishable from "provider down" at this layer.
+                logger.warning(
+                    "cloud llm unreachable",
+                    extra={"provider": self._provider, "error_type": type(exc).__name__},
+                )
+                raise CloudProviderError(
+                    "The generation provider is currently unavailable."
+                ) from exc
         # Only the content field is the answer. Reasoning fields
         # (reasoning / reasoning_content / reasoning_details) are never read;
         # reasoning wrappers inside content itself are stripped here.
@@ -154,47 +213,107 @@ class OpenAICompatibleProvider(LLMProvider):
     async def _stream_chunks(self, request: GenerationRequest) -> AsyncIterator[str]:
         self._require_key()
         self._require_endpoint()
-        try:
-            async with (
-                httpx.AsyncClient(timeout=self._timeout) as client,
-                client.stream(
-                    "POST",
-                    f"{self._base_url}/chat/completions",
-                    headers=self._headers(),
-                    json=self._payload(request, stream=True),
-                ) as response,
-            ):
-                response.raise_for_status()
-                # Streaming reasoning isolation: only delta.content passes,
-                # and it passes through the wrapper filter so <think> blocks
-                # streamed in content are suppressed even across chunk
-                # boundaries.
-                stream_filter = ReasoningStreamFilter()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[len("data:") :].strip()
-                    if not payload or payload == "[DONE]":
-                        continue
-                    try:
-                        chunk = json.loads(payload)
-                    except ValueError:
-                        continue
-                    delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
-                    token = delta.get("content")
-                    if token:
-                        safe = stream_filter.push(str(token))
-                        if safe:
-                            yield safe
-                tail = stream_filter.flush()
-                if tail:
-                    yield tail
-        except httpx.HTTPError as exc:
-            logger.warning(
-                "cloud llm streaming failed",
-                extra={"provider": self._provider, "error_type": type(exc).__name__},
-            )
-            raise CloudProviderError("The generation provider is currently unavailable.") from exc
+        url = f"{self._base_url}/chat/completions"
+        # Same bounded retry as generate(), with one streaming-specific
+        # constraint: a retry is only possible BEFORE the first token is
+        # yielded — once the consumer has received anything, the SSE stream
+        # is committed and replaying the request would duplicate output.
+        rate_limit_retries = 0
+        server_error_retries = 0
+        yielded = False
+        while True:
+            try:
+                async with (
+                    httpx.AsyncClient(timeout=self._timeout) as client,
+                    client.stream(
+                        "POST",
+                        url,
+                        headers=self._headers(),
+                        json=self._payload(request, stream=True),
+                    ) as response,
+                ):
+                    response.raise_for_status()
+                    # Streaming reasoning isolation: only delta.content passes,
+                    # and it passes through the wrapper filter so <think> blocks
+                    # streamed in content are suppressed even across chunk
+                    # boundaries.
+                    stream_filter = ReasoningStreamFilter()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[len("data:") :].strip()
+                        if not payload or payload == "[DONE]":
+                            continue
+                        try:
+                            chunk = json.loads(payload)
+                        except ValueError:
+                            continue
+                        delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+                        token = delta.get("content")
+                        if token:
+                            safe = stream_filter.push(str(token))
+                            if safe:
+                                yielded = True
+                                yield safe
+                    tail = stream_filter.flush()
+                    if tail:
+                        yielded = True
+                        yield tail
+                break
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if not yielded and status == 429 and rate_limit_retries < RATE_LIMIT_MAX_RETRIES:
+                    rate_limit_retries += 1
+                    await retry_sleep(
+                        retry_delay(
+                            rate_limit_retries,
+                            exc.response.headers.get("Retry-After"),
+                        )
+                    )
+                    continue
+                if (
+                    not yielded
+                    and status >= 500
+                    and server_error_retries < SERVER_ERROR_MAX_RETRIES
+                ):
+                    server_error_retries += 1
+                    await retry_sleep(retry_delay(server_error_retries))
+                    continue
+                if status == 429:
+                    logger.warning(
+                        "cloud llm rate limited (stream)",
+                        extra={"provider": self._provider, "status": status},
+                    )
+                    raise LLMRateLimitError() from None
+                if 400 <= status < 500:
+                    logger.warning(
+                        "cloud llm rejected request (stream)",
+                        extra={"provider": self._provider, "status": status},
+                    )
+                    raise CloudProviderError(
+                        "The generation provider rejected the request."
+                    ) from None
+                logger.warning(
+                    "cloud llm streaming failed",
+                    extra={"provider": self._provider, "status": status},
+                )
+                raise CloudProviderError(
+                    "The generation provider is currently unavailable."
+                ) from None
+            except httpx.TimeoutException as exc:
+                logger.warning(
+                    "cloud llm timed out (stream)",
+                    extra={"provider": self._provider, "error_type": type(exc).__name__},
+                )
+                raise LLMTimeoutError() from exc
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "cloud llm streaming failed",
+                    extra={"provider": self._provider, "error_type": type(exc).__name__},
+                )
+                raise CloudProviderError(
+                    "The generation provider is currently unavailable."
+                ) from exc
 
     def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
         return self._stream_chunks(request)

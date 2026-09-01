@@ -26,7 +26,9 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import get_llm_provider
 from app.core.config import Settings
+from app.core.errors import AppError
 from app.core.rate_limit import CHAT_SCOPE, enforce_rate_limit
+from app.core.request_id import get_request_id
 from app.domain.models import MessageRole
 from app.generation.citation_guard import Citation
 from app.generation.conversation import conversational_category, reply_for_category
@@ -261,15 +263,35 @@ async def _run_chat(
                 language=answer_language.value,
             ).model_dump(),
         )
+    except AppError as exc:
+        # Typed application errors keep their truthful code and message —
+        # LLM_RATE_LIMITED, LLM_TIMEOUT, LLM_PROVIDER_UNAVAILABLE,
+        # LLM_EMPTY_RESPONSE, RETRIEVAL_NOT_CONFIGURED — so clients can
+        # distinguish "retry shortly" from "broken". AppError messages are
+        # code-authored constants; provider bodies, prompts and secrets
+        # never reach this layer.
+        logger.warning(
+            "chat stream failed",
+            extra={"error_code": exc.code, "error_message": exc.message},
+        )
+        yield _sse(
+            "error",
+            {
+                "code": exc.code,
+                "message": exc.message,
+                "request_id": get_request_id(),
+            },
+        )
     except Exception:
-        # Provider or retrieval failure: log server-side, stream a safe error
-        # event with no internals (AI_RULES, §32 structured errors).
+        # Unknown failure: the full traceback stays in the server log; the
+        # client gets a generic event — no internals, no exception text.
         logger.exception("chat stream failed")
         yield _sse(
             "error",
             {
-                "code": "SERVICE_UNAVAILABLE",
-                "message": "The chat service is currently unavailable. Please try again later.",
+                "code": "INTERNAL_ERROR",
+                "message": "An unexpected error occurred. Please try again later.",
+                "request_id": get_request_id(),
             },
         )
 

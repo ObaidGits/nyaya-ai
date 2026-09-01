@@ -9,16 +9,17 @@ status contract), and registry wiring for every supported provider name.
 from __future__ import annotations
 
 import json
+from datetime import UTC
 from typing import Any
 
 import httpx
 import pytest
 from app.core.config import Settings
-from app.core.errors import AppError
+from app.core.errors import AppError, LLMRateLimitError, LLMTimeoutError
 from app.domain.models import MessageRole
 from app.llm.base import ChatMessage, GenerationRequest, ProviderHealthState
 from app.llm.gemini import GeminiProvider
-from app.llm.openai_compat import PROFILES, OpenAICompatibleProvider
+from app.llm.openai_compat import PROFILES, CloudProviderError, OpenAICompatibleProvider
 from app.llm.registry import create_default_registry
 
 
@@ -46,6 +47,17 @@ def _mock(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
 
     monkeypatch.setattr(compat_module, "httpx", _HttpxShim(handler))
     monkeypatch.setattr(gemini_module, "httpx", _HttpxShim(handler))
+
+
+def _patch_retry_sleep(monkeypatch: pytest.MonkeyPatch, module: Any) -> list[float]:
+    """Replace the provider retry-sleep seam; record observed delays."""
+    sleeps: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(module, "retry_sleep", _fake_sleep)
+    return sleeps
 
 
 class TestOpenAICompatible:
@@ -140,6 +152,172 @@ class TestOpenAICompatible:
         assert await self._provider().health_check() is True
 
 
+class TestTransientRetry:
+    """Bounded 429/5xx retry with Retry-After (D-034; the Groq free tier
+    answers a large share of requests with HTTP 429)."""
+
+    @staticmethod
+    def _ok_body() -> dict[str, Any]:
+        return {"choices": [{"message": {"content": "Section 103 answer."}}]}
+
+    def _provider(self) -> OpenAICompatibleProvider:
+        return OpenAICompatibleProvider(
+            provider="groq",
+            base_url="https://api.groq.com/openai/v1",
+            model="openai/gpt-oss-120b",
+            api_key="gsk-test",
+        )
+
+    @pytest.mark.asyncio
+    async def test_429_retry_then_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            if len(calls) == 1:
+                return httpx.Response(429, headers={"Retry-After": "0"})
+            return httpx.Response(200, json=self._ok_body())
+
+        _mock(monkeypatch, handler)
+        import app.llm.openai_compat as compat_module
+
+        sleeps = _patch_retry_sleep(monkeypatch, compat_module)
+        result = await self._provider().generate(_request())
+        assert result.text == "Section 103 answer."
+        assert len(calls) == 2  # one 429, one successful retry
+        assert sleeps == [0.0]
+
+    @pytest.mark.asyncio
+    async def test_429_honors_retry_after_header(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            if len(calls) == 1:
+                return httpx.Response(429, headers={"Retry-After": "2"})
+            return httpx.Response(200, json=self._ok_body())
+
+        _mock(monkeypatch, handler)
+        import app.llm.openai_compat as compat_module
+
+        sleeps = _patch_retry_sleep(monkeypatch, compat_module)
+        result = await self._provider().generate(_request())
+        assert result.text == "Section 103 answer."
+        assert sleeps == [2.0]  # the provider's Retry-After is honored
+
+    @pytest.mark.asyncio
+    async def test_429_persistent_raises_rate_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(429)
+
+        _mock(monkeypatch, handler)
+        import app.llm.openai_compat as compat_module
+
+        sleeps = _patch_retry_sleep(monkeypatch, compat_module)
+        with pytest.raises(LLMRateLimitError) as excinfo:
+            await self._provider().generate(_request())
+        assert excinfo.value.code == "LLM_RATE_LIMITED"
+        assert excinfo.value.status_code == 503
+        assert "rate limiting" in excinfo.value.message
+        assert len(calls) == 3  # initial attempt + 2 retries
+        assert sleeps == [0.5, 1.0]  # exponential backoff, no Retry-After
+
+    @pytest.mark.asyncio
+    async def test_429_retry_after_http_date_capped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from datetime import datetime, timedelta
+        from email.utils import format_datetime
+
+        far_future = format_datetime(datetime.now(tz=UTC) + timedelta(hours=1), usegmt=True)
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(429, headers={"Retry-After": far_future})
+
+        _mock(monkeypatch, handler)
+        import app.llm.openai_compat as compat_module
+
+        sleeps = _patch_retry_sleep(monkeypatch, compat_module)
+        with pytest.raises(LLMRateLimitError):
+            await self._provider().generate(_request())
+        assert sleeps == [5.0, 5.0]  # a huge Retry-After never stalls the stream
+
+    @pytest.mark.asyncio
+    async def test_500_retried_once_then_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(500)
+
+        _mock(monkeypatch, handler)
+        import app.llm.openai_compat as compat_module
+
+        _patch_retry_sleep(monkeypatch, compat_module)
+        with pytest.raises(CloudProviderError) as excinfo:
+            await self._provider().generate(_request())
+        assert excinfo.value.code == "LLM_PROVIDER_UNAVAILABLE"
+        assert "unavailable" in excinfo.value.message
+        assert len(calls) == 2  # 5xx gets one cheap retry, then gives up
+
+    @pytest.mark.asyncio
+    async def test_401_rejected_without_retry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(401)
+
+        _mock(monkeypatch, handler)
+        import app.llm.openai_compat as compat_module
+
+        _patch_retry_sleep(monkeypatch, compat_module)
+        with pytest.raises(CloudProviderError) as excinfo:
+            await self._provider().generate(_request())
+        assert excinfo.value.code == "LLM_PROVIDER_UNAVAILABLE"
+        assert "rejected" in excinfo.value.message
+        assert len(calls) == 1  # a bad key never becomes transient
+
+    @pytest.mark.asyncio
+    async def test_stream_429_before_first_token_retried(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lines = (
+            b'data: {"choices": [{"delta": {"content": "Hello"}}]}\n\n'
+            b'data: {"choices": [{"delta": {"content": " there"}}]}\n\n'
+            b"data: [DONE]\n\n"
+        )
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            if len(calls) == 1:
+                return httpx.Response(429, headers={"Retry-After": "0"})
+            return httpx.Response(200, content=lines, headers={"content-type": "text/event-stream"})
+
+        _mock(monkeypatch, handler)
+        import app.llm.openai_compat as compat_module
+
+        _patch_retry_sleep(monkeypatch, compat_module)
+        chunks = [chunk async for chunk in self._provider().stream(_request())]
+        assert chunks == ["Hello", " there"]
+        assert len(calls) == 2  # retried because no token had been yielded yet
+
+    @pytest.mark.asyncio
+    async def test_timeout_raises_llm_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("read timed out")
+
+        _mock(monkeypatch, handler)
+        with pytest.raises(LLMTimeoutError) as excinfo:
+            await self._provider().generate(_request())
+        assert excinfo.value.code == "LLM_TIMEOUT"
+        assert "timed out" in excinfo.value.message
+
+
 class TestGemini:
     def _provider(self, **overrides: Any) -> GeminiProvider:
         kwargs: dict[str, Any] = {"api_key": "gem-key", "model": "gemini-2.0-flash"}
@@ -174,6 +352,43 @@ class TestGemini:
             await self._provider().generate(_request())
         assert excinfo.value.code == "LLM_PROVIDER_UNAVAILABLE"
         assert "gem-key" not in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_429_retry_then_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            if len(calls) == 1:
+                return httpx.Response(429, headers={"Retry-After": "1"})
+            return httpx.Response(
+                200,
+                json={"candidates": [{"content": {"parts": [{"text": "BNS answer."}]}}]},
+            )
+
+        _mock(monkeypatch, handler)
+        import app.llm.gemini as gemini_module
+
+        sleeps = _patch_retry_sleep(monkeypatch, gemini_module)
+        result = await self._provider().generate(_request())
+        assert result.text == "BNS answer."
+        assert len(calls) == 2
+        assert sleeps == [1.0]
+
+    @pytest.mark.asyncio
+    async def test_429_persistent_raises_rate_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429)
+
+        _mock(monkeypatch, handler)
+        import app.llm.gemini as gemini_module
+
+        sleeps = _patch_retry_sleep(monkeypatch, gemini_module)
+        with pytest.raises(LLMRateLimitError) as excinfo:
+            await self._provider().generate(_request())
+        assert excinfo.value.code == "LLM_RATE_LIMITED"
+        assert "gem-key" not in excinfo.value.message
+        assert len(sleeps) == 2
 
     @pytest.mark.asyncio
     async def test_health_check_rejects_4xx(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -244,9 +459,7 @@ class TestProbe:
         assert health.state is ProviderHealthState.UNAVAILABLE
 
     @pytest.mark.asyncio
-    async def test_model_not_offered_is_degraded(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_model_not_offered_is_degraded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"data": [{"id": "grok-4.6"}]})
 

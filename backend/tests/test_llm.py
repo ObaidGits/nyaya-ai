@@ -7,6 +7,7 @@ Phase 1, so a test double stands in for one.
 
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import UTC
 from typing import Annotated
 
 import pytest
@@ -20,6 +21,7 @@ from app.llm.base import (
     GenerationResult,
     LLMProvider,
     ProviderMetadata,
+    retry_delay,
 )
 from app.llm.registry import (
     ProviderRegistry,
@@ -125,3 +127,36 @@ def test_unregistered_provider_yields_503(app: FastAPI, client: TestClient) -> N
     assert response.status_code == 503
     body = response.json()
     assert body["error"]["code"] == "LLM_PROVIDER_NOT_CONFIGURED"
+
+
+class TestRetryDelay:
+    """Retry-After parsing and bounded backoff (base.py retry policy)."""
+
+    def test_retry_after_seconds_wins(self) -> None:
+        assert retry_delay(1, "2") == 2.0
+
+    def test_retry_after_seconds_capped(self) -> None:
+        assert retry_delay(1, "3600") == 5.0
+
+    def test_retry_after_http_date_parsed_and_capped(self) -> None:
+        from datetime import datetime, timedelta
+        from email.utils import format_datetime
+
+        far_future = format_datetime(datetime.now(tz=UTC) + timedelta(hours=1), usegmt=True)
+        assert retry_delay(1, far_future) == 5.0
+
+    def test_retry_after_in_the_past_is_zero(self) -> None:
+        from datetime import datetime, timedelta
+        from email.utils import format_datetime
+
+        past = format_datetime(datetime.now(tz=UTC) - timedelta(seconds=30), usegmt=True)
+        assert retry_delay(1, past) == 0.0
+
+    def test_garbage_retry_after_falls_back_to_backoff(self) -> None:
+        assert retry_delay(1, "soon") == 0.5
+
+    def test_backoff_is_exponential_and_capped(self) -> None:
+        assert retry_delay(1) == 0.5
+        assert retry_delay(2) == 1.0
+        assert retry_delay(3) == 2.0
+        assert retry_delay(10) == 5.0

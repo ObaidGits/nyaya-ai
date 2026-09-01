@@ -6,7 +6,12 @@ only inside this test module and are not part of the product API.
 """
 
 import pytest
-from app.core.errors import AppError, ErrorDetail
+from app.core.errors import (
+    AppError,
+    ErrorDetail,
+    LLMRateLimitError,
+    LLMTimeoutError,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -24,6 +29,14 @@ def _mount_test_routes(app: FastAPI) -> None:
             code="TEST_APP_ERROR",
             details=[ErrorDetail(location="query", message="explanatory detail")],
         )
+
+    @app.get("/api/v1/_test/rate-limit")
+    async def _rate_limit() -> None:
+        raise LLMRateLimitError()
+
+    @app.get("/api/v1/_test/timeout")
+    async def _timeout() -> None:
+        raise LLMTimeoutError()
 
     @app.get("/api/v1/_test/unexpected")
     async def _unexpected() -> None:
@@ -71,6 +84,42 @@ def test_unexpected_error_does_not_leak_internals(routed_app: FastAPI) -> None:
     assert "secret internal detail" not in response.text
     assert "RuntimeError" not in response.text
     assert response.headers["x-request-id"] == body["error"]["request_id"]
+
+
+def test_llm_rate_limit_error_contract() -> None:
+    """Rate limiting (HTTP 429 upstream) is its own error class, not a
+    generic 503: clients can back off and retry instead of giving up."""
+    exc = LLMRateLimitError()
+    assert isinstance(exc, AppError)
+    assert exc.status_code == 503
+    assert exc.code == "LLM_RATE_LIMITED"
+    assert "rate limiting" in exc.message
+
+
+def test_llm_timeout_error_contract() -> None:
+    exc = LLMTimeoutError()
+    assert isinstance(exc, AppError)
+    assert exc.status_code == 504
+    assert exc.code == "LLM_TIMEOUT"
+    assert "timed out" in exc.message
+
+
+def test_llm_rate_limit_error_uses_error_envelope(routed_app: FastAPI) -> None:
+    client = TestClient(routed_app)
+    response = client.get("/api/v1/_test/rate-limit")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["error"]["code"] == "LLM_RATE_LIMITED"
+    assert body["error"]["request_id"]
+
+
+def test_llm_timeout_error_uses_error_envelope(routed_app: FastAPI) -> None:
+    client = TestClient(routed_app)
+    response = client.get("/api/v1/_test/timeout")
+    assert response.status_code == 504
+    body = response.json()
+    assert body["error"]["code"] == "LLM_TIMEOUT"
+    assert body["error"]["request_id"]
 
 
 def test_unknown_route_uses_error_envelope(client: TestClient) -> None:

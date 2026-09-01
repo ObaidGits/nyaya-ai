@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 import httpx
 
 from app.core.config import Settings
-from app.core.errors import AppError
+from app.core.errors import AppError, LLMTimeoutError
 from app.llm.base import (
     GenerationRequest,
     GenerationResult,
@@ -94,11 +94,23 @@ class OllamaProvider(LLMProvider):
 
     async def generate(self, request: GenerationRequest) -> GenerationResult:
         url = f"{self.base_url}/api/chat"
+        # No retry, deliberately: Ollama is a local single-instance server,
+        # so a connection failure or 5xx is a deployment problem (server
+        # down, model not pulled), not transient upstream load — retrying
+        # only delays the error. Cloud providers retry in their own layers.
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.post(url, json=self._payload(request, stream=False))
                 response.raise_for_status()
                 data = response.json()
+        except httpx.TimeoutException as exc:
+            # A timeout is distinguishable from "unavailable": the server
+            # was reachable but too slow (context too large, model too big).
+            logger.warning(
+                "ollama generation timed out",
+                extra={"error_type": type(exc).__name__, "url": self.base_url},
+            )
+            raise LLMTimeoutError() from exc
         except httpx.HTTPError as exc:
             logger.warning(
                 "ollama generation failed",
@@ -141,6 +153,12 @@ class OllamaProvider(LLMProvider):
                 tail = stream_filter.flush()
                 if tail:
                     yield tail
+        except httpx.TimeoutException as exc:
+            logger.warning(
+                "ollama streaming timed out",
+                extra={"error_type": type(exc).__name__, "url": self.base_url},
+            )
+            raise LLMTimeoutError() from exc
         except httpx.HTTPError as exc:
             logger.warning(
                 "ollama streaming failed",

@@ -97,6 +97,40 @@ class LLMProviderNotConfiguredError(ServiceUnavailableError):
     code = "LLM_PROVIDER_NOT_CONFIGURED"
 
 
+class LLMRateLimitError(AppError):
+    """The generation provider is rate limiting requests (HTTP 429).
+
+    Carries 503 rather than 429 because the upstream limit is the server's,
+    not this client's: the client should retry shortly, not back off as if
+    it had misbehaved. Streams are HTTP 200 anyway — the code is the signal.
+    """
+
+    status_code = 503
+    code = "LLM_RATE_LIMITED"
+
+    def __init__(
+        self,
+        message: str = "The generation provider is rate limiting requests. "
+        "Please try again shortly.",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(message, **kwargs)
+
+
+class LLMTimeoutError(AppError):
+    """The generation provider timed out before responding."""
+
+    status_code = 504
+    code = "LLM_TIMEOUT"
+
+    def __init__(
+        self,
+        message: str = "The generation provider timed out before responding. Please try again.",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(message, **kwargs)
+
+
 _HTTP_CODES = {
     400: "BAD_REQUEST",
     401: "UNAUTHORIZED",

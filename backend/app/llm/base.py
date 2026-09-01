@@ -9,13 +9,74 @@ provider registry in later phases and selected through configuration
 This module intentionally contains no generation, citation or retrieval logic.
 """
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from enum import StrEnum
 
 from pydantic import BaseModel
 
 from app.domain.models import MessageRole
+
+# --- Transient provider-failure retry policy (D-034/D-080) ----------------
+#
+# Cloud generation endpoints — the Groq free tier especially — answer a
+# large share of requests with HTTP 429. These constants define the bounded
+# retry every cloud provider applies before surfacing an error. Sleeps are
+# capped per attempt so a hostile Retry-After cannot stall a request far
+# beyond its own timeout budget; worst-case added latency is ~15 s.
+
+#: HTTP 429 (rate limit): retry twice — three attempts total.
+RATE_LIMIT_MAX_RETRIES = 2
+#: HTTP 5xx (provider-side fault): one cheap retry recovers transient
+#: gateway/model-server failures without hiding a broken provider behind
+#: a retry storm.
+SERVER_ERROR_MAX_RETRIES = 1
+#: Hard cap on any single retry sleep (seconds).
+RETRY_SLEEP_CAP_SECONDS = 5.0
+#: Exponential backoff base when no Retry-After header is present.
+_RETRY_BACKOFF_BASE_SECONDS = 0.5
+
+
+def _parse_retry_after(header: str | None) -> float | None:
+    """Parse a Retry-After header (delta-seconds or HTTP-date) to seconds.
+
+    Returns ``None`` when the header is absent or unparseable, so callers
+    can fall back to exponential backoff.
+    """
+    if not header:
+        return None
+    value = header.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return (when - datetime.now(tz=UTC)).total_seconds()
+
+
+def retry_delay(attempt: int, retry_after_header: str | None = None) -> float:
+    """Seconds to sleep before retry attempt ``attempt`` (1-based).
+
+    A parseable ``Retry-After`` wins; otherwise exponential backoff
+    (0.5 s, 1 s, 2 s, ...). Both are capped at
+    :data:`RETRY_SLEEP_CAP_SECONDS`; a past HTTP-date clamps to zero.
+    """
+    if retry_after_header:
+        parsed = _parse_retry_after(retry_after_header)
+        if parsed is not None:
+            return max(0.0, min(parsed, RETRY_SLEEP_CAP_SECONDS))
+    return min(RETRY_SLEEP_CAP_SECONDS, _RETRY_BACKOFF_BASE_SECONDS * 2.0 ** (attempt - 1))
+
+
+async def retry_sleep(seconds: float) -> None:
+    """Retry-loop sleep. Indirection seam so tests can observe delays."""
+    await asyncio.sleep(seconds)
 
 
 class ProviderHealthState(StrEnum):
@@ -109,9 +170,7 @@ class LLMProvider(ABC):
         healthy = await self.health_check()
         meta = self.metadata()
         return ProviderHealth(
-            state=ProviderHealthState.HEALTHY
-            if healthy
-            else ProviderHealthState.UNAVAILABLE,
+            state=ProviderHealthState.HEALTHY if healthy else ProviderHealthState.UNAVAILABLE,
             provider=meta.provider,
             model=meta.model,
             detail="" if healthy else "provider unreachable or not configured",
