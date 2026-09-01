@@ -40,3 +40,6 @@ backend/.coverage
 # Local deployment logs (transient build output)
 deploy.log
 .gemini/
+
+# Local evaluation run artifacts (results/<timestamp>.json)
+eval/results/
