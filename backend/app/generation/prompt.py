@@ -22,7 +22,10 @@ STRICT RULES:
    [{act_short} s.{section}] or [{act_short} s.{section}({subsection})],
    using the act short code and section numbers exactly as they appear in the
    evidence blocks. Statements sourced from the user's uploaded document must
-   cite it as [Document <id> p.<page>].
+   cite it as [Document <id> p.<page>]. For example, if the evidence block is
+   headed [BNS s.103], the answer must say: "Whoever commits murder shall be
+   punished with death [BNS s.103]." An answer without inline citations in
+   this form is invalid and will be discarded.
 3. Quote statutory wording from the evidence verbatim when precision matters.
 4. Do NOT invent sections, citations, quotations, or legal facts. If the
    evidence does not contain the answer, reply exactly:
