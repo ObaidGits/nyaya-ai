@@ -179,6 +179,7 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
     Object.entries(view.secrets).map(([key, value]) => [key, value === 'set']),
   )
   const secretSources = view.secret_sources ?? {}
+  const valueSources = view.value_sources ?? {}
 
   return (
     <div className="min-h-dvh bg-ink-50 dark:bg-ink-950">
@@ -276,6 +277,7 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
             secrets={draftSecrets}
             secretSet={secretSet}
             secretSources={secretSources}
+            valueSources={valueSources}
             secretCleared={Object.fromEntries(clearedSecrets.map((key) => [key, true]))}
             providers={view.llm_providers}
             onValueChange={onValueChange}

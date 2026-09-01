@@ -7,12 +7,15 @@ Persists the admin-configurable subset of application settings as JSON with
 2. Persisted admin configuration (this store)
 3. Runtime application configuration
 
-Secrets (API keys) live in a separate section of the same file — never
-returned by GET settings, never logged, always masked in the UI. A secret
-saved through the console WINS over an environment-provided value (D-090):
-the admin console is the authoritative place to rotate provider keys, and a
-deployment-time env key is only the bootstrap default. Secrets stored in the
-environment remain masked in every response either way.
+The persisted file is SECRET-FREE by construction: API keys entered in the
+console live in memory for the running process only and are never written to
+disk (no plaintext secrets at rest). A console key still WINS over an
+environment-provided value while that process runs (D-090): the admin console
+is the authoritative place to rotate provider keys, and a deployment-time env
+key is only the bootstrap default — which is also what applies again after a
+restart, because the console key does not survive one. A legacy file that
+still contains plaintext secrets is migrated on first load: the secrets are
+adopted for the current process and scrubbed from the file immediately.
 """
 
 from __future__ import annotations
@@ -65,7 +68,8 @@ EDITABLE_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-#: Secret settings (API keys). Persisted server-side only, masked in reads.
+#: Secret settings (API keys). Session-only (in memory), never on disk,
+#: masked in reads.
 SECRET_FIELDS: frozenset[str] = frozenset(
     {
         "llm_api_key",
@@ -80,31 +84,53 @@ class AdminSettingsStore:
 
     def __init__(self, path: str) -> None:
         self._path = Path(path)
+        # Console-entered secrets for THIS process only (never persisted —
+        # the on-disk file must stay secret-free at all times).
+        self._runtime_secrets: dict[str, str] = {}
 
     @property
     def path(self) -> Path:
         return self._path
 
     def load(self) -> dict[str, dict[str, Any]]:
-        """Return {"settings": ..., "secrets": ..., "corpus": ...}."""
+        """Return {"settings": ..., "secrets": ..., "corpus": ...}.
+
+        ``secrets`` are the session secrets (console-entered in this process,
+        or adopted from a legacy plaintext file during migration) — they are
+        never read back from disk. A legacy file that still contains
+        plaintext secrets is rewritten without them immediately; the values
+        keep working for the current process only.
+        """
         # Empty path (persistence disabled) or a directory: no stored state.
         if not self._path.name or not self._path.is_file():
-            return {"settings": {}, "secrets": {}, "corpus": {}}
+            return {"settings": {}, "secrets": dict(self._runtime_secrets), "corpus": {}}
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             logger.warning("admin settings file unreadable; ignoring")
-            return {"settings": {}, "secrets": {}, "corpus": {}}
+            return {"settings": {}, "secrets": dict(self._runtime_secrets), "corpus": {}}
         settings = {
             key: value
             for key, value in (raw.get("settings") or {}).items()
             if key in EDITABLE_FIELDS
         }
-        secrets = {
-            key: value for key, value in (raw.get("secrets") or {}).items() if key in SECRET_FIELDS
+        legacy_secrets = {
+            key: value
+            for key, value in (raw.get("secrets") or {}).items()
+            if key in SECRET_FIELDS and value
         }
         corpus = raw.get("corpus") if isinstance(raw.get("corpus"), dict) else {}
-        return {"settings": settings, "secrets": secrets, "corpus": corpus}
+        if legacy_secrets:
+            # Migration (no-plaintext-at-rest): adopt the legacy secrets for
+            # this process and scrub them from the file on disk right away.
+            self._runtime_secrets.update(legacy_secrets)
+            self._write(settings, corpus)
+            logger.info(
+                "removed plaintext secrets from %s; adopted for this process only "
+                "(a restart falls back to the environment values)",
+                self._path,
+            )
+        return {"settings": settings, "secrets": dict(self._runtime_secrets), "corpus": corpus}
 
     def save(
         self,
@@ -112,20 +138,23 @@ class AdminSettingsStore:
         secrets: dict[str, Any],
         corpus: dict[str, Any] | None = None,
     ) -> None:
-        """Persist whitelisted settings/secrets/corpus atomically.
+        """Persist whitelisted non-secret settings (+ corpus manifest) atomically.
 
-        A store with an empty path is a no-op (persistence disabled): changes
-        apply in-memory only and do not survive restart.
+        Secrets are session-only: they replace the in-memory store and are
+        never written to disk. A store with an empty path skips the disk
+        write (persistence disabled); changes then apply in-memory only.
         """
+        self._runtime_secrets = {
+            key: value for key, value in secrets.items() if key in SECRET_FIELDS and value
+        }
         if not str(self._path) or not self._path.name:
             return
         clean_settings = {k: v for k, v in settings.items() if k in EDITABLE_FIELDS}
-        clean_secrets = {k: v for k, v in secrets.items() if k in SECRET_FIELDS and v}
-        payload = {
-            "settings": clean_settings,
-            "secrets": clean_secrets,
-            "corpus": corpus or {},
-        }
+        self._write(clean_settings, corpus or {})
+
+    def _write(self, settings: dict[str, Any], corpus: dict[str, Any]) -> None:
+        """Atomic file write — the payload never contains secrets."""
+        payload = {"settings": settings, "secrets": {}, "corpus": corpus}
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -135,11 +164,10 @@ class AdminSettingsStore:
     def apply_overrides(self, base: Settings) -> Settings:
         """Merge persisted values over the environment-provided settings.
 
-        A secret saved through the console overrides an environment-provided
-        value (D-090): the console is the authoritative place to rotate
-        provider keys, the env value is the bootstrap default. An activated
-        replacement corpus (``corpus.path``) overrides the environment's
-        corpus path until a new corpus is activated.
+        Persisted console settings (non-secret fields) override the
+        environment; a session secret overrides an environment-provided key
+        (D-090). An activated replacement corpus (``corpus.path``) overrides
+        the environment's corpus path until a new corpus is activated.
         """
         persisted = self.load()
         merged: dict[str, Any] = dict(persisted["settings"])
@@ -153,12 +181,35 @@ class AdminSettingsStore:
         if corpus_path:
             merged["retrieval_corpus_path"] = corpus_path
         if not merged:
+            self._log_effective(base, overridden=[])
             return base
         try:
-            return Settings(**{**base.model_dump(), **merged})
+            effective = Settings(**{**base.model_dump(), **merged})
         except Exception:
             logger.warning("persisted admin settings invalid; using environment settings")
+            self._log_effective(base, overridden=[])
             return base
+        self._log_effective(effective, overridden=sorted(persisted["settings"]))
+        return effective
+
+    def _log_effective(self, settings: Settings, overridden: list[str]) -> None:
+        """Startup honesty line: state what actually runs and where it came from.
+
+        The environment (.env / compose) can silently disagree with the
+        persisted console configuration — this line makes that drift visible
+        instead of leaving a stale LLM_* env triple to be misread as the
+        runtime config. Secret VALUES are never logged.
+        """
+        source = "admin console (persisted)" if overridden else "environment"
+        extra = f"; overrides env for: {', '.join(overridden)}" if overridden else ""
+        logger.info(
+            "effective LLM config: provider=%s model=%s base_url=%s (source: %s%s)",
+            settings.llm_provider,
+            settings.llm_model,
+            settings.llm_base_url,
+            source,
+            extra,
+        )
 
 
 def mask_secret(value: str | None) -> str:

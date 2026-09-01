@@ -34,6 +34,7 @@ const SETTINGS_VIEW = {
     chat_history_max_turns: 20,
   },
   secrets: { llm_api_key: 'set', speech_stt_api_key: '', speech_tts_api_key: '' },
+  value_sources: { llm_provider: 'env' },
   persisted: [],
   llm_providers: [
     {
@@ -299,6 +300,20 @@ describe('AdminPanel settings', () => {
     expect(
       screen.getByText(/bootstrap default — saving a key here overrides it/),
     ).toBeTruthy()
+  })
+
+  it('marks a console-saved setting as overriding the env default (D-090)', async () => {
+    stubAdmin({
+      'GET /api/v1/admin/settings': () =>
+        jsonResponse({
+          ...SETTINGS_VIEW,
+          value_sources: { ...SETTINGS_VIEW.value_sources, llm_timeout_seconds: 'console' },
+        }),
+    })
+    render(<Harness />)
+    await screen.findByText('AI / LLM provider')
+    // Only the console-saved field shows the override notice (once).
+    expect(screen.getAllByText(/Saved in the admin console/).length).toBe(1)
   })
 
   it('masks secrets and never displays stored values', async () => {

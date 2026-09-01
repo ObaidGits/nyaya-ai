@@ -135,6 +135,8 @@ class TestAdminSettings:
     def test_secret_never_echoed_and_file_restricted(
         self, client: TestClient, tmp_path: Path
     ) -> None:
+        import json
+
         login(client)
         response = client.put(
             "/api/v1/admin/settings",
@@ -147,6 +149,14 @@ class TestAdminSettings:
         # Masked in the response.
         assert response.json()["secrets"]["llm_api_key"] == "set"
         assert "sk-super-secret" not in response.text
+        # NEVER written to disk: the persisted file is secret-free (raw text
+        # check — no plaintext key anywhere in it, not just in "secrets").
+        raw = (tmp_path / "admin.json").read_text()
+        assert "sk-super-secret" not in raw
+        assert json.loads(raw)["secrets"] == {}
+        # But effective for the running process.
+        assert client.app.state.settings.llm_api_key is not None
+        assert client.app.state.settings.llm_api_key.get_secret_value() == "sk-super-secret"
         # Stored with 0600 permissions.
         assert ((tmp_path / "admin.json").stat().st_mode & 0o777) == 0o600
 
@@ -196,6 +206,23 @@ class TestAdminSettings:
         login(client)
         body = client.get("/api/v1/admin/settings").json()
         assert body["secret_sources"]["llm_api_key"] == ""
+
+    def test_value_sources_reported(self, client: TestClient) -> None:
+        """The view must say, per editable field, whether the effective value
+        comes from the console ("console") or the environment ("env") — the
+        honest answer to 'the env says one provider, the app runs another'."""
+        login(client)
+        body = client.get("/api/v1/admin/settings").json()
+        assert set(body["value_sources"]) == set(body["values"])
+        assert body["value_sources"]["llm_provider"] == "env"
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {"rate_limit_chat_per_minute": 6}, "force": True},
+            headers=MUTATING,
+        )
+        body = client.get("/api/v1/admin/settings").json()
+        assert body["value_sources"]["rate_limit_chat_per_minute"] == "console"
+        assert body["value_sources"]["llm_provider"] == "env"
 
     def test_unknown_llm_provider_rejected(self, client: TestClient) -> None:
         login(client)
@@ -645,9 +672,7 @@ class TestLlmConnectionTest:
         )
         assert response.status_code == 200
         assert response.json()["success"] is True
-        assert (
-            captured["settings"].llm_api_key.get_secret_value() == "sk-saved-once"
-        )
+        assert captured["settings"].llm_api_key.get_secret_value() == "sk-saved-once"
 
     def test_model_not_offered_reported(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -912,9 +937,7 @@ class TestSecretLifecycle:
                 json={"values": {}, "secrets": {"llm_api_key": "sk-console"}, "force": True},
                 headers=MUTATING,
             )
-            assert (
-                client.app.state.settings.llm_api_key.get_secret_value() == "sk-console"
-            )
+            assert client.app.state.settings.llm_api_key.get_secret_value() == "sk-console"
             client.put(
                 "/api/v1/admin/settings",
                 json={"values": {}, "clear_secrets": ["llm_api_key"], "force": True},
@@ -934,6 +957,113 @@ class TestSecretLifecycle:
         assert response.json()["error"]["code"] == "SETTINGS_INVALID"
 
 
+class TestNoPlaintextSecretPersistence:
+    """Security contract: the persisted admin.json NEVER contains a secret.
+
+    Console-entered keys live in memory for the running process only; the
+    on-disk file is secret-free by construction, and a legacy file with a
+    plaintext key is migrated (scrubbed) on first load.
+    """
+
+    def test_saved_key_never_reaches_disk(self, client: TestClient, tmp_path: Path) -> None:
+        import json
+
+        login(client)
+        response = client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "secrets": {"llm_api_key": "sk-plaintext-bait"}, "force": True},
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        # Strong assertion: the RAW file bytes contain no trace of the key.
+        raw = (tmp_path / "admin.json").read_text()
+        assert "sk-plaintext-bait" not in raw
+        assert "secrets" not in raw or json.loads(raw)["secrets"] == {}
+        # ...and the key is still effective for the running process.
+        assert client.app.state.settings.llm_api_key is not None
+        assert client.app.state.settings.llm_api_key.get_secret_value() == "sk-plaintext-bait"
+
+    def test_later_saves_stay_secret_free(self, client: TestClient, tmp_path: Path) -> None:
+        """Corpus activation / memory updates rewrite the file; a key saved
+        earlier must not leak into any of those rewrites."""
+        import json
+
+        login(client)
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "secrets": {"llm_api_key": "sk-keep-out"}, "force": True},
+            headers=MUTATING,
+        )
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {"rate_limit_chat_per_minute": 11}},
+            headers=MUTATING,
+        )
+        client.put(
+            "/api/v1/admin/memory",
+            json={"chat_history_max_turns": 9},
+            headers=MUTATING,
+        )
+        raw = (tmp_path / "admin.json").read_text()
+        assert "sk-keep-out" not in raw
+        stored = json.loads(raw)
+        assert stored["secrets"] == {}
+        assert stored["settings"]["rate_limit_chat_per_minute"] == 11
+        assert stored["settings"]["chat_history_max_turns"] == 9
+        # The key remains effective in memory after the rewrites.
+        assert client.app.state.settings.llm_api_key.get_secret_value() == "sk-keep-out"
+
+    def test_legacy_plaintext_key_migrated_on_load(self, tmp_path: Path) -> None:
+        """A pre-existing admin.json with a plaintext key: the key keeps
+        working for the booted process, and the file is scrubbed on disk
+        IMMEDIATELY (not on next save). Other persisted state survives."""
+        import json
+
+        path = tmp_path / "admin.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "settings": {"llm_provider": "groq", "llm_model": "openai/gpt-oss-120b"},
+                    "secrets": {"llm_api_key": "sk-legacy-plaintext"},
+                    "corpus": {"sha256": "deadbeef", "artifact_path": "/tmp/x.jsonl"},
+                }
+            )
+        )
+        app = create_app(settings=make_settings(tmp_path))
+        # Effective for this process: settings AND the migrated key.
+        assert app.state.settings.llm_provider == "groq"
+        assert app.state.settings.llm_api_key is not None
+        assert app.state.settings.llm_api_key.get_secret_value() == "sk-legacy-plaintext"
+        assert app.state.settings.retrieval_corpus_path == "/tmp/x.jsonl"
+        # Scrubbed from disk immediately; other state preserved.
+        raw = path.read_text()
+        assert "sk-legacy-plaintext" not in raw
+        stored = json.loads(raw)
+        assert stored["secrets"] == {}
+        assert stored["settings"]["llm_provider"] == "groq"
+        assert stored["corpus"]["sha256"] == "deadbeef"
+        # A fresh process (new store) sees no secrets at all.
+        from app.admin.store import AdminSettingsStore
+
+        assert AdminSettingsStore(str(path)).load()["secrets"] == {}
+
+    def test_masked_secret_response_shape(self, client: TestClient) -> None:
+        """The API only ever reports set/empty + the source — never a value,
+        not even a masked hint that embeds key material."""
+        login(client)
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "secrets": {"llm_api_key": "sk-shape-check"}, "force": True},
+            headers=MUTATING,
+        )
+        body = client.get("/api/v1/admin/settings").json()
+        assert set(body["secrets"]) == {"llm_api_key", "speech_stt_api_key", "speech_tts_api_key"}
+        assert body["secrets"]["llm_api_key"] == "set"
+        assert body["secret_sources"]["llm_api_key"] == "console"
+        assert body["secrets_persisted"] is False
+        assert "sk-shape-check" not in str(body)
+
+
 class TestPersistencePrecedence:
     def test_persisted_settings_survive_rebuild(self, tmp_path: Path) -> None:
         with TestClient(create_app(settings=make_settings(tmp_path))) as client:
@@ -949,10 +1079,10 @@ class TestPersistencePrecedence:
             values = client.get("/api/v1/admin/settings").json()["values"]
             assert values["rate_limit_speech_per_minute"] == 3
 
-    def test_console_secret_wins_over_env(self, tmp_path: Path) -> None:
-        """D-090 (supersedes the old env-wins rule): a console-saved key is
-        the authoritative value; the environment key is the bootstrap
-        default used only until one is saved."""
+    def test_console_secret_is_session_only(self, tmp_path: Path) -> None:
+        """Console-saved keys are held in memory ONLY (never on disk). They
+        win over env for the running process (D-090), but a restart reverts
+        to the environment value because the persisted file is secret-free."""
         with TestClient(create_app(settings=make_settings(tmp_path))) as client:
             login(client)
             client.put(
@@ -960,7 +1090,11 @@ class TestPersistencePrecedence:
                 json={"values": {}, "secrets": {"llm_api_key": "from-console"}, "force": True},
                 headers=MUTATING,
             )
-        # Restart with an env-provided secret: the console key must win.
+            assert client.app.state.settings.llm_api_key.get_secret_value() == "from-console"
+            assert "from-console" not in (tmp_path / "admin.json").read_text()
+        # Restart with an env-provided secret: the env key is effective again
+        # (documented restart behaviour — env is the bootstrap AND the
+        # fallback; console keys do not survive a restart).
         env_settings = Settings(
             _env_file=None,
             admin_username=ADMIN["username"],
@@ -970,7 +1104,48 @@ class TestPersistencePrecedence:
         )
         app = create_app(settings=env_settings)
         assert app.state.settings.llm_api_key is not None
-        assert app.state.settings.llm_api_key.get_secret_value() == "from-console"
+        assert app.state.settings.llm_api_key.get_secret_value() == "sk-from-env"
+
+    def test_persisted_non_secret_settings_survive_restart(self, tmp_path: Path) -> None:
+        """Only SECRETS are session-only: provider/model stay persisted and
+        keep winning over env after a restart (that is the drift the source
+        reporting exists to explain)."""
+        with TestClient(create_app(settings=make_settings(tmp_path))) as client:
+            login(client)
+            client.put(
+                "/api/v1/admin/settings",
+                json={
+                    "values": {"llm_provider": "groq", "llm_model": "openai/gpt-oss-120b"},
+                    "force": True,  # offline save: the persistence rule is under test
+                },
+                headers=MUTATING,
+            )
+        app = create_app(settings=make_settings(tmp_path))
+        assert app.state.settings.llm_provider == "groq"
+        assert app.state.settings.llm_model == "openai/gpt-oss-120b"
+
+    def test_effective_config_logged_with_source(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Startup honesty (config-drift fix): booting with persisted console
+        settings logs the EFFECTIVE provider/model and names the source, so a
+        stale env LLM_* triple can never be misread as the runtime config."""
+        import logging
+
+        from app.admin.store import AdminSettingsStore
+
+        store = AdminSettingsStore(str(tmp_path / "admin.json"))
+        store.save({"llm_provider": "groq", "llm_model": "openai/gpt-oss-120b"}, {})
+        base = Settings(_env_file=None, llm_provider="ollama", llm_model="llama3.1:8b")
+        with caplog.at_level(logging.INFO, logger="app.admin.store"):
+            effective = store.apply_overrides(base)
+        assert effective.llm_provider == "groq"
+        messages = " ".join(record.message for record in caplog.records)
+        assert "effective LLM config" in messages
+        assert "provider=groq" in messages
+        assert "model=openai/gpt-oss-120b" in messages
+        assert "admin console" in messages
+        assert "llm_provider" in messages  # names the overridden fields
 
     def test_empty_path_store_is_noop_not_crash(self, tmp_path: Path) -> None:
         """QA regression: AdminSettingsStore("") must no-op (persistence

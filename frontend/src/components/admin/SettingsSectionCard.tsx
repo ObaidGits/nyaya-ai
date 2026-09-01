@@ -21,6 +21,8 @@ interface Props {
   secrets: Secrets
   secretSet: Record<string, boolean>
   secretSources: Record<string, string>
+  /** Where each editable setting's effective value comes from: "env" | "console". */
+  valueSources: Record<string, string>
   /** Keys with a pending explicit removal. */
   secretCleared: Record<string, boolean>
   providers: LlmProviderInfo[]
@@ -31,6 +33,17 @@ interface Props {
 
 const inputClass =
   'mt-1 w-full rounded-lg border border-ink-300 bg-white px-3 py-2 text-sm outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-600/30 dark:border-ink-700 dark:bg-ink-950'
+
+/** Console-saved settings override the environment default (D-090); the
+ * env default is silent so only real overrides are surfaced. */
+function SourceHint({ source }: { source: string }) {
+  if (source !== 'console') return null
+  return (
+    <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+      Saved in the admin console — overrides the environment default.
+    </p>
+  )
+}
 
 function NumberField({
   field,
@@ -111,6 +124,7 @@ export function SettingsSectionCard({
   secrets,
   secretSet,
   secretSources,
+  valueSources,
   secretCleared,
   providers,
   onValueChange,
@@ -273,6 +287,7 @@ export function SettingsSectionCard({
                     onChange={(e) => onValueChange(field.key, e.target.value)}
                     className={inputClass}
                   />
+                  <SourceHint source={valueSources[field.key] ?? ''} />
                   {field.help && (
                     <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">{field.help}</p>
                   )}
@@ -357,6 +372,7 @@ export function SettingsSectionCard({
                       {modelsMessage}
                     </p>
                   )}
+                  <SourceHint source={valueSources[field.key] ?? ''} />
                   {field.help && (
                     <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">{field.help}</p>
                   )}
@@ -385,6 +401,7 @@ export function SettingsSectionCard({
                     value={Boolean(values[field.key])}
                     onChange={(v) => onValueChange(field.key, v)}
                   />
+                  <SourceHint source={valueSources[field.key] ?? ''} />
                 </div>
               )
             }
@@ -438,6 +455,7 @@ export function SettingsSectionCard({
                     onChange={(v) => onValueChange(field.key, v)}
                   />
                 )}
+                <SourceHint source={valueSources[field.key] ?? ''} />
                 {field.help && (
                   <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">{field.help}</p>
                 )}

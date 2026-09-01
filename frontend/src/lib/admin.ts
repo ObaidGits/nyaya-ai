@@ -33,6 +33,8 @@ export interface AdminSettingsView {
   secrets: Record<string, string>
   /** Where each secret's effective value comes from: "env" | "console" | "". */
   secret_sources: Record<string, string>
+  /** Where each editable setting's effective value comes from: "env" | "console". */
+  value_sources: Record<string, string>
   persisted: string[]
   llm_providers: LlmProviderInfo[]
 }

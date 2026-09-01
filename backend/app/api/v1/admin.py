@@ -52,10 +52,11 @@ AdminMutatingDep = Annotated[None, Depends(_admin_required_mutating)]
 def _secret_sources(request: Request, persisted: dict[str, Any]) -> dict[str, str]:
     """Where each secret's effective value comes from: "console" | "env" | "".
 
-    A secret saved through the console wins (D-090) — the console is the
-    authoritative place to rotate provider keys. The environment value is the
-    bootstrap default, used only until a console key is saved (and again if
-    the console key is explicitly removed).
+    A secret saved through the console wins for the RUNNING process (D-090)
+    — the console is the authoritative place to rotate provider keys — but
+    it is held in memory only and does not survive a restart; the
+    environment value (the bootstrap default) applies again after one, and
+    when a console secret is explicitly removed.
     """
     env_settings: Settings = getattr(request.app.state, "env_settings", request.app.state.settings)
     sources: dict[str, str] = {}
@@ -72,7 +73,14 @@ def _secret_sources(request: Request, persisted: dict[str, Any]) -> dict[str, st
 def _settings_view(
     settings: Settings, store: AdminSettingsStore, request: Request
 ) -> dict[str, Any]:
-    """Public (masked) view of the effective settings + which fields are editable."""
+    """Public (masked) view of the effective settings + which fields are editable.
+
+    ``value_sources`` states, per editable field, whether the effective value
+    comes from the persisted console configuration ("console") or the
+    environment ("env") — the console wins (D-090), so a stale env value can
+    never masquerade as the runtime config. ``secrets_persisted`` documents
+    that console-entered keys are session-only (never written to disk).
+    """
     persisted = store.load()
     values: dict[str, Any] = {}
     for key in sorted(EDITABLE_FIELDS):
@@ -80,8 +88,13 @@ def _settings_view(
     secrets = {key: mask_secret(getattr(settings, key, None)) for key in sorted(SECRET_FIELDS)}
     return {
         "values": values,
+        "value_sources": {
+            key: "console" if key in persisted["settings"] else "env"
+            for key in sorted(EDITABLE_FIELDS)
+        },
         "secrets": secrets,  # "set" | "" — never the value
         "secret_sources": _secret_sources(request, persisted),
+        "secrets_persisted": False,  # console keys are memory-only
         "persisted": sorted(persisted["settings"]),
         "llm_providers": request_llm_providers(),
     }
@@ -214,8 +227,11 @@ class UpdateSettingsRequest(BaseModel):
     """Field-by-field partial update; unknown keys are rejected.
 
     Empty secret strings mean "unchanged" (the UI never echoes values back);
-    ``clear_secrets`` is the explicit removal path. ``force`` skips the
-    provider verification gate for deliberate offline saves.
+    ``clear_secrets`` is the explicit removal path. Submitted secrets are
+    held in memory for the running process only — they are never persisted
+    and do not survive a restart (set them in the environment for that).
+    ``force`` skips the provider verification gate for deliberate offline
+    saves.
     """
 
     values: dict[str, Any] = Field(default_factory=dict)
@@ -237,16 +253,13 @@ async def update_settings(
 ) -> dict[str, Any]:
     store = _store(request)
     current: Settings = request.app.state.settings
-    env_settings: Settings = getattr(
-        request.app.state, "env_settings", request.app.state.settings
-    )
+    env_settings: Settings = getattr(request.app.state, "env_settings", request.app.state.settings)
 
     unknown = (set(body.values) | set(body.secrets)) - EDITABLE_FIELDS - SECRET_FIELDS
     unknown_clear = set(body.clear_secrets) - SECRET_FIELDS
     if unknown or unknown_clear:
         raise AppError(
-            "Unknown or read-only settings: "
-            f"{', '.join(sorted(unknown | unknown_clear))}.",
+            f"Unknown or read-only settings: {', '.join(sorted(unknown | unknown_clear))}.",
             status_code=422,
             code="SETTINGS_INVALID",
         )
@@ -308,9 +321,7 @@ async def update_settings(
     # previously working provider stays active. `force` is the explicit
     # escape hatch for deliberate offline saves.
     candidate_dump = candidate.model_dump()
-    llm_changed = any(
-        candidate_dump[field] != base_dump.get(field) for field in _LLM_VERIFY_FIELDS
-    )
+    llm_changed = any(candidate_dump[field] != base_dump.get(field) for field in _LLM_VERIFY_FIELDS)
     if llm_changed and not body.force:
         try:
             candidate_provider = registry.create(candidate.llm_provider, candidate)
