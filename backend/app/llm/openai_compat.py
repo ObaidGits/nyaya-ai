@@ -202,7 +202,8 @@ class OpenAICompatibleProvider(LLMProvider):
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 response = await client.get(f"{self._base_url}/models", headers=self._headers())
-                return response.status_code < 500
+                # 4xx means a bad/missing key or model — NOT reachable.
+                return response.status_code == 200
         except httpx.HTTPError:
             return False
 

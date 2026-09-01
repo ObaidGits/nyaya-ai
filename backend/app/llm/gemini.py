@@ -166,7 +166,8 @@ class GeminiProvider(LLMProvider):
                     f"{self._base_url}/models",
                     params={"key": self._api_key},
                 )
-                return response.status_code < 500
+                # 4xx means a bad/missing key or model — NOT reachable.
+                return response.status_code == 200
         except httpx.HTTPError:
             return False
 

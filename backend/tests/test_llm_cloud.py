@@ -120,6 +120,25 @@ class TestOpenAICompatible:
         assert meta.model == "gpt-4o-mini"
         assert meta.supports_streaming is True
 
+    @pytest.mark.asyncio
+    async def test_health_check_rejects_4xx(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A 401 (bad key) is NOT reachable — the console must not report
+        success for a provider whose credentials are wrong."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401)
+
+        _mock(monkeypatch, handler)
+        assert await self._provider().health_check() is False
+
+    @pytest.mark.asyncio
+    async def test_health_check_ok_on_200(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"data": []})
+
+        _mock(monkeypatch, handler)
+        assert await self._provider().health_check() is True
+
 
 class TestGemini:
     def _provider(self, **overrides: Any) -> GeminiProvider:
@@ -155,6 +174,24 @@ class TestGemini:
             await self._provider().generate(_request())
         assert excinfo.value.code == "LLM_PROVIDER_UNAVAILABLE"
         assert "gem-key" not in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_health_check_rejects_4xx(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A 403 from Google (bad/missing key) is NOT reachable."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(403)
+
+        _mock(monkeypatch, handler)
+        assert await self._provider().health_check() is False
+
+    @pytest.mark.asyncio
+    async def test_health_check_ok_on_200(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"models": []})
+
+        _mock(monkeypatch, handler)
+        assert await self._provider().health_check() is True
 
 
 class TestRegistry:
