@@ -31,6 +31,7 @@ import logging
 from collections.abc import Callable
 
 from app.domain.models import MessageRole
+from app.language.acts import mentioned_acts, replace_act_mentions
 from app.language.detection import detect_language
 from app.language.models import LANGUAGE_NAMES, LanguageCode
 from app.llm.base import ChatMessage, GenerationRequest, LLMProvider
@@ -58,8 +59,11 @@ _TRANSLATION_SYSTEM_PROMPT = (
     "You are a deterministic translation engine for search queries. "
     "Translate the user's message into English. Output ONLY the English "
     "translation — no explanations, no answers, no added content. Keep all "
-    "numbers, section numbers, and identifiers exactly as written. If the "
-    "message is already in English, output it unchanged."
+    "numbers, section numbers, and identifiers exactly as written. Statute "
+    "names are identifiers too: keep the act the user named (for example "
+    "'Bharatiya Nyaya Sanhita' / 'भारतीय न्याय संहिता' stays 'Bharatiya Nyaya "
+    "Sanhita') — never substitute, modernize, or replace one act with a "
+    "different one. If the message is already in English, output it unchanged."
 )
 
 
@@ -70,8 +74,12 @@ def _language_instruction(language: LanguageCode) -> str:
         "Keep every citation label exactly as it appears in the evidence "
         "(for example [BNS s.103] or [Document <id> p.2]): never translate, "
         "reorder, or alter citation labels, act short codes, section "
-        "numbers, or page numbers. When referring to a section, include the "
-        "section number in the sentence."
+        "numbers, or page numbers. When referring to a section, ALWAYS "
+        "write the section number in the sentence itself, immediately "
+        "before the citation label — for example in Hindi: 'धारा 303 "
+        "चोरी से संबंधित है [BNS s.303]' — a label alone on a sentence that "
+        "never names the section number fails validation and the answer "
+        "is discarded."
     )
 
 
@@ -155,7 +163,54 @@ class LanguageService:
                 extra={"event": "language_translation_invalid", "language": source.value},
             )
             return None
-        return translated
+        return self._repair_act_names(message, translated)
+
+    @staticmethod
+    def _repair_act_names(original: str, translated: str) -> str:
+        """Deterministic statute-name fidelity check (D-094).
+
+        A small translation model sometimes re-brands the act the user
+        named — "भारतीय न्याय संहिता" becomes "Indian Penal Code". The
+        retrieval layer's foreign-statute guard then correctly fails
+        closed on a statute the user never asked about, refusing an
+        in-scope question. The prompt forbids this, but prompts are
+        advisory: this check is code. When the translation mentions a
+        statute the original does not (and the original named one), the
+        substituted mention is rewritten back to the original act's
+        canonical English name; when the translation dropped the act
+        entirely, the canonical name is appended so routing and retrieval
+        still see the authority the user asked about.
+        """
+        original_acts = mentioned_acts(original)
+        translated_acts = mentioned_acts(translated)
+        if not original_acts or original_acts == translated_acts:
+            return translated
+
+        introduced = translated_acts - original_acts
+        missing = [act for act in original_acts if act not in translated_acts]
+        if not missing:
+            # The original acts all survived; extra mentions would be
+            # additive content the model produced — leave translation as-is
+            # only when nothing is missing, else repair below.
+            return translated
+
+        repaired = translated
+        if introduced:
+            # Rewrite each translator-introduced statute into the missing
+            # original statute's canonical name (pairwise, in order).
+            # Pairwise rewrite; leftover missing acts are appended below.
+            pairs = list(zip(sorted(introduced), sorted(missing), strict=False))
+            replacements = dict(pairs)
+            repaired = replace_act_mentions(repaired, replacements)
+            repaired_acts = mentioned_acts(repaired)
+            still_missing = [act for act in missing if act not in repaired_acts]
+        else:
+            still_missing = missing
+
+        if still_missing:
+            suffix = ", ".join(sorted(still_missing))
+            repaired = f"{repaired.rstrip()} ({suffix})"
+        return repaired
 
 
 class IndicTrans2Backend:
