@@ -40,6 +40,29 @@ def test_every_case_tied_to_dev_corpus() -> None:
     assert all(case.corpus == "bnss-dev" for case in cases)
 
 
+def test_shipped_bns_golden_set_loads_with_required_mix() -> None:
+    # D-093: the real-BNS golden set. Expected sections must exist in the
+    # serving corpus artifact, so a corpus regression that renumbers or
+    # loses sections fails here rather than silently skewing eval numbers.
+    cases = load_golden_set(REPO_ROOT / "eval" / "golden_set_bns.jsonl")
+    assert all(case.corpus == "bns" for case in cases)
+    types = {case.type for case in cases}
+    assert {"lookup", "semantic", "reasoning"} <= types
+    refused = [case for case in cases if case.must_refuse]
+    assert len(refused) >= 5
+    assert all(not case.expected_sections for case in refused)
+
+    corpus_sections: set[str] = set()
+    corpus_path = REPO_ROOT / "data" / "processed" / "bns_corpus.jsonl"
+    if corpus_path.exists():  # artifact is built by bootstrap, not committed
+        for line in corpus_path.read_text().splitlines():
+            if line.strip():
+                corpus_sections.add(json.loads(line)["section_number"])
+        expected = {section for case in cases for section in case.expected_sections}
+        missing = sorted(expected - corpus_sections, key=lambda s: int(s))
+        assert not missing, f"golden set references missing corpus sections: {missing}"
+
+
 def test_too_few_questions_rejected(tmp_path: Path) -> None:
     rows = [
         {"id": f"c{i}", "question": f"q{i}", "type": "semantic", "expected_sections": ["1"]}

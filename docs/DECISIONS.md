@@ -3256,3 +3256,187 @@ masking, provider defaults), `tests/test_health.py` (`/health/llm` states,
 cache, ActiveModelCheck), `tests/test_llm_cloud.py` (probe classification,
 registry defaults). Frontend: AdminPanel + BrainStatus suites (106 total).
 Live hosted-provider verification recorded in the remediation report.
+
+## D-091 — Marginal-note recovery hardening: no junk titles (2026-09-02)
+
+Root cause of the corrupted section titles (remediation P1-7): the Gazette
+PDF's text layer is FLAT — marginal notes interleave with the body in
+several modes (period/space-glued line-end fragments, word-by-word
+interleave, page-split notes, precede-position words). The pre-remediation
+parser recovered only a fraction and produced junk titles ("also be liable
+to fine") or none (46 sections untitled at last ingestion).
+
+All recovery stays **layout-driven** (no statute-specific constants), and
+every rule is pinned by a regression test (tests/ingestion/test_parser.py,
+26 cases):
+
+1. **Body-swallow gates.** A candidate note line is rejected when it opens
+   with a sentence starter, a body-tail continuation word, or — new — is a
+   lowercase line of 5+ words ending in sentence punctuation (a completed
+   body sentence: "punished with imprisonment for a term."). Unterminated
+   lowercase margin wraps ("answer public / servant") stay note text.
+2. **Carry semantics.** A carried (unterminated) cluster fragment followed
+   by 2+ consecutive body lines is closed as its own flush event — a note
+   split across a page boundary never has body text in between, so the old
+   behaviour merged unrelated notes across sections ("Voyeurism" +
+   "Stalking." → one title).
+3. **Lone dangling connectives dropped.** A cluster that is a single
+   connective/preposition ("under", "or") is a stranded fragment, never a
+   title; the section stays untitled (honest) instead of junk-titled.
+4. **Flush-adjacent assignment.** A flush's earlier clusters fill the END
+   of the untitled backlog (most-recent sections), so a stale untitled
+   section from an earlier page cannot steal its neighbour's note.
+5. **Honest confidence.** Titles reconstructed from glued fragments or
+   contested assignments carry `title_confident=False` → `needs_review` in
+   the chunk output (155/358 flagged) for downstream review priority.
+
+Measurements (real Gazette PDF, 358 sections): 358/358 titled (was 312),
+ground-truth sample 26/30 correct (residual misses concentrate in the
+p.38-39 miscarriage interleave zone), ingestion manifest warnings for
+unassociated titles 46 → 0, chunks 433 → 425. Corpus re-ingested to
+`data/processed/bns_corpus.jsonl`; the dense vector cache self-invalidates
+by chunk-text fingerprint and re-embeds on next startup (D-085).
+
+## D-092 — Qdrant wired into runtime dense retrieval (2026-09-02)
+
+**Classification:** `DECIDED` (remediation P2-11)
+
+**Problem.** Qdrant ran in docker-compose, was health-checked, and had a
+retriever (`QdrantDenseRetriever`) and index sink (`QdrantChunkIndex`) —
+but nothing at runtime ever used them: `build_retrieval_service` always
+built the in-process `CosineDenseIndex`, and the ingestion CLI's
+`--qdrant-url` mode *replaced* the JSONL sink (so a Qdrant-populating run
+left no corpus artifact for the sparse index / chunk store). Qdrant was
+deployed-but-dead infrastructure.
+
+**Decision.**
+
+1. **Config:** `RETRIEVAL_DENSE_BACKEND` = `auto` (default) | `qdrant` |
+   `in-process`.
+   - `auto` — use the Qdrant `bns_chunks` collection when it is reachable
+     AND non-empty; otherwise fall back to the in-process cosine index with
+     a logged reason.
+   - `qdrant` — require Qdrant; when unusable the retrieval service build
+     fails closed (chat 503) instead of silently degrading.
+   - `in-process` — never contact Qdrant (local/dev, no qdrant-client).
+2. **Runtime:** `build_retrieval_service` selects the dense backend through
+   `_build_dense_retriever`; the sparse BM25 index, chunk store, and
+   deterministic section lookup always run in-process over the JSONL
+   artifact — only the dense leg moves. `QdrantDenseRetriever` now keeps
+   one lazily-created client per API process (was: per query).
+3. **Ingest:** `scripts/ingest.py --qdrant-url` writes BOTH sinks (JSONL
+   artifact remains the corpus of record, SRC-009; Qdrant gets the
+   vectors). `QdrantChunkIndex.upsert` is now a full replace (collection
+   dropped + recreated): a shrinking re-ingest (433 → 425 chunks) must not
+   leave stale points retrievable.
+4. **Bootstrap:** `scripts/bootstrap.sh` upserts vectors to Qdrant when
+   reachable and the collection is absent (idempotent skip otherwise);
+   docker-compose exposes Qdrant on the host loopback only
+   (127.0.0.1:6333) so host-side bootstrap can reach it — consistent with
+   the frontend loopback binding (D-088).
+
+**Fail-closed semantics:** infrastructure failures are never valid
+refusals — in `auto` mode an unreachable Qdrant logs a warning and serves
+from the in-process index (same corpus, same hybrid fusion); in `qdrant`
+mode it is a 503, surfaced by health checks, not an "I don't know".
+
+**Tests:** tests/retrieval/test_dense_backend.py (fake-injected Qdrant
+client): reachability/population probe, auto selection + fallback,
+explicit-qdrant fail-closed, in-process never contacts Qdrant, client
+reuse, metadata filter mapping, and full-replace upsert semantics.
+
+## D-093 — BNS golden set and post-remediation evaluation baseline (2026-09-02)
+
+**Classification:** `DECIDED` (remediation P2-12)
+
+`eval/golden_set_bns.jsonl` (29 cases) evaluates against the REAL BNS
+corpus (`data/processed/bns_corpus.jsonl`) — the previous golden set
+(`eval/golden_set.jsonl`, 29 cases) is tied to the bnss-dev fixture
+corpus and was never a BNS measurement. Composition: 10 lookup
+(explicit section identifiers), 10 semantic (layman/colloquial phrasings:
+"Someone stole my scooter…", "chain was snatched", "husband's relatives
+harass me for dowry"), 3 reasoning (comparative questions), 6
+out-of-scope refusals (non-legal questions, non-BNS law, an instruction-
+injection payload). Ground truth sections were verified against the
+re-ingested corpus (D-091 titles) before running.
+
+**Measured (BGE production embedder, hybrid configuration, retrieval
+only):** recall@5 = 0.655, recall@10 = 0.759, MRR = 0.622, refusal
+correctness = 0.966, 0 failed cases
+(`eval/results/evaluation_bns_golden_bge.json`). Deterministic
+HashingEmbedder baseline keeps the relevance gate disabled (D-092 note:
+the BGE-calibrated band would zero its confidence — the runner disables
+the gate for the hashing baseline and keeps it for real embedders).
+
+**Known honest gaps (reported, not tuned around):**
+
+- `bns-s10` ("A mob damaged shops after an argument turned violent",
+  expects s.189/190 unlawful assembly/rioting) misses at recall@10 — the
+  colloquial phrasing has no vocabulary overlap with the statute text.
+- `bns-x5` (instruction-injection payload) is answered at the retrieval
+  layer: the refusal metric scores it as a miss, but the system-level
+  defense for injection is the generation contract (evidence blocks are
+  DATA, never instructions; system prompt rule 6) plus the citation
+  guard — not retrieval-level refusal. Retrieval refusal is the correct
+  behavior for genuinely out-of-scope questions, which the other five
+  refusal cases exercise.
+
+## D-094 — Translation act-name fidelity guard (query translation safety net)
+
+**Problem (found live, E2E matrix 2026-09-01):** a Hindi query naming the
+corpus act ("भारतीय न्याय संहिता की धारा 303 क्या कहती है?") was refused with
+"insufficient evidence". Root cause chain: the small translation model
+rendered the act name as "Indian Penal Code"; retrieval's foreign-statute
+guard (A4-011) then CORRECTLY failed closed — the corpus is the BNS, and
+IPC s.303 is different law — so an in-scope question was refused because
+the translation channel re-branded the authority the user named.
+
+**Decision:** two layers, prompt + code. (1) The translation system prompt
+now names statute names as identifiers that must never be substituted.
+Prompts are advisory, so (2) `LanguageService.translate_query` runs a
+deterministic post-translation check (`app/language/acts.py`): statute
+mentions are detected in the original and the translation across supported
+scripts (BNS/BNSS/IPC/CrPC canonical names plus their Devanagari aliases).
+A translator-introduced statute is rewritten back to the original act's
+canonical English name; a dropped act mention is appended. Genuine foreign
+questions (a Hindi query that really asks about the IPC) keep their
+mention and still fail closed.
+
+**Not corpus knowledge:** the alias table is translation-fidelity data in
+the language layer; retrieval scope still derives from chunk metadata
+alone (SRC-013 unchanged).
+
+**Tests:** `tests/language/test_service.py` — re-branded act repaired
+(exact rewrite), dropped act appended, genuine IPC question untouched,
+no-act translation untouched, prompt rule present; `mentioned_acts` alias
+detection (cross-script, token-safe) and `replace_act_mentions` targeting.
+
+## D-095 — Self-reference guard: brand noun ≠ self-reference
+
+**Problem (found live, E2E matrix 2026-09-01):** the citation guard's
+self-reference check listed the brand word ("Nyaya" / "न्याय" and its
+script cognates) as a standalone identity marker. But "न्याय" is also part
+of the corpus act's own name — भारतीय **न्याय** संहिता / Bharatiya
+**Nyaya** Sanhita — and the ordinary word for "justice". Consequence: any
+answer naming the act (in Hindi OR English — e.g. "Section 103 of the
+Bharatiya Nyaya Sanhita [BNS s.103]") was flagged self-referential, its
+citations stripped as decorative, and the answer then refused for
+"carrying no citations". Live Hindi answers were refused wholesale; the
+English E2E matrix passed only because the model happened to write "BNS"
+instead of the full act name. A second latent bug in the same pattern: the
+Marathi pronoun "मी" was matched unanchored, so any word containing म+ी
+(e.g. "समीक्षा", review) was also self-referential.
+
+**Decision:** the brand noun is removed as a standalone self-reference
+marker in every script. Identity sentences are still detected through
+their first-person pronouns ("मैं न्याय हूँ", "I am Nyaya") and assistant
+words ("assistant", "chatbot", "bot", "ai"). Script pronouns are now
+matched with Indic-block lookaround boundaries so a pronoun inside a
+longer word is not a match. Nothing else in the layered validation
+(existence, granularity, relevance, prose gate, sibling grounding)
+changes.
+
+**Tests:** `tests/language/test_citation_guard.py` — Hindi and English
+act-name sentences keep their citations; "समीक्षा" (contains "मी") is not
+self-referential; existing identity tests (first-person pronoun) still
+strip decorative citations.

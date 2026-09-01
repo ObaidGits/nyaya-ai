@@ -66,7 +66,11 @@ speech model is likely to exceed available resources.
 The bootstrap script needs the backend dependencies on the host
 (`python -m venv backend/.venv && backend/.venv/bin/pip install -r backend/requirements.txt`),
 because ingestion runs the same pipeline code the API uses. Everything else
-starts with `docker compose up` alone.
+starts with `docker compose up` alone. When the compose Qdrant is reachable
+(loopback `127.0.0.1:6333`), bootstrap also upserts the corpus vectors into
+its `bns_chunks` collection so the API's `auto` dense backend (D-092) can
+serve statute queries from Qdrant; without it the API uses the in-process
+cosine index over the same corpus and logs why.
 
 ### URLs
 
@@ -78,7 +82,7 @@ starts with `docker compose up` alone.
 | Health / readiness | http://localhost:8000/api/v1/health , `/health/ready` |
 | Prometheus metrics | http://localhost:8000/api/v1/metrics |
 | Prometheus server | http://localhost:9090 (scrapes the API's `/metrics`; 7-day retention) |
-| Qdrant (in-stack) | `http://qdrant:6333` (dashboard at `:6333/dashboard`; not published to the host by default — add a `ports:` entry to expose) |
+| Qdrant (in-stack) | `http://qdrant:6333` (dashboard at `:6333/dashboard`; published on the host loopback only — `127.0.0.1:6333` — so host-side bootstrap can upsert vectors) |
 | Redis / PostgreSQL | internal to the compose network |
 
 ### Ports
@@ -87,7 +91,7 @@ starts with `docker compose up` alone.
 | --- | --- |
 | 3000 | frontend (nginx → SPA, `/api` reverse proxy) |
 | 8000 | backend API |
-| 6333 | Qdrant (internal) |
+| 6333 | Qdrant (host loopback only; internal on the compose network) |
 | 6379 | Redis (internal) |
 | 5432 | PostgreSQL (internal) |
 | 11434 | Ollama (opt-in `ollama` profile, internal) |
@@ -103,6 +107,7 @@ All configuration is environment-driven; no secrets are committed. Copy
 | `DATABASE_URL` | PostgreSQL DSN | `postgresql+asyncpg://nyaya:nyaya@localhost:5432/nyaya` |
 | `QDRANT_URL` | vector DB endpoint | `http://localhost:6333` |
 | `QDRANT_BNS_COLLECTION` / `QDRANT_USER_DOCUMENT_COLLECTION` | Qdrant collection names | `bns_chunks` / `user_document_chunks` |
+| `RETRIEVAL_DENSE_BACKEND` | dense retrieval backend (D-092): `auto` uses the Qdrant `bns_chunks` collection when reachable and populated (bootstrap fills it), else the in-process cosine index; `qdrant` requires it (chat 503 when unusable); `in-process` never contacts it | `auto` |
 | `REDIS_URL` | Redis DSN (queue + production document store) | `redis://localhost:6379/0` |
 | `LLM_PROVIDER` | provider id (ollama default; swappable, LLM-002/003) | `ollama` |
 | `LLM_BASE_URL` / `LLM_MODEL` | provider endpoint / model — built-in providers have doc-verified defaults; leave `LLM_BASE_URL` empty for them | `http://localhost:11434` / `llama3.1:8b` |
@@ -204,6 +209,9 @@ cd frontend && npm run lint && npm run typecheck && npm run build
 python eval/run_eval.py --corpus data/processed/bnss-dev_chunks.jsonl            # deterministic
 python eval/run_eval.py --corpus data/processed/bnss-dev_chunks.jsonl --llm      # + Ollama
 python eval/run_eval.py --corpus data/processed/bnss-dev_chunks.jsonl --llm --bge  # + BGE + Ollama
+# real-BNS golden set (D-093; authored against the serving corpus):
+python eval/run_eval.py --golden-set eval/golden_set_bns.jsonl \
+  --corpus data/processed/bns_corpus.jsonl --bge
 ```
 
 Results (2026-08-31 remediation run, 29 golden questions, BNSS dev corpus,
@@ -230,6 +238,15 @@ R@5 0.857 / R@10 0.905 / MRR 0.723 (the golden set is lexically biased);
 dense-only(BGE) R@5 0.429. The metric was deliberately left unchanged for
 comparability; no thresholds were tuned to inflate any number
 (DECISIONS.md D-083).
+
+**Real-BNS golden set (D-093, 2026-09-02):** `eval/golden_set_bns.jsonl`
+(29 cases: 10 lookup, 10 colloquial/semantic, 3 reasoning, 6 refusals)
+against the serving corpus `bns_corpus.jsonl`, BGE embedder, retrieval
+only: hybrid R@5 0.655 / R@10 0.759 / MRR 0.622, refusal correctness
+0.966, 0 failed cases. Known honest gaps documented in DECISIONS.md
+D-093 (one colloquial rioting miss; the injection-payload case is
+defended at the generation layer, so the retrieval-refusal metric scores
+it as answered).
 
 ## Observability
 

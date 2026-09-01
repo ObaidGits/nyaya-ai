@@ -153,8 +153,6 @@ def test_tts_provider_dispatch_prefers_piper(fake_piper: type[_FakeVoice]) -> No
     # Default (no env override) is Piper — the lightweight local provider.
     # _env_file=None: a developer's local .env (e.g. SPEECH_TTS_PROVIDER=browser)
     # must not change what "default" means here.
-    assert isinstance(
-        SpeechService(settings=Settings(_env_file=None))._build_tts(), PiperTTS
-    )
+    assert isinstance(SpeechService(settings=Settings(_env_file=None))._build_tts(), PiperTTS)
     explicit = Settings(_env_file=None, speech_tts_provider="piper")
     assert isinstance(SpeechService(settings=explicit)._build_tts(), PiperTTS)
