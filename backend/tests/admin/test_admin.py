@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 from app.core.config import Settings
+from app.llm.base import ProviderHealthState
 from app.main import create_app
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -137,7 +138,9 @@ class TestAdminSettings:
         login(client)
         response = client.put(
             "/api/v1/admin/settings",
-            json={"values": {}, "secrets": {"llm_api_key": "sk-super-secret"}},
+            # force: the masking contract is under test here, not verification
+            # (which would probe the un-saved candidate; see TestSaveVerification).
+            json={"values": {}, "secrets": {"llm_api_key": "sk-super-secret"}, "force": True},
             headers=MUTATING,
         )
         assert response.status_code == 200
@@ -166,6 +169,34 @@ class TestAdminSettings:
         assert "retrieval_confidence_threshold" in EDITABLE_FIELDS
         assert not any("citation" in f or "injection" in f for f in EDITABLE_FIELDS)
 
+    def test_secret_sources_reported(self, tmp_path: Path) -> None:
+        """The view must say where each secret comes from. Console-saved keys
+        win (D-090); the environment value is only the bootstrap default."""
+        # Environment-provided key, nothing saved yet → "env".
+        env_settings = make_settings(tmp_path, llm_api_key="sk-from-env")
+        with TestClient(create_app(settings=env_settings)) as client:
+            login(client)
+            body = client.get("/api/v1/admin/settings").json()
+            assert set(body["secret_sources"]) == {
+                "llm_api_key",
+                "speech_stt_api_key",
+                "speech_tts_api_key",
+            }
+            assert body["secret_sources"]["llm_api_key"] == "env"
+            # Save a console key → the console key is now the effective one.
+            client.put(
+                "/api/v1/admin/settings",
+                json={"values": {}, "secrets": {"llm_api_key": "sk-console"}, "force": True},
+                headers=MUTATING,
+            )
+            body = client.get("/api/v1/admin/settings").json()
+            assert body["secret_sources"]["llm_api_key"] == "console"
+
+    def test_no_secret_source_when_unconfigured(self, client: TestClient) -> None:
+        login(client)
+        body = client.get("/api/v1/admin/settings").json()
+        assert body["secret_sources"]["llm_api_key"] == ""
+
     def test_unknown_llm_provider_rejected(self, client: TestClient) -> None:
         login(client)
         response = client.put(
@@ -188,7 +219,15 @@ class TestAdminSettings:
         login(client)
         providers = client.get("/api/v1/admin/settings").json()["llm_providers"]
         names = {provider["name"] for provider in providers}
-        assert {"ollama", "openai", "gemini", "grok", "openrouter", "openai-compatible"} <= names
+        assert {
+            "ollama",
+            "openai",
+            "gemini",
+            "grok",
+            "groq",
+            "openrouter",
+            "openai-compatible",
+        } <= names
 
     def test_provider_list_marks_base_url_requirements(self, client: TestClient) -> None:
         """Only the generic openai-compatible profile requires a base URL;
@@ -198,16 +237,37 @@ class TestAdminSettings:
             provider["name"]: provider
             for provider in client.get("/api/v1/admin/settings").json()["llm_providers"]
         }
-        for name in ("ollama", "openai", "gemini", "grok", "openrouter"):
+        for name in ("ollama", "openai", "gemini", "grok", "groq", "openrouter"):
             assert providers[name]["requires_base_url"] is False, name
             assert providers[name]["default_base_url"], name
             assert providers[name]["default_model"], name
         assert providers["openai-compatible"]["requires_base_url"] is True
 
+    def test_provider_default_url_persisted_on_save(self, client: TestClient) -> None:
+        """Saving a built-in provider with a blank base URL persists that
+        provider's official endpoint — the admin never types a known URL."""
+        login(client)
+        response = client.put(
+            "/api/v1/admin/settings",
+            json={"values": {"llm_provider": "groq", "llm_base_url": ""}},
+            headers=MUTATING,
+        )
+        assert response.status_code == 422  # verification fails: no key configured
+        assert response.json()["error"]["code"] == "LLM_VERIFICATION_FAILED"
+        # force skips verification; the URL normalization must still apply.
+        response = client.put(
+            "/api/v1/admin/settings",
+            json={"values": {"llm_provider": "groq", "llm_base_url": ""}, "force": True},
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        assert response.json()["values"]["llm_base_url"] == "https://api.groq.com/openai/v1"
+        assert response.json()["values"]["llm_provider"] == "groq"
+
 
 class TestLlmModelList:
     def test_requires_authentication(self, client: TestClient) -> None:
-        response = client.get("/api/v1/admin/llm/models")
+        response = client.post("/api/v1/admin/llm/models")
         assert response.status_code == 401
 
     def test_returns_provider_models(
@@ -220,11 +280,162 @@ class TestLlmModelList:
 
         monkeypatch.setattr(admin_module, "_list_llm_models", fake_list)
         login(client)
-        response = client.get("/api/v1/admin/llm/models")
+        response = client.post("/api/v1/admin/llm/models")
         assert response.status_code == 200
         body = response.json()
         assert body["provider"] == client.app.state.settings.llm_provider  # type: ignore[attr-defined]
         assert body["models"] == ["gemini-2.0-flash", "gemini-2.5-pro"]
+
+    def test_draft_config_overrides_saved(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Loading models must use the form's draft config, not the saved
+        settings — including a freshly typed API key."""
+        captured: dict[str, Settings] = {}
+
+        async def fake_list(settings: Settings) -> list[str]:
+            captured["settings"] = settings
+            return ["gemini-2.0-flash"]
+
+        from app.api.v1 import admin as admin_module
+
+        monkeypatch.setattr(admin_module, "_list_llm_models", fake_list)
+        login(client)
+        response = client.post(
+            "/api/v1/admin/llm/models",
+            json={
+                "provider": "gemini",
+                "model": "gemini-2.0-flash",
+                "base_url": "https://example.com/v1beta",
+                "api_key": "sk-typed-in-form",
+            },
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        assert response.json()["provider"] == "gemini"
+        draft = captured["settings"]
+        assert draft.llm_provider == "gemini"
+        assert draft.llm_model == "gemini-2.0-flash"
+        assert draft.llm_base_url == "https://example.com/v1beta"
+        assert draft.llm_api_key is not None
+        assert draft.llm_api_key.get_secret_value() == "sk-typed-in-form"
+
+    def test_blank_draft_base_url_uses_provider_default(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        """Regression: selecting a new provider with a blank URL must fall
+        back to that provider's official endpoint, NOT the previously saved
+        URL (which belongs to the old provider)."""
+        # Save a config whose base URL is an OpenAI-compatible gateway.
+        login(client)
+        client.put(
+            "/api/v1/admin/settings",
+            json={
+                "values": {
+                    "llm_provider": "openai-compatible",
+                    "llm_base_url": "https://gw.example/v1",
+                },
+                "force": True,
+            },
+            headers=MUTATING,
+        )
+        captured: dict[str, Settings] = {}
+
+        async def fake_list(settings: Settings) -> list[str]:
+            captured["settings"] = settings
+            return ["gemini-2.0-flash"]
+
+        from app.api.v1 import admin as admin_module
+
+        monkeypatch_local = pytest.MonkeyPatch()
+        monkeypatch_local.setattr(admin_module, "_list_llm_models", fake_list)
+        try:
+            # Draft: provider gemini, NO base_url (form field blank).
+            response = client.post(
+                "/api/v1/admin/llm/models", json={"provider": "gemini"}, headers=MUTATING
+            )
+            assert response.status_code == 200
+            assert captured["settings"].llm_base_url == (
+                "https://generativelanguage.googleapis.com/v1beta"
+            )
+        finally:
+            monkeypatch_local.undo()
+
+    def test_provider_switch_without_url_resets_saved_url(self, client: TestClient) -> None:
+        """Same regression on the save path: a partial provider update must
+        not persist the old provider's base URL."""
+        login(client)
+        client.put(
+            "/api/v1/admin/settings",
+            json={
+                "values": {
+                    "llm_provider": "openai-compatible",
+                    "llm_base_url": "https://gw.example/v1",
+                },
+                "force": True,
+            },
+            headers=MUTATING,
+        )
+        response = client.put(
+            "/api/v1/admin/settings",
+            json={"values": {"llm_provider": "openai"}, "force": True},
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        assert response.json()["values"]["llm_base_url"] == "https://api.openai.com/v1"
+
+    def test_same_provider_blank_draft_url_inherits_saved_custom_url(
+        self, client: TestClient
+    ) -> None:
+        """Regression (live E2E): a provider entry pointed at a custom
+        gateway (e.g. 'grok' saved with a Groq endpoint URL) must be tested
+        against the SAVED URL when the draft keeps the same provider — the
+        console hides the URL field for fixed-URL providers, so a blank
+        draft URL must not silently probe the provider's default endpoint
+        instead of the configured one."""
+        login(client)
+        client.put(
+            "/api/v1/admin/settings",
+            json={
+                "values": {
+                    "llm_provider": "grok",
+                    "llm_base_url": "https://api.groq.com/openai/v1",
+                    "llm_model": "openai/gpt-oss-120b",
+                },
+                "force": True,
+            },
+            headers=MUTATING,
+        )
+        captured: dict[str, Settings] = {}
+
+        async def fake_list(settings: Settings) -> list[str]:
+            captured["settings"] = settings
+            return ["openai/gpt-oss-120b"]
+
+        from app.api.v1 import admin as admin_module
+
+        monkeypatch_local = pytest.MonkeyPatch()
+        monkeypatch_local.setattr(admin_module, "_list_llm_models", fake_list)
+        try:
+            # Draft: SAME provider, blank base_url (the form field is hidden).
+            response = client.post(
+                "/api/v1/admin/llm/models",
+                json={"provider": "grok", "model": "openai/gpt-oss-120b", "api_key": ""},
+                headers=MUTATING,
+            )
+            assert response.status_code == 200
+            assert captured["settings"].llm_base_url == "https://api.groq.com/openai/v1"
+        finally:
+            monkeypatch_local.undo()
+
+    def test_rejects_unknown_draft_fields(self, client: TestClient) -> None:
+        login(client)
+        response = client.post(
+            "/api/v1/admin/llm/models",
+            json={"provider": "gemini", "bogus": "x"},
+            headers=MUTATING,
+        )
+        assert response.status_code == 422
 
     def test_provider_errors_surface_cleanly(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -241,7 +452,7 @@ class TestLlmModelList:
 
         monkeypatch.setattr(admin_module, "_list_llm_models", failing_list)
         login(client)
-        response = client.get("/api/v1/admin/llm/models")
+        response = client.post("/api/v1/admin/llm/models")
         assert response.status_code == 503
         assert response.json()["error"]["code"] == "LLM_MODELS_UNAVAILABLE"
 
@@ -330,6 +541,399 @@ class TestLlmModelList:
             assert models == ["gpt-4o-mini"]
 
 
+class TestLlmConnectionTest:
+    """POST /admin/test/llm exercises the DRAFT config from the form."""
+
+    def test_draft_config_tested_not_saved(self, client: TestClient) -> None:
+        """The typed provider/model must be tested even before saving."""
+        from app.llm.base import ProviderHealth, ProviderHealthState, ProviderMetadata
+        from app.llm.registry import UnknownProviderError
+
+        created: dict[str, Settings] = {}
+
+        class FakeProvider:
+            def __init__(self, name: str, settings: Settings) -> None:
+                created["name"] = name
+                created["settings"] = settings
+
+            async def probe(self) -> ProviderHealth:
+                return ProviderHealth(
+                    state=ProviderHealthState.HEALTHY,
+                    provider="gemini",
+                    model="gemini-2.0-flash",
+                    detail="reachable and model available",
+                )
+
+            def metadata(self) -> ProviderMetadata:
+                return ProviderMetadata(
+                    provider="gemini", model="gemini-2.0-flash", supports_streaming=True
+                )
+
+        class FakeRegistry:
+            def create(self, name: str, settings: Settings) -> FakeProvider:
+                if name != "gemini":
+                    raise UnknownProviderError(f"unknown provider: {name}")
+                return FakeProvider(name, settings)
+
+            def available(self) -> list[str]:
+                return ["gemini"]
+
+        client.app.state.llm_registry = FakeRegistry()  # type: ignore[assignment]
+
+        login(client)
+        response = client.post(
+            "/api/v1/admin/test/llm",
+            json={
+                "provider": "gemini",
+                "model": "gemini-2.0-flash",
+                "api_key": "sk-typed",
+            },
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert "reachable and model available" in body["message"]
+        # The draft (not saved) settings reached the registry.
+        assert created["name"] == "gemini"
+        assert created["settings"].llm_api_key is not None
+        assert created["settings"].llm_api_key.get_secret_value() == "sk-typed"
+
+    def test_saved_key_reused_without_retyping(self, client: TestClient) -> None:
+        """Regression (the 'asks for the API key again' bug): after a key is
+        saved, testing with a BLANK draft api_key must exercise the SAVED
+        key — the admin never re-enters it."""
+        from app.llm.base import ProviderHealth, ProviderHealthState
+
+        captured: dict[str, Settings] = {}
+
+        class FakeProvider:
+            def __init__(self, name: str, settings: Settings) -> None:
+                captured["settings"] = settings
+
+            async def probe(self) -> ProviderHealth:
+                return ProviderHealth(
+                    state=ProviderHealthState.HEALTHY,
+                    provider="gemini",
+                    model="gemini-2.0-flash",
+                    detail="reachable and model available",
+                )
+
+            def metadata(self) -> Any:
+                from app.llm.base import ProviderMetadata
+
+                return ProviderMetadata(provider="gemini", model="gemini-2.0-flash")
+
+        class FakeRegistry:
+            def create(self, name: str, settings: Settings) -> FakeProvider:
+                return FakeProvider(name, settings)
+
+            def available(self) -> list[str]:
+                return ["ollama", "gemini", "grok"]
+
+        client.app.state.llm_registry = FakeRegistry()  # type: ignore[assignment]
+        login(client)
+        # Save a key (force: masking/persistence concern, not verification).
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "secrets": {"llm_api_key": "sk-saved-once"}, "force": True},
+            headers=MUTATING,
+        )
+        # Re-test with a blank api_key — the saved key must reach the provider.
+        response = client.post(
+            "/api/v1/admin/test/llm", json={"provider": "gemini"}, headers=MUTATING
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert (
+            captured["settings"].llm_api_key.get_secret_value() == "sk-saved-once"
+        )
+
+    def test_model_not_offered_reported(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reachable API + misspelled model id → explicit failure, not
+        a misleading 'reachable'."""
+        from app.llm.base import ProviderHealth, ProviderHealthState
+
+        class FakeProvider:
+            def __init__(self, name: str, settings: Settings) -> None:
+                pass
+
+            async def probe(self) -> ProviderHealth:
+                return ProviderHealth(
+                    state=ProviderHealthState.DEGRADED,
+                    provider="gemini",
+                    model="gemini-3.5-flash-lite",
+                    detail=(
+                        "The provider is reachable, but model 'gemini-3.5-flash-lite' is "
+                        "not in its model list."
+                    ),
+                )
+
+            def metadata(self) -> Any:
+                from app.llm.base import ProviderMetadata
+
+                return ProviderMetadata(
+                    provider="gemini", model="gemini-3.5-flash-lite", supports_streaming=True
+                )
+
+        class FakeRegistry:
+            def create(self, name: str, settings: Settings) -> FakeProvider:
+                return FakeProvider(name, settings)
+
+            def available(self) -> list[str]:
+                return ["ollama", "gemini", "grok"]
+
+        client.app.state.llm_registry = FakeRegistry()  # type: ignore[assignment]
+        login(client)
+        response = client.post(
+            "/api/v1/admin/test/llm",
+            json={"provider": "gemini", "model": "gemini-3.5-flash-lite"},
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert "not in" in body["message"] and "gemini-3.5-flash-lite" in body["message"]
+
+    def test_unhealthy_draft_reported(self, client: TestClient) -> None:
+        from app.llm.base import ProviderHealth, ProviderHealthState
+
+        class FakeProvider:
+            def __init__(self, name: str, settings: Settings) -> None:
+                pass
+
+            async def probe(self) -> ProviderHealth:
+                return ProviderHealth(
+                    state=ProviderHealthState.UNAVAILABLE,
+                    provider="gemini",
+                    model="m",
+                    detail="The provider endpoint is unreachable (network error or timeout).",
+                )
+
+            def metadata(self) -> Any:
+                from app.llm.base import ProviderMetadata
+
+                return ProviderMetadata(provider="gemini", model="m", supports_streaming=True)
+
+        class FakeRegistry:
+            def create(self, name: str, settings: Settings) -> FakeProvider:
+                return FakeProvider(name, settings)
+
+            def available(self) -> list[str]:
+                return ["ollama", "gemini", "grok"]
+
+        client.app.state.llm_registry = FakeRegistry()  # type: ignore[assignment]
+        login(client)
+        response = client.post(
+            "/api/v1/admin/test/llm", json={"provider": "gemini"}, headers=MUTATING
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert "unreachable" in body["message"]
+
+
+class TestSaveVerification:
+    """Test-before-activate (D-090): a provider config that does not verify
+    can never silently replace the active one."""
+
+    @staticmethod
+    def _registry(state: ProviderHealthState) -> Any:
+        from app.llm.base import ProviderHealth
+
+        class FakeProvider:
+            def __init__(self, name: str, settings: Settings) -> None:
+                pass
+
+            async def probe(self) -> ProviderHealth:
+                return ProviderHealth(
+                    state=state, provider="grok", model="grok-4.6", detail="probe result"
+                )
+
+        class FakeRegistry:
+            def create(self, name: str, settings: Settings) -> FakeProvider:
+                return FakeProvider(name, settings)
+
+            def available(self) -> list[str]:
+                return ["ollama", "gemini", "grok"]
+
+        return FakeRegistry()
+
+    def test_unverified_candidate_rejected_and_old_provider_kept(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        import json
+
+        # Establish a working active provider.
+        client.app.state.llm_registry = self._registry(ProviderHealthState.HEALTHY)
+        login(client)
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {"llm_provider": "grok", "llm_model": "grok-4.6"}, "force": True},
+            headers=MUTATING,
+        )
+        before = json.loads((tmp_path / "admin.json").read_text())
+
+        # Candidate that fails verification (bad key / unreachable).
+        client.app.state.llm_registry = self._registry(ProviderHealthState.INVALID_CONFIGURATION)
+        response = client.put(
+            "/api/v1/admin/settings",
+            # A NEW key (the realistic failed-replacement scenario: wrong key).
+            json={
+                "values": {"llm_provider": "grok", "llm_model": "grok-4.6"},
+                "secrets": {"llm_api_key": "sk-wrong-key"},
+            },
+            headers=MUTATING,
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "LLM_VERIFICATION_FAILED"
+        assert "probe result" in response.json()["error"]["message"]
+        # Nothing persisted, nothing applied: old config intact.
+        assert json.loads((tmp_path / "admin.json").read_text()) == before
+        assert client.app.state.settings.llm_provider == "grok"
+
+    def test_healthy_candidate_activates(self, client: TestClient) -> None:
+        client.app.state.llm_registry = self._registry(ProviderHealthState.HEALTHY)
+        login(client)
+        response = client.put(
+            "/api/v1/admin/settings",
+            json={"values": {"llm_provider": "grok", "llm_model": "grok-4.6"}},
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        assert client.app.state.settings.llm_provider == "grok"
+
+    def test_degraded_candidate_rejected(self, client: TestClient) -> None:
+        """A model the provider does not offer would break every chat turn —
+        it must not become active either."""
+        client.app.state.llm_registry = self._registry(ProviderHealthState.DEGRADED)
+        login(client)
+        response = client.put(
+            "/api/v1/admin/settings",
+            json={"values": {"llm_provider": "grok", "llm_model": "grok-9"}},
+            headers=MUTATING,
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "LLM_VERIFICATION_FAILED"
+
+    def test_force_overrides_verification(self, client: TestClient) -> None:
+        """Deliberate offline saves are possible, but only explicitly."""
+        client.app.state.llm_registry = self._registry(ProviderHealthState.UNAVAILABLE)
+        login(client)
+        response = client.put(
+            "/api/v1/admin/settings",
+            json={"values": {"llm_provider": "grok", "llm_model": "grok-4.6"}, "force": True},
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        assert client.app.state.settings.llm_provider == "grok"
+
+    def test_non_llm_changes_skip_verification(self, client: TestClient) -> None:
+        """Rate-limit or retrieval tweaks must not probe any provider."""
+        client.app.state.llm_registry = self._registry(ProviderHealthState.UNAVAILABLE)
+        login(client)
+        response = client.put(
+            "/api/v1/admin/settings",
+            json={"values": {"rate_limit_chat_per_minute": 9}},
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        assert client.app.state.settings.rate_limit_chat_per_minute == 9
+
+
+class TestSecretLifecycle:
+    """Save → reload → retest → replace → remove, without ever echoing the
+    secret or letting a blank frontend value destroy it."""
+
+    def test_blank_secret_never_overwrites_saved(self, client: TestClient) -> None:
+        login(client)
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "secrets": {"llm_api_key": "sk-keep"}, "force": True},
+            headers=MUTATING,
+        )
+        # The UI always sends empty strings for unchanged secrets.
+        response = client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "secrets": {"llm_api_key": ""}},
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        assert response.json()["secrets"]["llm_api_key"] == "set"
+        assert client.app.state.settings.llm_api_key is not None
+        assert client.app.state.settings.llm_api_key.get_secret_value() == "sk-keep"
+
+    def test_explicit_replacement_wins(self, client: TestClient) -> None:
+        login(client)
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "secrets": {"llm_api_key": "sk-old"}, "force": True},
+            headers=MUTATING,
+        )
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "secrets": {"llm_api_key": "sk-new"}, "force": True},
+            headers=MUTATING,
+        )
+        assert client.app.state.settings.llm_api_key.get_secret_value() == "sk-new"
+
+    def test_explicit_clear_removes_key(self, client: TestClient, tmp_path: Path) -> None:
+        import json
+
+        login(client)
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "secrets": {"llm_api_key": "sk-gone"}, "force": True},
+            headers=MUTATING,
+        )
+        response = client.put(
+            "/api/v1/admin/settings",
+            # force: the removal semantics are under test; verification would
+            # probe the (offline in tests) default provider.
+            json={"values": {}, "clear_secrets": ["llm_api_key"], "force": True},
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        assert response.json()["secrets"]["llm_api_key"] == ""
+        assert client.app.state.settings.llm_api_key is None
+        stored = json.loads((tmp_path / "admin.json").read_text())
+        assert "llm_api_key" not in stored["secrets"]
+
+    def test_clear_falls_back_to_env_value(self, tmp_path: Path) -> None:
+        """Removing the console key returns to the environment bootstrap
+        value (consistent across restarts)."""
+        env_settings = make_settings(tmp_path, llm_api_key="sk-env")
+        with TestClient(create_app(settings=env_settings)) as client:
+            login(client)
+            client.put(
+                "/api/v1/admin/settings",
+                json={"values": {}, "secrets": {"llm_api_key": "sk-console"}, "force": True},
+                headers=MUTATING,
+            )
+            assert (
+                client.app.state.settings.llm_api_key.get_secret_value() == "sk-console"
+            )
+            client.put(
+                "/api/v1/admin/settings",
+                json={"values": {}, "clear_secrets": ["llm_api_key"], "force": True},
+                headers=MUTATING,
+            )
+            assert client.app.state.settings.llm_api_key is not None
+            assert client.app.state.settings.llm_api_key.get_secret_value() == "sk-env"
+
+    def test_clear_secret_unknown_name_rejected(self, client: TestClient) -> None:
+        login(client)
+        response = client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "clear_secrets": ["admin_password"]},
+            headers=MUTATING,
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "SETTINGS_INVALID"
+
+
 class TestPersistencePrecedence:
     def test_persisted_settings_survive_rebuild(self, tmp_path: Path) -> None:
         with TestClient(create_app(settings=make_settings(tmp_path))) as client:
@@ -345,17 +949,18 @@ class TestPersistencePrecedence:
             values = client.get("/api/v1/admin/settings").json()["values"]
             assert values["rate_limit_speech_per_minute"] == 3
 
-    def test_env_secret_wins_over_persisted(self, tmp_path: Path) -> None:
+    def test_console_secret_wins_over_env(self, tmp_path: Path) -> None:
+        """D-090 (supersedes the old env-wins rule): a console-saved key is
+        the authoritative value; the environment key is the bootstrap
+        default used only until one is saved."""
         with TestClient(create_app(settings=make_settings(tmp_path))) as client:
             login(client)
             client.put(
                 "/api/v1/admin/settings",
-                json={"values": {}, "secrets": {"llm_api_key": "from-console"}},
+                json={"values": {}, "secrets": {"llm_api_key": "from-console"}, "force": True},
                 headers=MUTATING,
             )
-        env_settings = make_settings(tmp_path, llm_api_key=None)
-        assert env_settings.llm_api_key is None
-        # With env-provided secret, the console's persisted key must NOT apply.
+        # Restart with an env-provided secret: the console key must win.
         env_settings = Settings(
             _env_file=None,
             admin_username=ADMIN["username"],
@@ -365,7 +970,7 @@ class TestPersistencePrecedence:
         )
         app = create_app(settings=env_settings)
         assert app.state.settings.llm_api_key is not None
-        assert app.state.settings.llm_api_key.get_secret_value() == "sk-from-env"
+        assert app.state.settings.llm_api_key.get_secret_value() == "from-console"
 
     def test_empty_path_store_is_noop_not_crash(self, tmp_path: Path) -> None:
         """QA regression: AdminSettingsStore("") must no-op (persistence

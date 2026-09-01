@@ -1,5 +1,7 @@
 """Health and readiness endpoint tests (REQUIREMENTS.md D-028, D-029)."""
 
+from typing import TYPE_CHECKING
+
 import httpx
 import pytest
 from app.core.health import (
@@ -11,6 +13,9 @@ from app.core.health import (
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+if TYPE_CHECKING:
+    from app.llm.base import ProviderHealth
 
 
 class _FailingCheck(DependencyCheck):
@@ -176,3 +181,139 @@ def test_model_check_fails_on_invalid_json(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
     result = _check("llama3.1:8b")
     assert result.status == CheckStatus.FAIL
+
+
+# ---------------------------------------------------------------------------
+# ActiveModelCheck: truthful check of the CURRENTLY configured provider
+# ---------------------------------------------------------------------------
+
+
+class _FakeActiveProvider:
+    """Provider double whose probe() returns a canned health."""
+
+    def __init__(self, health: "ProviderHealth") -> None:
+        self._health = health
+
+    async def probe(self) -> "ProviderHealth":
+        return self._health
+
+
+def _active_check(health: "ProviderHealth") -> CheckResult:
+    import asyncio
+
+    from app.core.health import ActiveModelCheck
+
+    check = ActiveModelCheck(lambda: _FakeActiveProvider(health))
+    return asyncio.run(check.check())
+
+
+def test_active_model_check_ok_when_healthy() -> None:
+    from app.llm.base import ProviderHealth, ProviderHealthState
+
+    result = _active_check(
+        ProviderHealth(
+            state=ProviderHealthState.HEALTHY, provider="grok", model="grok-4.6"
+        )
+    )
+    assert result.status == CheckStatus.OK
+
+
+def test_active_model_check_fails_with_state_detail() -> None:
+    """Every non-healthy state is an honest FAIL with the reason."""
+    from app.llm.base import ProviderHealth, ProviderHealthState
+
+    result = _active_check(
+        ProviderHealth(
+            state=ProviderHealthState.INVALID_CONFIGURATION,
+            provider="grok",
+            model="grok-4.6",
+            detail="The provider rejected the API key (HTTP 401).",
+        )
+    )
+    assert result.status == CheckStatus.FAIL
+    assert "invalid_configuration" in (result.detail or "")
+    assert "401" in (result.detail or "")
+
+
+def test_active_model_check_fails_when_resolver_raises() -> None:
+    from app.core.health import ActiveModelCheck
+
+    def _raise() -> object:
+        raise RuntimeError("no provider registered")
+
+    import asyncio
+
+    result = asyncio.run(ActiveModelCheck(_raise).check())
+    assert result.status == CheckStatus.FAIL
+
+
+# ---------------------------------------------------------------------------
+# Public LLM health endpoint (brain status contract)
+# ---------------------------------------------------------------------------
+
+
+def test_llm_health_reports_state(app: FastAPI) -> None:
+    """/health/llm exposes the active provider's classified state."""
+    from app.llm.base import ProviderHealth, ProviderHealthState
+
+    class _Registry:
+        def create(self, name: str, settings: object) -> _FakeActiveProvider:
+            return _FakeActiveProvider(
+                ProviderHealth(
+                    state=ProviderHealthState.HEALTHY,
+                    provider="grok",
+                    model="grok-4.6",
+                    detail="reachable and model available",
+                )
+            )
+
+    app.state.llm_registry = _Registry()
+    response = TestClient(app).get("/api/v1/health/llm")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "healthy"
+    assert body["provider"] == "grok"
+    assert body["model"] == "grok-4.6"
+    assert "sk-" not in response.text  # never a secret
+
+
+def test_llm_health_cache_and_invalidation(app: FastAPI) -> None:
+    """The probe is cached briefly; a settings change invalidates it so the
+    brain status follows console changes immediately."""
+    from app.llm.base import ProviderHealth, ProviderHealthState
+
+    calls: list[int] = []
+
+    class _CountingProvider(_FakeActiveProvider):
+        async def probe(self) -> ProviderHealth:
+            calls.append(1)
+            return await super().probe()
+
+    health = ProviderHealth(state=ProviderHealthState.HEALTHY, provider="grok", model="m")
+
+    class _Registry:
+        def create(self, name: str, settings: object) -> _CountingProvider:
+            return _CountingProvider(health)
+
+    app.state.llm_registry = _Registry()
+    client = TestClient(app)
+    assert client.get("/api/v1/health/llm").json()["state"] == "healthy"
+    assert client.get("/api/v1/health/llm").json()["state"] == "healthy"
+    assert len(calls) == 1  # second call served from cache
+    # A settings swap drops the cache (admin console does this on save).
+    app.state.llm_health_cache = None
+    assert client.get("/api/v1/health/llm").json()["state"] == "healthy"
+    assert len(calls) == 2
+
+
+def test_llm_health_not_configured_when_provider_unknown(app: FastAPI) -> None:
+    from app.llm.registry import UnknownProviderError
+
+    class _Registry:
+        def create(self, name: str, settings: object) -> object:
+            raise UnknownProviderError("unknown provider")
+
+    app.state.llm_registry = _Registry()
+    response = TestClient(app).get("/api/v1/health/llm")
+    assert response.status_code == 200
+    assert response.json()["state"] == "not_configured"

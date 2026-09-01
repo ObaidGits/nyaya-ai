@@ -15,13 +15,15 @@ from pathlib import Path
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from app.admin import auth
 from app.admin.corpus import CorpusReplacementError, build_replacement, verify_artifact
 from app.admin.store import EDITABLE_FIELDS, SECRET_FIELDS, AdminSettingsStore, mask_secret
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.llm.base import ProviderHealthState
+from app.llm.registry import ProviderRegistry, UnknownProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,29 @@ AdminDep = Annotated[None, Depends(_admin_required)]
 AdminMutatingDep = Annotated[None, Depends(_admin_required_mutating)]
 
 
-def _settings_view(settings: Settings, store: AdminSettingsStore) -> dict[str, Any]:
+def _secret_sources(request: Request, persisted: dict[str, Any]) -> dict[str, str]:
+    """Where each secret's effective value comes from: "console" | "env" | "".
+
+    A secret saved through the console wins (D-090) — the console is the
+    authoritative place to rotate provider keys. The environment value is the
+    bootstrap default, used only until a console key is saved (and again if
+    the console key is explicitly removed).
+    """
+    env_settings: Settings = getattr(request.app.state, "env_settings", request.app.state.settings)
+    sources: dict[str, str] = {}
+    for key in sorted(SECRET_FIELDS):
+        if persisted["secrets"].get(key):
+            sources[key] = "console"
+        elif getattr(env_settings, key, None) is not None:
+            sources[key] = "env"
+        else:
+            sources[key] = ""
+    return sources
+
+
+def _settings_view(
+    settings: Settings, store: AdminSettingsStore, request: Request
+) -> dict[str, Any]:
     """Public (masked) view of the effective settings + which fields are editable."""
     persisted = store.load()
     values: dict[str, Any] = {}
@@ -57,6 +81,7 @@ def _settings_view(settings: Settings, store: AdminSettingsStore) -> dict[str, A
     return {
         "values": values,
         "secrets": secrets,  # "set" | "" — never the value
+        "secret_sources": _secret_sources(request, persisted),
         "persisted": sorted(persisted["settings"]),
         "llm_providers": request_llm_providers(),
     }
@@ -116,7 +141,8 @@ def _apply_settings(request: Request, new_settings: Settings) -> None:
 
     The LLM provider is resolved per request (registry), so only the speech
     service and the retrieval service (top-k / thresholds / corpus path) need
-    an explicit rebuild.
+    an explicit rebuild. The cached LLM health probe is dropped so the brain
+    status reflects the new provider immediately.
     """
     from app.speech.service import create_speech_service
 
@@ -124,6 +150,7 @@ def _apply_settings(request: Request, new_settings: Settings) -> None:
     request.app.state.speech_service = create_speech_service(new_settings)
     retrieval = _build_retrieval(new_settings, request)
     request.app.state.retrieval_service = retrieval
+    request.app.state.llm_health_cache = None
 
 
 def _build_retrieval(settings: Settings, request: Request) -> object | None:
@@ -180,16 +207,28 @@ async def session_status(request: Request) -> dict[str, Any]:
 
 @router.get("/settings")
 async def get_settings_view(request: Request, _: AdminDep) -> dict[str, Any]:
-    return _settings_view(request.app.state.settings, _store(request))
+    return _settings_view(request.app.state.settings, _store(request), request)
 
 
 class UpdateSettingsRequest(BaseModel):
-    """Field-by-field partial update; unknown keys are rejected."""
+    """Field-by-field partial update; unknown keys are rejected.
+
+    Empty secret strings mean "unchanged" (the UI never echoes values back);
+    ``clear_secrets`` is the explicit removal path. ``force`` skips the
+    provider verification gate for deliberate offline saves.
+    """
 
     values: dict[str, Any] = Field(default_factory=dict)
     secrets: dict[str, str] = Field(default_factory=dict)
+    clear_secrets: list[str] = Field(default_factory=list)
+    force: bool = False
 
     model_config = {"extra": "forbid"}
+
+
+#: LLM fields whose change requires verifying the new provider before it can
+#: become active (D-090 test-before-activate).
+_LLM_VERIFY_FIELDS = ("llm_provider", "llm_model", "llm_base_url", "llm_api_key")
 
 
 @router.put("/settings")
@@ -198,30 +237,52 @@ async def update_settings(
 ) -> dict[str, Any]:
     store = _store(request)
     current: Settings = request.app.state.settings
+    env_settings: Settings = getattr(
+        request.app.state, "env_settings", request.app.state.settings
+    )
 
     unknown = (set(body.values) | set(body.secrets)) - EDITABLE_FIELDS - SECRET_FIELDS
-    if unknown:
+    unknown_clear = set(body.clear_secrets) - SECRET_FIELDS
+    if unknown or unknown_clear:
         raise AppError(
-            f"Unknown or read-only settings: {', '.join(sorted(unknown))}.",
+            "Unknown or read-only settings: "
+            f"{', '.join(sorted(unknown | unknown_clear))}.",
             status_code=422,
             code="SETTINGS_INVALID",
         )
-    # Empty secret strings mean "unchanged" (the UI never echoes values back).
+    # Empty secret strings mean "unchanged" (the UI never echoes values back);
+    # a non-empty string is an explicit replacement.
     secret_updates = {k: v for k, v in body.secrets.items() if v}
+    cleared = set(body.clear_secrets)
 
     persisted = store.load()
     merged_values = {**persisted["settings"], **body.values}
     merged_secrets = {**persisted["secrets"], **secret_updates}
+    for key in cleared:
+        merged_secrets.pop(key, None)
+
+    # Provider switching must never silently point the new provider at the
+    # previous provider's endpoint: without an explicit base URL the new
+    # provider's official endpoint is used.
+    provider = str(merged_values.get("llm_provider", current.llm_provider))
+    if "llm_provider" in body.values and "llm_base_url" not in body.values:
+        merged_values["llm_base_url"] = _provider_default_base_url(provider)
+    # A blank base URL for a provider with a known official endpoint means
+    # "use the default" — persist the default so the saved view is truthful.
+    default_url = _provider_default_base_url(provider)
+    if default_url and not str(merged_values.get("llm_base_url", "") or "").strip():
+        merged_values["llm_base_url"] = default_url
 
     base_dump = current.model_dump()
     merged: dict[str, Any] = {**base_dump, **merged_values}
     for key in SECRET_FIELDS:
-        # Environment-provided secrets are never overridden by the console;
-        # otherwise the persisted secret applies.
-        if base_dump.get(key) is None and merged_secrets.get(key):
-            merged[key] = merged_secrets[key]
-        else:
-            merged[key] = base_dump.get(key)
+        if key in secret_updates:
+            # Console-saved secret wins over the environment value (D-090).
+            merged[key] = secret_updates[key]
+        elif key in cleared:
+            # Explicit removal: fall back to the environment default (the
+            # console key is gone; env remains the bootstrap), else none.
+            merged[key] = getattr(env_settings, key, None)
 
     try:
         candidate = Settings(**merged)
@@ -241,10 +302,34 @@ async def update_settings(
             code="SETTINGS_INVALID",
         )
 
+    # Test-before-activate (D-090): an LLM config change may only replace the
+    # active provider after the CANDIDATE configuration (new provider/URL/
+    # model/key) is verified healthy. On failure nothing is saved and the
+    # previously working provider stays active. `force` is the explicit
+    # escape hatch for deliberate offline saves.
+    candidate_dump = candidate.model_dump()
+    llm_changed = any(
+        candidate_dump[field] != base_dump.get(field) for field in _LLM_VERIFY_FIELDS
+    )
+    if llm_changed and not body.force:
+        try:
+            candidate_provider = registry.create(candidate.llm_provider, candidate)
+        except UnknownProviderError as exc:
+            raise AppError(str(exc), status_code=422, code="LLM_VERIFICATION_FAILED") from exc
+        health = await candidate_provider.probe()
+        if health.state is not ProviderHealthState.HEALTHY:
+            raise AppError(
+                f"Not saved — the new LLM configuration did not verify: {health.detail} "
+                "The previous provider remains active. Fix the configuration and retry, "
+                "or use 'Save anyway' to skip verification.",
+                status_code=422,
+                code="LLM_VERIFICATION_FAILED",
+            )
+
     store.save(merged_values, merged_secrets, persisted.get("corpus") or {})
     _apply_settings(request, candidate)
     logger.info("admin settings updated", extra={"fields": sorted(body.values)})
-    return _settings_view(candidate, store)
+    return _settings_view(candidate, store, request)
 
 
 # --- connection tests ------------------------------------------------------------
@@ -267,8 +352,11 @@ async def _list_llm_models(settings: Settings) -> list[str]:
             from app.llm.gemini import DEFAULT_BASE_URL
 
             base = (settings.llm_base_url or DEFAULT_BASE_URL).rstrip("/")
+            # x-goog-api-key header is Google's preferred auth (keeps the key
+            # out of URLs and logs); ?key= also works.
+            headers = {"x-goog-api-key": api_key} if api_key else {}
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.get(f"{base}/models", params={"key": api_key})
+                response = await client.get(f"{base}/models", headers=headers)
                 response.raise_for_status()
             models = []
             for entry in response.json().get("models", []):
@@ -304,9 +392,38 @@ async def _list_llm_models(settings: Settings) -> list[str]:
         return sorted(
             str(entry.get("id")) for entry in response.json().get("data", []) if entry.get("id")
         )
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status in (401, 403):
+            raise AppError(
+                "The provider rejected the API key (HTTP "
+                f"{status}). Check that the key is valid for this provider.",
+                status_code=503,
+                code="LLM_MODELS_UNAVAILABLE",
+            ) from exc
+        if status == 400:
+            # Google returns 400 (not 401/403) for a missing/invalid key.
+            raise AppError(
+                "The provider returned HTTP 400 while listing models — the API key "
+                "is usually missing or invalid for this provider.",
+                status_code=503,
+                code="LLM_MODELS_UNAVAILABLE",
+            ) from exc
+        if status == 404:
+            raise AppError(
+                "The provider has no model-listing endpoint at this URL (HTTP 404). "
+                "Check the base URL.",
+                status_code=503,
+                code="LLM_MODELS_UNAVAILABLE",
+            ) from exc
+        raise AppError(
+            f"The provider returned HTTP {status} while listing models.",
+            status_code=503,
+            code="LLM_MODELS_UNAVAILABLE",
+        ) from exc
     except httpx.HTTPError as exc:
         raise AppError(
-            "Could not reach the provider to list models.",
+            "Could not reach the provider to list models. Check the base URL.",
             status_code=503,
             code="LLM_MODELS_UNAVAILABLE",
         ) from exc
@@ -318,10 +435,70 @@ async def _list_llm_models(settings: Settings) -> list[str]:
         ) from exc
 
 
-@router.get("/llm/models")
-async def list_llm_models(request: Request, _: AdminDep) -> dict[str, Any]:
-    """Model ids for the currently configured provider (admin console combobox)."""
-    settings = cast("Settings", request.app.state.settings)
+class LlmDraftConfig(BaseModel):
+    """Draft (unsaved) LLM config from the settings form.
+
+    "Test connection" and "Load models" must exercise what the admin typed,
+    not what was last saved. Blank ``api_key`` means "use the stored key".
+    """
+
+    provider: str = Field(min_length=1, max_length=64)
+    model: str = Field(default="", max_length=256)
+    base_url: str = Field(default="", max_length=2048)
+    api_key: str = Field(default="", max_length=4096)
+
+    model_config = {"extra": "forbid"}
+
+
+def _provider_default_base_url(provider: str) -> str:
+    """Official API URL for a provider ("" when it has none / must be set)."""
+    from app.llm.gemini import DEFAULT_BASE_URL as GEMINI_BASE_URL
+    from app.llm.openai_compat import PROFILES
+
+    if provider == "gemini":
+        return GEMINI_BASE_URL
+    if provider == "ollama":
+        return "http://localhost:11434"  # matches the Ollama factory default
+    return PROFILES.get(provider, ("", "", ""))[0]
+
+
+def _draft_settings(request: Request, draft: LlmDraftConfig | None) -> Settings:
+    """Effective Settings for a draft config: current settings + form overrides.
+
+    A blank base_url means "no override": for the SAME provider as the saved
+    config that is the saved URL (a custom endpoint saved earlier is
+    intentional — e.g. a provider entry pointed at a gateway); for a
+    DIFFERENT provider it is that provider's default, because the saved URL
+    belongs to the previously configured provider and silently pointing
+    e.g. Gemini at an OpenAI-compatible gateway produces exactly the
+    wrong-endpoint failures the console exists to prevent.
+    """
+    current = cast("Settings", request.app.state.settings)
+    if draft is None:
+        return current
+    if draft.base_url:
+        base_url = draft.base_url
+    elif draft.provider == current.llm_provider:
+        base_url = current.llm_base_url
+    else:
+        base_url = _provider_default_base_url(draft.provider)
+    updates: dict[str, Any] = {
+        "llm_provider": draft.provider,
+        "llm_base_url": base_url,
+    }
+    if draft.model:
+        updates["llm_model"] = draft.model
+    if draft.api_key:
+        updates["llm_api_key"] = SecretStr(draft.api_key)
+    return current.model_copy(update=updates)
+
+
+@router.post("/llm/models")
+async def list_llm_models(
+    request: Request, _: AdminDep, draft: LlmDraftConfig | None = None
+) -> dict[str, Any]:
+    """Model ids for the (draft or saved) provider config — combobox data."""
+    settings = _draft_settings(request, draft)
     return {"provider": settings.llm_provider, "models": await _list_llm_models(settings)}
 
 
@@ -332,23 +509,36 @@ class TestResult(BaseModel):
 
 
 @router.post("/test/llm")
-async def test_llm(request: Request, _: AdminDep) -> TestResult:
-    from app.api.deps import get_llm_provider
+async def test_llm(
+    request: Request, _: AdminDep, draft: LlmDraftConfig | None = None
+) -> TestResult:
+    """Test the draft config from the form (or the saved one when no body).
 
+    Uses the provider's classified probe: reachability, authentication AND
+    model availability — a reachable API with a misspelled model or rejected
+    key is reported as a failure with the specific reason.
+    """
     start = time.monotonic()
+    settings = _draft_settings(request, draft)
+    registry = cast("ProviderRegistry", request.app.state.llm_registry)
     try:
-        provider = get_llm_provider(request)
-        healthy = await provider.health_check()
+        provider = registry.create(settings.llm_provider, settings)
+    except UnknownProviderError as exc:
+        return TestResult(success=False, message=str(exc))
+    try:
+        health = await provider.probe()
         latency = int((time.monotonic() - start) * 1000)
-        meta = provider.metadata()
+        if health.state is ProviderHealthState.HEALTHY:
+            return TestResult(
+                success=True,
+                latency_ms=latency,
+                message=f"{health.provider} / {health.model}: reachable and model available.",
+            )
+        reason = health.detail or health.state.value
         return TestResult(
-            success=healthy,
+            success=False,
             latency_ms=latency,
-            message=(
-                f"{meta.provider} / {meta.model}: reachable."
-                if healthy
-                else f"{meta.provider} / {meta.model}: unreachable or not configured."
-            ),
+            message=f"{health.provider} / {health.model}: {reason}",
         )
     except AppError as exc:
         return TestResult(success=False, message=exc.message)
@@ -553,20 +743,25 @@ async def _check_qdrant(settings: Settings) -> dict[str, str]:
 
 
 async def _llm_status(request: Request) -> dict[str, Any]:
+    """Classified health of the ACTIVE provider via its own probe."""
     from app.api.deps import get_llm_provider
 
     try:
         provider = get_llm_provider(request)
-        meta = provider.metadata()
-        healthy = await provider.health_check()
-        return {
-            "status": "ok" if healthy else "error",
-            "provider": meta.provider,
-            "model": meta.model,
-            "detail": "reachable" if healthy else "unreachable",
-        }
     except AppError as exc:
         return {"status": "not_configured", "provider": None, "model": None, "detail": exc.message}
+    try:
+        health = await provider.probe()
+    except Exception:
+        meta = provider.metadata()
+        return {"status": "error", "provider": meta.provider, "model": meta.model, "detail": ""}
+    return {
+        "status": "ok" if health.state is ProviderHealthState.HEALTHY else "error",
+        "state": health.state.value,
+        "provider": health.provider,
+        "model": health.model,
+        "detail": health.detail,
+    }
 
 
 def _speech_status(settings: Settings, which: str) -> dict[str, Any]:

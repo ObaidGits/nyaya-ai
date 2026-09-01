@@ -21,9 +21,9 @@ from app.api.v1.router import api_router
 from app.core.config import APP_VERSION, Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.health import (
+    ActiveModelCheck,
     CheckRegistry,
     ConfigurationCheck,
-    ModelProviderCheck,
     StorageCheck,
     VectorDBCheck,
 )
@@ -56,17 +56,6 @@ DESCRIPTION = (
 )
 
 
-def _llm_model_name(settings: Settings) -> str | None:
-    """Configured model name, falling back to the Ollama default (D-033)."""
-    if settings.llm_model:
-        return settings.llm_model
-    if settings.llm_provider == "ollama":
-        from app.llm.ollama import DEFAULT_MODEL
-
-        return DEFAULT_MODEL
-    return None
-
-
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the FastAPI application.
 
@@ -86,25 +75,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     # Admin configuration store (D-080): persisted admin settings override
-    # environment values; deployment secrets still win over the console.
+    # environment values. env_settings keeps the pre-override snapshot so the
+    # console can tell "env" from "console" secret origins and fall back to
+    # the environment value when a console secret is explicitly removed.
     admin_store = (
         AdminSettingsStore(settings.admin_settings_path)
         if settings.admin_settings_path
         else AdminSettingsStore("")  # no-op persistence (path unset)
     )
+    env_settings = settings
     settings = admin_store.apply_overrides(settings)
 
     # Injectable application state (no global mutable singletons in handlers).
     app.state.settings = settings
+    app.state.env_settings = env_settings
     app.state.admin_store = admin_store
     app.state.llm_registry = create_default_registry()
     app.state.rate_limiter = RateLimiter()
+
+    # ActiveModelCheck resolves the provider from app.state AT CHECK TIME, so
+    # the readiness "model" check always reflects the console's current
+    # provider (a startup-time check would go stale the moment settings are
+    # saved) and uses the provider's authenticated probe, never a bare ping.
+    def _resolve_active_provider() -> "object":
+        from app.core.errors import LLMProviderNotConfiguredError
+        from app.llm.registry import UnknownProviderError
+
+        current = app.state.settings
+        try:
+            return app.state.llm_registry.create(current.llm_provider, current)
+        except UnknownProviderError as exc:
+            raise LLMProviderNotConfiguredError(str(exc)) from exc
+
     # Redis is a real dependency only when the deployment uses it (D-030);
     # in-memory deployments must not report a phantom dependency.
     checks = [
         ConfigurationCheck(settings),
         VectorDBCheck(settings.qdrant_url),
-        ModelProviderCheck(settings.llm_base_url, settings.llm_provider, _llm_model_name(settings)),
+        ActiveModelCheck(_resolve_active_provider),
         StorageCheck(settings),
     ]
     if settings.documents_backend == "redis":

@@ -12,13 +12,17 @@ storage checks are added by the phases that implement those dependencies
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 
 from app.api.deps import get_check_registry
 from app.core.health import CheckRegistry, CheckStatus
 
 router = APIRouter(tags=["health"])
+
+#: How long a provider probe result is reused (the UI polls every 30 s; the
+#: probe must not hit the provider on every request from every client).
+LLM_HEALTH_CACHE_SECONDS = 15.0
 
 
 class HealthResponse(BaseModel):
@@ -63,3 +67,72 @@ async def readiness(
             for result in results
         },
     )
+
+
+class LlmHealthResponse(BaseModel):
+    """Public, authoritative LLM usability state (the "Brain" indicator).
+
+    ``state`` is one of: not_configured, invalid_configuration, unavailable,
+    degraded, healthy, error. "healthy" means the active provider is
+    configured, authenticated AND its model is offered. Contains no secrets.
+    """
+
+    state: Literal[
+        "not_configured",
+        "invalid_configuration",
+        "unavailable",
+        "degraded",
+        "healthy",
+        "error",
+    ]
+    provider: str | None = None
+    model: str | None = None
+    detail: str = ""
+
+
+@router.get("/health/llm", response_model=LlmHealthResponse, summary="Active LLM provider health")
+async def llm_health(request: Request) -> LlmHealthResponse:
+    """Probe the ACTIVE provider (resolved at request time, so console
+    changes apply immediately) and return its classified state.
+
+    The result is cached briefly (``LLM_HEALTH_CACHE_SECONDS``) — the
+    frontend polls every 30 s, and the probe must not hit the provider for
+    every page load of every client. Settings changes invalidate it.
+    """
+    import time
+
+    cached = getattr(request.app.state, "llm_health_cache", None)
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < LLM_HEALTH_CACHE_SECONDS:
+        return cached[1]
+
+    from app.api.deps import get_llm_provider
+    from app.llm.base import ProviderHealth
+
+    try:
+        provider = get_llm_provider(request)
+    except Exception:
+        result = LlmHealthResponse(
+            state="not_configured",
+            detail="No usable LLM provider is configured.",
+        )
+    else:
+        try:
+            health: ProviderHealth = await provider.probe()
+        except Exception:
+            meta = provider.metadata()
+            result = LlmHealthResponse(
+                state="error",
+                provider=meta.provider,
+                model=meta.model,
+                detail="The provider health probe failed unexpectedly.",
+            )
+        else:
+            result = LlmHealthResponse(
+                state=health.state.value,
+                provider=health.provider,
+                model=health.model,
+                detail=health.detail,
+            )
+    request.app.state.llm_health_cache = (now, result)
+    return result

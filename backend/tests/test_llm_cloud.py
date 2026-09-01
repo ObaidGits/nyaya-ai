@@ -1,9 +1,9 @@
 """Cloud LLM provider tests (OpenAI-compatible + Gemini; D-034/D-080).
 
 HTTP is mocked with httpx.MockTransport — no network, no keys. Pins the
-common interface (generate/stream/metadata/health_check), error
-normalization to 503 LLM_PROVIDER_UNAVAILABLE, and registry wiring for every
-supported provider name.
+common interface (generate/stream/metadata/probe), error normalization to
+503 LLM_PROVIDER_UNAVAILABLE, the classified health states (D-090 brain
+status contract), and registry wiring for every supported provider name.
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ import pytest
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.domain.models import MessageRole
-from app.llm.base import ChatMessage, GenerationRequest
+from app.llm.base import ChatMessage, GenerationRequest, ProviderHealthState
 from app.llm.gemini import GeminiProvider
-from app.llm.openai_compat import OpenAICompatibleProvider
+from app.llm.openai_compat import PROFILES, OpenAICompatibleProvider
 from app.llm.registry import create_default_registry
 
 
@@ -194,6 +194,147 @@ class TestGemini:
         assert await self._provider().health_check() is True
 
 
+class TestProbe:
+    """Classified probe states (D-090): the brain indicator must distinguish
+    missing config, rejected credentials, unreachable endpoints and a model
+    the provider does not offer."""
+
+    @pytest.mark.asyncio
+    async def test_missing_key_is_not_configured(self) -> None:
+        provider = OpenAICompatibleProvider(
+            provider="grok", base_url="https://api.x.ai/v1", model="grok-4.6", api_key=""
+        )
+        health = await provider.probe()
+        assert health.state is ProviderHealthState.NOT_CONFIGURED
+        assert "API key" in health.detail
+
+    @pytest.mark.asyncio
+    async def test_missing_model_is_not_configured(self) -> None:
+        provider = OpenAICompatibleProvider(
+            provider="grok", base_url="https://api.x.ai/v1", model="", api_key="k"
+        )
+        health = await provider.probe()
+        assert health.state is ProviderHealthState.NOT_CONFIGURED
+
+    @pytest.mark.asyncio
+    async def test_rejected_key_is_invalid_configuration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401)
+
+        _mock(monkeypatch, handler)
+        provider = OpenAICompatibleProvider(
+            provider="grok", base_url="https://api.x.ai/v1", model="grok-4.6", api_key="bad"
+        )
+        health = await provider.probe()
+        assert health.state is ProviderHealthState.INVALID_CONFIGURATION
+        assert "401" in health.detail
+
+    @pytest.mark.asyncio
+    async def test_network_error_is_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("no route")
+
+        _mock(monkeypatch, handler)
+        provider = OpenAICompatibleProvider(
+            provider="grok", base_url="https://api.x.ai/v1", model="grok-4.6", api_key="k"
+        )
+        health = await provider.probe()
+        assert health.state is ProviderHealthState.UNAVAILABLE
+
+    @pytest.mark.asyncio
+    async def test_model_not_offered_is_degraded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"data": [{"id": "grok-4.6"}]})
+
+        _mock(monkeypatch, handler)
+        provider = OpenAICompatibleProvider(
+            provider="grok", base_url="https://api.x.ai/v1", model="grok-9", api_key="k"
+        )
+        health = await provider.probe()
+        assert health.state is ProviderHealthState.DEGRADED
+        assert "grok-9" in health.detail
+
+    @pytest.mark.asyncio
+    async def test_healthy_when_reachable_and_model_offered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/v1/models"
+            assert request.headers["Authorization"] == "Bearer k"
+            return httpx.Response(200, json={"data": [{"id": "grok-4.6"}]})
+
+        _mock(monkeypatch, handler)
+        provider = OpenAICompatibleProvider(
+            provider="grok", base_url="https://api.x.ai/v1", model="grok-4.6", api_key="k"
+        )
+        health = await provider.probe()
+        assert health.state is ProviderHealthState.HEALTHY
+
+    @pytest.mark.asyncio
+    async def test_gemini_bad_key_is_invalid_configuration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Google answers 400 (not 401) for a missing/invalid key — still
+        INVALID_CONFIGURATION, never healthy."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400)
+
+        _mock(monkeypatch, handler)
+        provider = GeminiProvider(api_key="bad", model="gemini-2.0-flash")
+        health = await provider.probe()
+        assert health.state is ProviderHealthState.INVALID_CONFIGURATION
+
+    @pytest.mark.asyncio
+    async def test_gemini_missing_key_is_not_configured(self) -> None:
+        provider = GeminiProvider(api_key="", model="gemini-2.0-flash")
+        health = await provider.probe()
+        assert health.state is ProviderHealthState.NOT_CONFIGURED
+
+
+class TestProviderDefaults:
+    """Every built-in provider has its documented official endpoint (D-090);
+    URLs verified against the providers' current API docs."""
+
+    def test_profiles_carry_official_urls(self) -> None:
+        assert PROFILES["openai"][0] == "https://api.openai.com/v1"
+        assert PROFILES["grok"][0] == "https://api.x.ai/v1"
+        assert PROFILES["groq"][0] == "https://api.groq.com/openai/v1"
+        assert PROFILES["openrouter"][0] == "https://openrouter.ai/api/v1"
+        # Only the generic profile requires a manually supplied URL.
+        assert PROFILES["openai-compatible"][0] == ""
+
+    def test_blank_base_url_falls_back_to_profile_default(self) -> None:
+        """A blank LLM_BASE_URL must resolve to the provider's official
+        endpoint — the admin must never have to type a well-known URL."""
+        settings = Settings(
+            _env_file=None,
+            llm_provider="groq",
+            llm_base_url="",
+            llm_model="openai/gpt-oss-120b",
+            llm_api_key="k",
+        )
+        provider = create_default_registry().create("groq", settings)
+        assert isinstance(provider, OpenAICompatibleProvider)
+        assert provider.metadata().model == "openai/gpt-oss-120b"
+        assert provider._base_url == "https://api.groq.com/openai/v1"
+
+    def test_explicit_base_url_overrides_default(self) -> None:
+        settings = Settings(
+            _env_file=None,
+            llm_provider="openai",
+            llm_base_url="https://gateway.internal/v1",
+            llm_model="gpt-4o-mini",
+            llm_api_key="k",
+        )
+        provider = create_default_registry().create("openai", settings)
+        assert provider._base_url == "https://gateway.internal/v1"
+
+
 class TestRegistry:
     def test_all_providers_registered(self) -> None:
         registry = create_default_registry()
@@ -202,6 +343,7 @@ class TestRegistry:
             "openai",
             "gemini",
             "grok",
+            "groq",
             "openrouter",
             "openai-compatible",
         }
@@ -211,6 +353,7 @@ class TestRegistry:
         [
             ("openai", OpenAICompatibleProvider),
             ("grok", OpenAICompatibleProvider),
+            ("groq", OpenAICompatibleProvider),
             ("openrouter", OpenAICompatibleProvider),
             ("openai-compatible", OpenAICompatibleProvider),
             ("gemini", GeminiProvider),
@@ -218,7 +361,13 @@ class TestRegistry:
     )
     def test_factory_creates_provider(self, provider: str, expected_class: type) -> None:
         registry = create_default_registry()
-        settings = Settings(_env_file=None, llm_provider=provider, llm_api_key="k", llm_model="m")
+        settings = Settings(
+            _env_file=None,
+            llm_provider=provider,
+            llm_api_key="k",
+            llm_model="m",
+            llm_base_url="https://gw.example/v1",
+        )
         instance = registry.create(provider, settings)
         assert isinstance(instance, expected_class)
 

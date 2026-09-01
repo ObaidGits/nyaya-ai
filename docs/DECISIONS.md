@@ -3180,3 +3180,79 @@ sole public entry point.
 verification (localhost:8000) and Prometheus scraping (api:8000 in-network)
 unaffected. Verified post-deploy: both ports loopback-only, frontend :3000
 unchanged.
+
+## D-089 — Deployment lifecycle is Compose-native; one canonical checkout per machine (2026-09-01)
+
+**Context.** "Duplicate Nyaya containers" traced to a clean-clone E2E test
+checkout (`/tmp/nyaya-clean`) whose Compose project name (`nyaya-clean`,
+derived from the directory) differed from the canonical project (`nyay`).
+`--remove-orphans` is project-scoped, so it can never clean another
+project's containers — the stopped test stack silently held ports
+3000/8000/9090 and resurfaced after reboots. The deploy script itself
+(`up -d --remove-orphans`) was already idempotent; the VM was never affected.
+
+**Decision.** Keep the Compose-native lifecycle (no custom container
+management) and remove the failure modes around it:
+- `deploy-remote.sh`: `up -d --remove-orphans --wait --wait-timeout 300` so
+  a rollout whose API never turns healthy fails the deploy instead of
+  silently leaving a broken service.
+- `deploy-remote.sh`: non-destructive audit that WARNS about Nyaya-named
+  containers outside the `nyaya-ai` project (a second checkout on the same
+  machine) — never auto-deletes; they may hold data.
+- `docker-up.sh`: `--remove-orphans` for local parity.
+- Rule: exactly one canonical checkout per machine. Compose project names
+  derive from the checkout directory; test clones must be
+  `docker compose down` before the directory is removed.
+
+**Verified.** No-change deploy recreates nothing; image change recreates
+only the affected services (api+worker, frontend untouched); `restart`
+keeps container identity; repeated deploys converge (zero recreation);
+named volumes and data fingerprints (forms, retrieval vectors) unchanged.
+
+
+## D-090 — Console-saved LLM config wins over env; saves verify before activating (2026-09-01)
+
+**Context.** Three production symptoms from one root cluster: (1) the admin
+console asked for the API key again after every save — the env
+`LLM_API_KEY` silently overrode the console-saved key in both
+`AdminSettingsStore.apply_overrides` and the save endpoint's merge, so the
+saved key was never actually used; (2) "Brain Active" was a superficial
+signal (startup-time provider construction + a `_probe("/")` that counted
+HTTP 401 as healthy), so the header lied while chat failed with
+"The chat service is currently unavailable"; (3) a save with a wrong key or
+misspelled model silently became the active provider, breaking every chat
+turn until an admin noticed.
+
+**Decision.**
+- Secret precedence flipped: a console-saved secret WINS over the env value;
+  env is the bootstrap default only. Clearing the console secret (explicit
+  `clear_secrets`, never a blank string) falls back to the env value.
+- Test-before-activate gate: PUT `/admin/settings` probes the CANDIDATE
+  provider config; anything other than `HEALTHY` (unreachable, rejected key,
+  model not offered) rejects the save with 422 `LLM_VERIFICATION_FAILED` and
+  the previous provider stays active. `force: true` is the deliberate escape
+  hatch (offline first-configuration).
+- Classified health contract: every provider implements `probe()` returning
+  `ProviderHealth` (`healthy | degraded | invalid_configuration |
+  unavailable | not_configured`); exposed publicly at
+  `GET /api/v1/health/llm` (15 s cache, invalidated on settings apply) and
+  in `/admin/status` as `llm.state`. Readiness uses `ActiveModelCheck`,
+  which resolves the provider at CHECK time (not startup) — a console
+  provider switch is reflected without a restart.
+- Provider defaults verified against current docs (never hand-typed):
+  OpenAI `https://api.openai.com/v1`, xAI `https://api.x.ai/v1` (default
+  model `grok-4.6`), Groq `https://api.groq.com/openai/v1` (`openai/gpt-oss-120b`,
+  new as a built-in provider), OpenRouter `https://openrouter.ai/api/v1`,
+  Gemini native `generativelanguage.googleapis.com/v1beta`, Ollama local.
+  Saving with a blank base URL persists the provider default, so the
+  settings view always reflects the effective configuration.
+- Frontend: "Brain Active" derives solely from `/health/llm`; the admin save
+  flow shows a persistent result banner (success names the active provider;
+  verification failure offers "Save anyway"); secrets support explicit
+  Remove with Undo. Real keys are never echoed — only "set"/"" masks.
+
+**Verified.** Backend: `tests/admin/` (save verification, secret lifecycle,
+masking, provider defaults), `tests/test_health.py` (`/health/llm` states,
+cache, ActiveModelCheck), `tests/test_llm_cloud.py` (probe classification,
+registry defaults). Frontend: AdminPanel + BrainStatus suites (106 total).
+Live hosted-provider verification recorded in the remediation report.

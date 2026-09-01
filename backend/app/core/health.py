@@ -12,12 +12,17 @@ failure, never swallowed.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ValidationError
 
 from app.core.config import Settings
+
+if TYPE_CHECKING:
+    from app.llm.base import LLMProvider
 
 
 class CheckStatus(StrEnum):
@@ -263,4 +268,53 @@ class ModelProviderCheck(_HttpDependencyCheck):
             name=self.name,
             status=CheckStatus.FAIL,
             detail=f"model {self._model} not present on provider",
+        )
+
+
+class ActiveModelCheck(DependencyCheck):
+    """Truthful check of the CURRENTLY active LLM provider.
+
+    Unlike :class:`ModelProviderCheck` (built once at startup with the
+    startup URL/provider — stale the moment the admin console switches
+    providers), this check resolves the provider from application state at
+    check time and uses the provider's own authenticated :meth:`probe`
+    (credentials + model availability), so "model ok" can only mean the
+    active provider is actually usable. A provider resolution failure is an
+    honest FAIL, never a stale OK.
+    """
+
+    name = "model"
+
+    def __init__(self, resolve_provider: "Callable[[], LLMProvider]") -> None:
+        self._resolve_provider = resolve_provider
+
+    async def check(self) -> CheckResult:
+        from app.llm.base import ProviderHealthState
+
+        try:
+            provider = self._resolve_provider()
+        except Exception as exc:
+            return CheckResult(
+                name=self.name,
+                status=CheckStatus.FAIL,
+                detail=f"provider not configured: {type(exc).__name__}",
+            )
+        try:
+            health = await provider.probe()
+        except Exception as exc:
+            return CheckResult(
+                name=self.name,
+                status=CheckStatus.FAIL,
+                detail=f"probe raised {type(exc).__name__}",
+            )
+        if health.state is ProviderHealthState.HEALTHY:
+            return CheckResult(
+                name=self.name,
+                status=CheckStatus.OK,
+                detail=health.detail or "provider healthy",
+            )
+        return CheckResult(
+            name=self.name,
+            status=CheckStatus.FAIL,
+            detail=f"{health.state.value}: {health.detail}".strip(": "),
         )

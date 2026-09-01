@@ -11,7 +11,9 @@ cd "$(dirname "$0")/.."
 MODEL="${LLM_MODEL:-qwen2.5:3b}"
 
 echo "==> Building + starting stack (api, worker, frontend, redis, qdrant, postgres, ollama)"
-docker compose --profile llm up -d --build
+# --remove-orphans: drops containers this project no longer declares
+# (project-scoped — stacks from other checkouts are separate projects).
+docker compose --profile llm up -d --build --remove-orphans
 
 echo "==> Waiting for Ollama, then pulling model ${MODEL} (first pull ~2 GB, be patient)"
 for i in $(seq 1 60); do

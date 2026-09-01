@@ -21,6 +21,8 @@ from app.llm.base import (
     GenerationRequest,
     GenerationResult,
     LLMProvider,
+    ProviderHealth,
+    ProviderHealthState,
     ProviderMetadata,
 )
 from app.llm.sanitize import ReasoningStreamFilter, sanitize_answer_text
@@ -170,6 +172,71 @@ class GeminiProvider(LLMProvider):
                 return response.status_code == 200
         except httpx.HTTPError:
             return False
+
+    async def probe(self) -> ProviderHealth:
+        """Classified health (brain status contract)."""
+        if not self._api_key:
+            return ProviderHealth(
+                state=ProviderHealthState.NOT_CONFIGURED,
+                provider="gemini",
+                model=self._model or None,
+                detail="The 'gemini' provider is selected but no API key is configured.",
+            )
+        if not self._model:
+            return ProviderHealth(
+                state=ProviderHealthState.NOT_CONFIGURED,
+                provider="gemini",
+                detail="The 'gemini' provider needs a model name.",
+            )
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                response = await client.get(
+                    f"{self._base_url}/models",
+                    params={"key": self._api_key},
+                )
+        except httpx.HTTPError:
+            return ProviderHealth(
+                state=ProviderHealthState.UNAVAILABLE,
+                provider="gemini",
+                model=self._model,
+                detail="The Gemini endpoint is unreachable (network error or timeout).",
+            )
+        status = response.status_code
+        if status in (400, 401, 403):
+            # Google returns 400 (not 401/403) for a missing/invalid key.
+            return ProviderHealth(
+                state=ProviderHealthState.INVALID_CONFIGURATION,
+                provider="gemini",
+                model=self._model,
+                detail=f"Google rejected the API key (HTTP {status}).",
+            )
+        if status != 200:
+            return ProviderHealth(
+                state=ProviderHealthState.UNAVAILABLE,
+                provider="gemini",
+                model=self._model,
+                detail=f"Google returned HTTP {status} while listing models.",
+            )
+        try:
+            models = [
+                str(entry.get("name", "")).removeprefix("models/")
+                for entry in response.json().get("models", [])
+            ]
+        except ValueError:
+            models = None
+        if models is not None and self._model not in models:
+            return ProviderHealth(
+                state=ProviderHealthState.DEGRADED,
+                provider="gemini",
+                model=self._model,
+                detail=f"Google is reachable, but model '{self._model}' is not offered.",
+            )
+        return ProviderHealth(
+            state=ProviderHealthState.HEALTHY,
+            provider="gemini",
+            model=self._model,
+            detail="reachable and model available" if models is not None else "reachable",
+        )
 
 
 def create_gemini_provider(settings: Settings) -> LLMProvider:

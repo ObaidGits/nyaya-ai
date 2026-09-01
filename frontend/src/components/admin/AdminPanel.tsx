@@ -13,7 +13,7 @@ import {
   type AdminSettingsView,
 } from '../../lib/admin'
 import { ADMIN_SECTIONS } from '../../lib/adminSchema'
-import { toast } from '../../lib/toast'
+import { ApiError } from '../../lib/api'
 import { AdminLogin } from './AdminLogin'
 import { SettingsSectionCard } from './SettingsSectionCard'
 import { CorpusPanel } from './CorpusPanel'
@@ -23,19 +23,30 @@ import { MemoryPanel } from './MemoryPanel'
 type Values = Record<string, string | number | boolean>
 type Secrets = Record<string, string>
 
+/** Save outcome shown as a persistent banner (§ save UX). "verify" offers
+ * "Save anyway" after the backend's test-before-activate gate rejected the
+ * candidate — the previous provider stays active until then. */
+interface SaveResult {
+  kind: 'success' | 'error' | 'verify'
+  message: string
+}
+
 export function AdminPanel({ onExit }: { onExit: () => void }) {
   const [authed, setAuthed] = useState<boolean | null>(null)
   const [enabled, setEnabled] = useState(true)
   const [view, setView] = useState<AdminSettingsView | null>(null)
   const [draftValues, setDraftValues] = useState<Values>({})
   const [draftSecrets, setDraftSecrets] = useState<Secrets>({})
+  const [clearedSecrets, setClearedSecrets] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+  const [saveResult, setSaveResult] = useState<SaveResult | null>(null)
 
   const loadSettings = useCallback(async () => {
     const next = await fetchSettings()
     setView(next)
     setDraftValues({ ...next.values })
     setDraftSecrets({})
+    setClearedSecrets([])
   }, [])
 
   useEffect(() => {
@@ -45,6 +56,28 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
       if (session.authenticated) void loadSettings()
     })
   }, [loadSettings])
+
+  const dirty =
+    view !== null &&
+    (ADMIN_SECTIONS.some((section) =>
+      section.fields.some((field) => {
+        const current = String(draftValues[field.key] ?? '')
+        return String(view.values[field.key] ?? '') !== current
+      }),
+    ) ||
+      Object.values(draftSecrets).some((value) => value !== '') ||
+      clearedSecrets.length > 0)
+
+  // Guard against losing unsaved changes on tab close / reload. Unconditional
+  // (must run even while the early-return screens below are shown).
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
 
   if (authed === null) {
     return (
@@ -77,14 +110,6 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
     )
   }
 
-  const dirty =
-    ADMIN_SECTIONS.some((section) =>
-      section.fields.some((field) => {
-        const current = String(draftValues[field.key] ?? '')
-        return String(view.values[field.key] ?? '') !== current
-      }),
-    ) || Object.values(draftSecrets).some((value) => value !== '')
-
   const onValueChange = (key: string, value: string | number | boolean) =>
     setDraftValues((prev) => {
       const next = { ...prev, [key]: value }
@@ -95,19 +120,50 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
       return next
     })
 
-  const onSecretChange = (key: string, value: string) =>
+  const onSecretChange = (key: string, value: string) => {
     setDraftSecrets((prev) => ({ ...prev, [key]: value }))
+    // Typing a new value cancels a pending removal of that key.
+    if (value !== '') setClearedSecrets((prev) => prev.filter((k) => k !== key))
+  }
 
-  const save = async () => {
+  // Toggle explicit secret removal (empty input means "keep", not "clear").
+  const onSecretClear = (key: string) => {
+    setClearedSecrets((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    )
+    setDraftSecrets((prev) => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }
+
+  const save = async (force = false) => {
     setSaving(true)
     try {
-      const next = await updateSettings(draftValues, draftSecrets)
+      const next = await updateSettings(draftValues, draftSecrets, {
+        clearSecrets: clearedSecrets,
+        force,
+      })
       setView(next)
       setDraftValues({ ...next.values })
       setDraftSecrets({})
-      toast.info('Settings saved.')
+      setClearedSecrets([])
+      const provider = String(next.values.llm_provider ?? '')
+      const model = String(next.values.llm_model ?? '')
+      setSaveResult({
+        kind: 'success',
+        message: `Settings saved — ${provider} / ${model} is now the active provider.`,
+      })
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Save failed.')
+      if (error instanceof ApiError && error.code === 'LLM_VERIFICATION_FAILED') {
+        // The candidate failed verification; nothing was saved. Offer the
+        // explicit escape hatch rather than a generic error.
+        setSaveResult({ kind: 'verify', message: error.message })
+      } else {
+        const message = error instanceof Error ? error.message : 'Save failed.'
+        setSaveResult({ kind: 'error', message })
+      }
     } finally {
       setSaving(false)
     }
@@ -116,11 +172,13 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
   const reset = () => {
     setDraftValues({ ...view.values })
     setDraftSecrets({})
+    setClearedSecrets([])
   }
 
   const secretSet = Object.fromEntries(
     Object.entries(view.secrets).map(([key, value]) => [key, value === 'set']),
   )
+  const secretSources = view.secret_sources ?? {}
 
   return (
     <div className="min-h-dvh bg-ink-50 dark:bg-ink-950">
@@ -147,7 +205,7 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
           </button>
           <button
             type="button"
-            onClick={save}
+            onClick={() => void save()}
             disabled={!dirty || saving}
             className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-700 disabled:opacity-50 dark:bg-brand-500 dark:text-ink-950"
           >
@@ -175,6 +233,41 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
       </header>
 
       <main className="mx-auto flex max-w-3xl flex-col gap-5 p-4 sm:p-6">
+        {saveResult && (
+          <div
+            role={saveResult.kind === 'success' ? 'status' : 'alert'}
+            aria-label="Save result"
+            className={`flex flex-wrap items-start justify-between gap-3 rounded-xl border p-4 text-sm ${
+              saveResult.kind === 'success'
+                ? 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                : saveResult.kind === 'verify'
+                  ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                  : 'border-red-300 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/60 dark:text-red-300'
+            }`}
+          >
+            <p className="min-w-0 flex-1">{saveResult.message}</p>
+            <div className="flex shrink-0 gap-2">
+              {saveResult.kind === 'verify' && (
+                <button
+                  type="button"
+                  onClick={() => void save(true)}
+                  disabled={saving}
+                  className="rounded-lg border border-amber-600 px-3 py-1 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100 disabled:opacity-50 dark:border-amber-500 dark:text-amber-300 dark:hover:bg-amber-900/40"
+                >
+                  Save anyway
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSaveResult(null)}
+                aria-label="Dismiss message"
+                className="rounded-lg px-2 py-1 text-xs underline-offset-2 transition-colors hover:underline"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
         {ADMIN_SECTIONS.map((section) => (
           <SettingsSectionCard
             key={section.id}
@@ -182,9 +275,12 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
             values={draftValues}
             secrets={draftSecrets}
             secretSet={secretSet}
+            secretSources={secretSources}
+            secretCleared={Object.fromEntries(clearedSecrets.map((key) => [key, true]))}
             providers={view.llm_providers}
             onValueChange={onValueChange}
             onSecretChange={onSecretChange}
+            onSecretClear={onSecretClear}
           />
         ))}
         <CorpusPanel />

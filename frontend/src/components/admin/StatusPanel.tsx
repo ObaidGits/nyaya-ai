@@ -91,7 +91,16 @@ export function StatusPanel() {
         <Row
           name="LLM provider"
           status={status.llm}
-          detail={`${String(status.llm.provider ?? '?')} / ${String(status.llm.model ?? '?')}`}
+          detail={[
+            // Non-healthy classified state (degraded, invalid_configuration…)
+            // is shown explicitly — "error" alone hides why.
+            status.llm.state && status.llm.state !== 'healthy'
+              ? status.llm.state.replace(/_/g, ' ')
+              : null,
+            `${String(status.llm.provider ?? '?')} / ${String(status.llm.model ?? '?')}`,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
         />
         <Row name="Speech (STT)" status={status.stt} detail={`${status.stt.provider ?? ''} ${status.stt.model ?? ''}`} />
         <Row name="Speech (TTS)" status={status.tts} detail={`${status.tts.provider ?? ''} ${status.tts.model ?? ''}`} />

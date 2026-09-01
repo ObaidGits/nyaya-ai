@@ -49,7 +49,7 @@ docker compose up -d          # api, worker, redis, qdrant, postgres,
 | Shape | `.env` | Result |
 | --- | --- | --- |
 | Keyless local (default) | `COMPOSE_PROFILES=ollama`, `LLM_PROVIDER=ollama` | in-stack Ollama container + auto model pull |
-| API-key hosted LLM | `COMPOSE_PROFILES=` (empty), `LLM_PROVIDER=openai`/`gemini`/`grok`/`openrouter`/`openai-compatible`, `LLM_API_KEY=…` | no Ollama container created at all; chat uses the hosted provider |
+| API-key hosted LLM | `COMPOSE_PROFILES=` (empty), `LLM_PROVIDER=openai`/`gemini`/`grok`/`groq`/`openrouter`/`openai-compatible`, `LLM_API_KEY=…` | no Ollama container created at all; chat uses the hosted provider |
 
 Speech has the same split: `SPEECH_STT_PROVIDER`/`SPEECH_TTS_PROVIDER`
 accept `browser` (Web Speech API / speechSynthesis run client-side — zero
@@ -105,8 +105,8 @@ All configuration is environment-driven; no secrets are committed. Copy
 | `QDRANT_BNS_COLLECTION` / `QDRANT_USER_DOCUMENT_COLLECTION` | Qdrant collection names | `bns_chunks` / `user_document_chunks` |
 | `REDIS_URL` | Redis DSN (queue + production document store) | `redis://localhost:6379/0` |
 | `LLM_PROVIDER` | provider id (ollama default; swappable, LLM-002/003) | `ollama` |
-| `LLM_BASE_URL` / `LLM_MODEL` | provider endpoint / model | `http://localhost:11434` / `llama3.1:8b` |
-| `LLM_API_KEY` | hosted-provider key — set ONLY in `.env`, never commit | unset |
+| `LLM_BASE_URL` / `LLM_MODEL` | provider endpoint / model — built-in providers have doc-verified defaults; leave `LLM_BASE_URL` empty for them | `http://localhost:11434` / `llama3.1:8b` |
+| `LLM_API_KEY` | hosted-provider key — set ONLY in `.env`, never commit. Bootstrap default: a key saved in the admin console wins over this value (D-090) | unset |
 | `LLM_COST_PER_1K_INPUT_TOKENS` / `LLM_COST_PER_1K_OUTPUT_TOKENS` | cost model rates (local Ollama is free) | `0` |
 | `EMBEDDING_MODEL` / `EMBEDDING_BATCH_SIZE` | embedding config | `BAAI/bge-base-en-v1.5` / `32` |
 | `DENSE_TOP_K` / `SPARSE_TOP_K` | hybrid retrieval pool sizes | `20` / `20` |
@@ -126,8 +126,14 @@ ollama serve & ollama pull qwen2.5:3b
 # .env: LLM_PROVIDER=ollama, LLM_BASE_URL=http://localhost:11434, LLM_MODEL=qwen2.5:3b
 ```
 
-A hosted provider is a config change only (`LLM_PROVIDER`, `LLM_BASE_URL`,
-`LLM_API_KEY` in `.env`); the provider sits behind the `LLMProvider` interface.
+A hosted provider is a config change only (`LLM_PROVIDER`, `LLM_MODEL`,
+`LLM_API_KEY` in `.env` — the base URL defaults to the provider's official
+endpoint); the provider sits behind the `LLMProvider` interface. The
+`/settings` admin console can switch providers at runtime: saves verify the
+candidate first (reachable, key accepted, model offered) and a failed
+provider never replaces a working one (D-090). The header "Brain active"
+badge reflects the backend's classified health probe at
+`GET /api/v1/health/llm`, not a superficial settings check.
 
 ## Corpus ingestion & forms extraction
 

@@ -60,6 +60,7 @@ def create_default_registry() -> ProviderRegistry:
     from app.llm.ollama import create_ollama_provider
     from app.llm.openai_compat import (
         create_grok_provider,
+        create_groq_provider,
         create_openai_compatible_provider,
         create_openai_provider,
         create_openrouter_provider,
@@ -70,6 +71,7 @@ def create_default_registry() -> ProviderRegistry:
     registry.register("openai", create_openai_provider)
     registry.register("gemini", create_gemini_provider)
     registry.register("grok", create_grok_provider)
+    registry.register("groq", create_groq_provider)
     registry.register("openrouter", create_openrouter_provider)
     registry.register("openai-compatible", create_openai_compatible_provider)
     return registry

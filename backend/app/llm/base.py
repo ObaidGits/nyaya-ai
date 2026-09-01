@@ -11,10 +11,36 @@ This module intentionally contains no generation, citation or retrieval logic.
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Sequence
+from enum import StrEnum
 
 from pydantic import BaseModel
 
 from app.domain.models import MessageRole
+
+
+class ProviderHealthState(StrEnum):
+    """Authoritative provider usability states (brain status contract).
+
+    ``healthy`` means the provider is configured, authenticated AND the
+    configured model is available — the only state in which the UI may show
+    "Brain active".
+    """
+
+    NOT_CONFIGURED = "not_configured"
+    INVALID_CONFIGURATION = "invalid_configuration"
+    UNAVAILABLE = "unavailable"
+    DEGRADED = "degraded"
+    HEALTHY = "healthy"
+    ERROR = "error"
+
+
+class ProviderHealth(BaseModel):
+    """Rich health probe result; never contains secrets."""
+
+    state: ProviderHealthState
+    provider: str
+    model: str | None = None
+    detail: str = ""
 
 
 class ChatMessage(BaseModel):
@@ -71,3 +97,22 @@ class LLMProvider(ABC):
     @abstractmethod
     async def health_check(self) -> bool:
         """Return ``True`` when the provider is reachable and usable."""
+
+    async def probe(self) -> ProviderHealth:
+        """Classified health for the brain status contract.
+
+        The default wraps :meth:`health_check` (bool) so simple providers and
+        test doubles keep working; concrete providers override it with a
+        state-classifying probe (auth rejected vs unreachable vs model
+        missing) so the UI never guesses.
+        """
+        healthy = await self.health_check()
+        meta = self.metadata()
+        return ProviderHealth(
+            state=ProviderHealthState.HEALTHY
+            if healthy
+            else ProviderHealthState.UNAVAILABLE,
+            provider=meta.provider,
+            model=meta.model,
+            detail="" if healthy else "provider unreachable or not configured",
+        )

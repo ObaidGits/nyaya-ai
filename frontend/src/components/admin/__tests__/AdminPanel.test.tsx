@@ -254,24 +254,51 @@ describe('AdminPanel settings', () => {
   })
 
   it('loads the provider model list into a datalist and still accepts typed ids', async () => {
-    stubAdmin({
+    const calls = stubAdmin({
       'GET /api/v1/admin/settings': () => jsonResponse(SETTINGS_VIEW),
-      'GET /api/v1/admin/llm/models': () =>
+      'POST /api/v1/admin/llm/models': () =>
         jsonResponse({ provider: 'ollama', models: ['llama3.1:8b', 'qwen2.5:7b'] }),
     })
     render(<Harness />)
     await screen.findByText('AI / LLM provider')
     const input = screen.getByLabelText('Model') as HTMLInputElement
-    expect(input.getAttribute('list')).toBe('llm-model-options')
     await userEvent.click(screen.getByRole('button', { name: 'Load models' }))
-    expect(await screen.findByText('2 models loaded from the provider.')).toBeTruthy()
-    const datalist = document.getElementById('llm-model-options') as HTMLDataListElement
-    const optionValues = Array.from(datalist.options).map((o) => o.value)
-    expect(optionValues).toContain('qwen2.5:7b')
+    expect(await screen.findByText('2 models loaded from ollama.')).toBeTruthy()
+    // The list opens immediately after loading (datalist was never shown
+    // by some browsers — this is a real dropdown now).
+    const list = await screen.findByRole('listbox', { name: 'Available models' })
+    const options = within(list).getAllByRole('option')
+    expect(options.map((o) => o.textContent)).toEqual(['llama3.1:8b', 'qwen2.5:7b'])
+    // Picking a model fills the input and closes the list.
+    await userEvent.click(within(list).getByText('qwen2.5:7b'))
+    expect(input.value).toBe('qwen2.5:7b')
+    expect(screen.queryByRole('listbox')).toBeNull()
+    // The request carries the form's DRAFT config (provider + typed key), not
+    // just the saved state.
+    const load = calls.find((c) => c.path === '/api/v1/admin/llm/models')!
+    const body = JSON.parse(load.body!)
+    expect(body.provider).toBe('ollama')
+    expect(load.headers.get('X-Nyaya-Admin')).toBe('1')
     // Typing an arbitrary model id is still allowed.
     await userEvent.clear(input)
     await userEvent.type(input, 'llama3.1')
     expect(input.value).toBe('llama3.1')
+  })
+
+  it('notes that an env key is only the bootstrap default (console key wins)', async () => {
+    stubAdmin({
+      'GET /api/v1/admin/settings': () =>
+        jsonResponse({
+          ...SETTINGS_VIEW,
+          secret_sources: { llm_api_key: 'env', speech_stt_api_key: '', speech_tts_api_key: '' },
+        }),
+    })
+    render(<Harness />)
+    await screen.findByText('AI / LLM provider')
+    await userEvent.selectOptions(screen.getByLabelText('Provider'), 'openai')
+    expect(
+      screen.getByText(/bootstrap default — saving a key here overrides it/),
+    ).toBeTruthy()
   })
 
   it('masks secrets and never displays stored values', async () => {
@@ -281,12 +308,12 @@ describe('AdminPanel settings', () => {
     expect(key.type).toBe('password')
     expect(key.value).toBe('')
     // A key IS configured server-side, shown without revealing it.
-    expect(screen.getByText(/A key is configured server-side/)).toBeTruthy()
+    expect(screen.getByText(/A key is saved in the admin console/)).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Show API key' }))
     expect(key.type).toBe('text')
   })
 
-  it('marks unsaved changes, saves, and clears the indicator', async () => {
+  it('marks unsaved changes, saves, and shows a success banner naming the active provider', async () => {
     const calls = stubAdmin({
       'GET /api/v1/admin/settings': () => jsonResponse(SETTINGS_VIEW),
       'PUT /api/v1/admin/settings': () =>
@@ -305,10 +332,83 @@ describe('AdminPanel settings', () => {
     await userEvent.type(screen.getByLabelText('Model'), 'llama3.3')
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull())
+    // Success banner names the active provider/model and stays until dismissed.
+    const banner = await screen.findByRole('status', { name: 'Save result' })
+    expect(banner.textContent).toContain('Settings saved — ollama / llama3.3 is now the active provider.')
     const put = calls.find((c) => c.method === 'PUT')!
     expect(put.path).toBe('/api/v1/admin/settings')
     expect(put.headers.get('X-Nyaya-Admin')).toBe('1')
-    expect(JSON.parse(put.body!).values.llm_model).toBe('llama3.3')
+    const body = JSON.parse(put.body!)
+    expect(body.values.llm_model).toBe('llama3.3')
+    expect(body.clear_secrets).toEqual([])
+    expect(body.force).toBe(false)
+    await userEvent.click(within(banner).getByRole('button', { name: 'Dismiss message' }))
+    expect(screen.queryByRole('status', { name: 'Save result' })).toBeNull()
+  })
+
+  it('offers "Save anyway" after verification fails, and sends force on retry', async () => {
+    const calls = stubAdmin({
+      'GET /api/v1/admin/settings': () => jsonResponse(SETTINGS_VIEW),
+      'PUT /api/v1/admin/settings': (() => {
+        let attempt = 0
+        return () => {
+          attempt += 1
+          if (attempt === 1) {
+            return errorResponse(
+              422,
+              'LLM_VERIFICATION_FAILED',
+              'Not saved — the new LLM configuration did not verify: provider rejected the API key.',
+            )
+          }
+          return jsonResponse({ ...SETTINGS_VIEW, values: { ...SETTINGS_VIEW.values, llm_model: 'llama3.3' } })
+        }
+      })(),
+    })
+    render(<Harness />)
+    await screen.findByText('AI / LLM provider')
+    await userEvent.clear(screen.getByLabelText('Model'))
+    await userEvent.type(screen.getByLabelText('Model'), 'llama3.3')
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    const banner = await screen.findByRole('alert', { name: 'Save result' })
+    expect(banner.textContent).toContain('did not verify')
+    expect(banner.textContent).toContain('provider rejected the API key')
+    // The old value is untouched (nothing was saved).
+    expect((screen.getByLabelText('Model') as HTMLInputElement).value).toBe('llama3.3')
+    // Explicit override: retry with force.
+    await userEvent.click(within(banner).getByRole('button', { name: 'Save anyway' }))
+    await waitFor(() =>
+      expect(screen.getByRole('status', { name: 'Save result' }).textContent).toContain('Settings saved'),
+    )
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(JSON.parse(puts[0].body!).force).toBe(false)
+    expect(JSON.parse(puts[1].body!).force).toBe(true)
+  })
+
+  it('queues explicit secret removal and sends clear_secrets on save', async () => {
+    const calls = stubAdmin({
+      'GET /api/v1/admin/settings': () => jsonResponse(SETTINGS_VIEW),
+      'PUT /api/v1/admin/settings': () => jsonResponse(SETTINGS_VIEW),
+    })
+    render(<Harness />)
+    await screen.findByText('AI / LLM provider')
+    await userEvent.selectOptions(screen.getByLabelText('Provider'), 'openai')
+    // A saved key exists (masked "set") → offer removal, never a blank overwrite.
+    await userEvent.click(screen.getByRole('button', { name: 'Remove API key' }))
+    expect(screen.getByText(/Key will be removed when you save changes/)).toBeTruthy()
+    expect(screen.getByText('Unsaved changes')).toBeTruthy()
+    // Undo cancels the removal (the provider switch itself still counts as
+    // an unsaved change, so only the removal indicator is checked here).
+    await userEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(screen.queryByText(/Key will be removed/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Remove API key' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Remove API key' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await screen.findByRole('status', { name: 'Save result' })
+    const put = calls.find((c) => c.method === 'PUT')!
+    const body = JSON.parse(put.body!)
+    expect(body.clear_secrets).toEqual(['llm_api_key'])
+    // Blank secret (unchanged) is not sent as a destructive empty string.
+    expect(body.secrets.llm_api_key ?? '').toBe('')
   })
 
   it('shows validation errors from the server', async () => {
@@ -326,7 +426,7 @@ describe('AdminPanel settings', () => {
   })
 
   it('runs a connection test and shows latency', async () => {
-    stubAdmin({
+    const calls = stubAdmin({
       'GET /api/v1/admin/settings': () => jsonResponse(SETTINGS_VIEW),
       'POST /api/v1/admin/test/llm': () =>
         jsonResponse({ success: true, latency_ms: 42, message: 'ollama / llama3.1: reachable.' }),
@@ -335,6 +435,9 @@ describe('AdminPanel settings', () => {
     await screen.findByText('AI / LLM provider')
     await userEvent.click(screen.getByRole('button', { name: 'Test LLM connection' }))
     expect(await screen.findByText(/reachable\. \(42 ms\)/)).toBeTruthy()
+    // The test posts the form's draft config, so unsaved edits are exercised.
+    const test = calls.find((c) => c.path === '/api/v1/admin/test/llm')!
+    expect(JSON.parse(test.body!).provider).toBe('ollama')
   })
 })
 

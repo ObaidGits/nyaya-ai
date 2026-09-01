@@ -31,8 +31,18 @@ export interface LlmProviderInfo {
 export interface AdminSettingsView {
   values: Record<string, string | number | boolean>
   secrets: Record<string, string>
+  /** Where each secret's effective value comes from: "env" | "console" | "". */
+  secret_sources: Record<string, string>
   persisted: string[]
   llm_providers: LlmProviderInfo[]
+}
+
+/** Draft (unsaved) LLM config — test/load exercise the form, not the saved state. */
+export interface LlmDraftConfig {
+  provider: string
+  model: string
+  base_url: string
+  api_key: string
 }
 
 export interface TestResult {
@@ -62,7 +72,11 @@ export interface SystemStatus {
   postgres: DependencyStatus
   redis: DependencyStatus
   qdrant: DependencyStatus
-  llm: DependencyStatus & { provider?: string; model?: string | null }
+  llm: DependencyStatus & {
+    provider?: string
+    model?: string | null
+    state?: string
+  }
   stt: DependencyStatus
   tts: DependencyStatus
   corpus: DependencyStatus & { sha256?: string; act?: string; chunks?: number }
@@ -136,20 +150,33 @@ export async function fetchSettings(): Promise<AdminSettingsView> {
   return response.json()
 }
 
+export interface UpdateSettingsOptions {
+  /** Secrets to remove explicitly (empty strings above mean "unchanged"). */
+  clearSecrets?: string[]
+  /** Skip the provider verification gate (deliberate offline save). */
+  force?: boolean
+}
+
 export async function updateSettings(
   values: Record<string, string | number | boolean>,
   secrets: Record<string, string>,
+  options: UpdateSettingsOptions = {},
 ): Promise<AdminSettingsView> {
   const response = await adminFetch('/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...ADMIN_MUTATING },
-    body: JSON.stringify({ values, secrets }),
+    body: JSON.stringify({
+      values,
+      secrets,
+      clear_secrets: options.clearSecrets ?? [],
+      force: options.force ?? false,
+    }),
   })
   if (!response.ok) throw await parseError(response)
   return response.json()
 }
 
-export async function testConnection(kind: 'llm' | 'stt' | 'tts'): Promise<TestResult> {
+export async function testConnection(kind: 'stt' | 'tts'): Promise<TestResult> {
   const response = await adminFetch(`/test/${kind}`, {
     method: 'POST',
     headers: ADMIN_MUTATING,
@@ -158,9 +185,27 @@ export async function testConnection(kind: 'llm' | 'stt' | 'tts'): Promise<TestR
   return response.json()
 }
 
-/** Model ids offered by the configured provider (settings combobox). */
-export async function fetchLlmModels(): Promise<{ provider: string; models: string[] }> {
-  const response = await adminFetch('/llm/models')
+/** Test the LLM config currently in the form (blank api_key = use stored key). */
+export async function testLlmConnection(draft: LlmDraftConfig): Promise<TestResult> {
+  const response = await adminFetch('/test/llm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...ADMIN_MUTATING },
+    body: JSON.stringify(draft),
+  })
+  if (!response.ok) throw await parseError(response)
+  return response.json()
+}
+
+/** Model ids for the draft provider config (blank api_key = use stored key). */
+export async function fetchLlmModels(draft: LlmDraftConfig): Promise<{
+  provider: string
+  models: string[]
+}> {
+  const response = await adminFetch('/llm/models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...ADMIN_MUTATING },
+    body: JSON.stringify(draft),
+  })
   if (!response.ok) throw await parseError(response)
   return response.json()
 }

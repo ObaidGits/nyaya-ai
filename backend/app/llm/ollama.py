@@ -20,6 +20,8 @@ from app.llm.base import (
     GenerationRequest,
     GenerationResult,
     LLMProvider,
+    ProviderHealth,
+    ProviderHealthState,
     ProviderMetadata,
 )
 from app.llm.sanitize import ReasoningStreamFilter, sanitize_answer_text
@@ -159,6 +161,51 @@ class OllamaProvider(LLMProvider):
                 return response.status_code == 200
         except httpx.HTTPError:
             return False
+
+    async def probe(self) -> ProviderHealth:
+        """Classified health (brain status contract): the model must actually
+        be pulled, not merely the server reachable."""
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{self.base_url}/api/tags")
+        except httpx.HTTPError:
+            return ProviderHealth(
+                state=ProviderHealthState.UNAVAILABLE,
+                provider="ollama",
+                model=self.model,
+                detail="The Ollama server is unreachable.",
+            )
+        if response.status_code != 200:
+            return ProviderHealth(
+                state=ProviderHealthState.UNAVAILABLE,
+                provider="ollama",
+                model=self.model,
+                detail=f"The Ollama server returned HTTP {response.status_code}.",
+            )
+        try:
+            tags = response.json().get("models") or []
+        except ValueError:
+            return ProviderHealth(
+                state=ProviderHealthState.UNAVAILABLE,
+                provider="ollama",
+                model=self.model,
+                detail="The Ollama server returned invalid JSON for /api/tags.",
+            )
+        names = {str(tag.get("name", "")) for tag in tags}
+        names |= {str(tag.get("model", "")) for tag in tags}
+        if self.model in names or any(name.startswith(f"{self.model}:") for name in names):
+            return ProviderHealth(
+                state=ProviderHealthState.HEALTHY,
+                provider="ollama",
+                model=self.model,
+                detail="reachable and model available",
+            )
+        return ProviderHealth(
+            state=ProviderHealthState.DEGRADED,
+            provider="ollama",
+            model=self.model,
+            detail=f"Ollama is reachable, but model '{self.model}' is not pulled.",
+        )
 
 
 def create_ollama_provider(settings: Settings) -> LLMProvider:

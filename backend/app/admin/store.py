@@ -8,9 +8,11 @@ Persists the admin-configurable subset of application settings as JSON with
 3. Runtime application configuration
 
 Secrets (API keys) live in a separate section of the same file — never
-returned by GET settings, never logged, always masked in the UI. Deployment
-secrets set via environment are never overridden by the store: an env-provided
-value wins over a persisted one for secret fields.
+returned by GET settings, never logged, always masked in the UI. A secret
+saved through the console WINS over an environment-provided value (D-090):
+the admin console is the authoritative place to rotate provider keys, and a
+deployment-time env key is only the bootstrap default. Secrets stored in the
+environment remain masked in every response either way.
 """
 
 from __future__ import annotations
@@ -133,18 +135,16 @@ class AdminSettingsStore:
     def apply_overrides(self, base: Settings) -> Settings:
         """Merge persisted values over the environment-provided settings.
 
-        Env-provided secrets always win over persisted ones (deployment
-        secrets must not be silently overridden by the console). An activated
+        A secret saved through the console overrides an environment-provided
+        value (D-090): the console is the authoritative place to rotate
+        provider keys, the env value is the bootstrap default. An activated
         replacement corpus (``corpus.path``) overrides the environment's
         corpus path until a new corpus is activated.
         """
         persisted = self.load()
         merged: dict[str, Any] = dict(persisted["settings"])
         for key in SECRET_FIELDS:
-            env_value = getattr(base, key, None)
-            if env_value is not None:
-                merged.pop(key, None)  # environment wins
-            elif key in persisted["secrets"]:
+            if key in persisted["secrets"]:
                 merged[key] = persisted["secrets"][key]
         # Manifest written by corpus activation stores the artifact under
         # "artifact_path"; accept the explicit "path" key too.

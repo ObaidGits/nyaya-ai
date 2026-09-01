@@ -22,6 +22,8 @@ from app.llm.base import (
     GenerationRequest,
     GenerationResult,
     LLMProvider,
+    ProviderHealth,
+    ProviderHealthState,
     ProviderMetadata,
 )
 from app.llm.sanitize import ReasoningStreamFilter, sanitize_answer_text
@@ -34,11 +36,15 @@ class CloudProviderError(AppError):
     code = "LLM_PROVIDER_UNAVAILABLE"
 
 
-# name -> (default base url, default model, display name)
+# name -> (default base url, default model, display name). URLs/models are
+# the providers' documented official endpoints (verified against current
+# docs): OpenAI https://api.openai.com/v1, xAI https://api.x.ai/v1,
+# Groq https://api.groq.com/openai/v1, OpenRouter https://openrouter.ai/api/v1.
 PROFILES: dict[str, tuple[str, str, str]] = {
     "openai": ("https://api.openai.com/v1", "gpt-4o-mini", "OpenAI"),
     "openai-compatible": ("", "", "OpenAI-compatible"),
-    "grok": ("https://api.x.ai/v1", "grok-2-latest", "Grok"),
+    "grok": ("https://api.x.ai/v1", "grok-4.6", "Grok (xAI)"),
+    "groq": ("https://api.groq.com/openai/v1", "openai/gpt-oss-120b", "Groq"),
     "openrouter": ("https://openrouter.ai/api/v1", "openai/gpt-4o-mini", "OpenRouter"),
 }
 
@@ -207,6 +213,80 @@ class OpenAICompatibleProvider(LLMProvider):
         except httpx.HTTPError:
             return False
 
+    async def probe(self) -> ProviderHealth:
+        """Classified health (brain status contract): distinguishes missing
+        configuration, rejected credentials, an unreachable endpoint and a
+        model the provider does not offer."""
+        if not self._api_key:
+            return ProviderHealth(
+                state=ProviderHealthState.NOT_CONFIGURED,
+                provider=self._provider,
+                model=self._model or None,
+                detail=f"The '{self._provider}' provider is selected but no API key is configured.",
+            )
+        if not self._base_url or not self._model:
+            return ProviderHealth(
+                state=ProviderHealthState.NOT_CONFIGURED,
+                provider=self._provider,
+                model=self._model or None,
+                detail=f"The '{self._provider}' provider needs a base URL and a model name.",
+            )
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                response = await client.get(f"{self._base_url}/models", headers=self._headers())
+        except httpx.HTTPError:
+            return ProviderHealth(
+                state=ProviderHealthState.UNAVAILABLE,
+                provider=self._provider,
+                model=self._model,
+                detail="The provider endpoint is unreachable (network error or timeout).",
+            )
+        status = response.status_code
+        if status in (400, 401, 403):
+            return ProviderHealth(
+                state=ProviderHealthState.INVALID_CONFIGURATION,
+                provider=self._provider,
+                model=self._model,
+                detail=f"The provider rejected the API key (HTTP {status}).",
+            )
+        if status == 404:
+            return ProviderHealth(
+                state=ProviderHealthState.INVALID_CONFIGURATION,
+                provider=self._provider,
+                model=self._model,
+                detail="No model-listing endpoint at this URL (HTTP 404) — check the base URL.",
+            )
+        if status != 200:
+            return ProviderHealth(
+                state=ProviderHealthState.UNAVAILABLE,
+                provider=self._provider,
+                model=self._model,
+                detail=f"The provider returned HTTP {status} while listing models.",
+            )
+        # Authenticated and reachable — verify the configured model is offered.
+        try:
+            offered = sorted(
+                str(entry.get("id")) for entry in response.json().get("data", []) if entry.get("id")
+            )
+        except ValueError:
+            offered = None
+        if offered is not None and self._model not in offered:
+            return ProviderHealth(
+                state=ProviderHealthState.DEGRADED,
+                provider=self._provider,
+                model=self._model,
+                detail=(
+                    f"The provider is reachable, but model '{self._model}' is not in its "
+                    "model list."
+                ),
+            )
+        return ProviderHealth(
+            state=ProviderHealthState.HEALTHY,
+            provider=self._provider,
+            model=self._model,
+            detail="reachable and model available" if offered is not None else "reachable",
+        )
+
 
 def create_openai_provider(settings: Settings) -> LLMProvider:
     return _create_compat(settings, "openai")
@@ -218,6 +298,10 @@ def create_openai_compatible_provider(settings: Settings) -> LLMProvider:
 
 def create_grok_provider(settings: Settings) -> LLMProvider:
     return _create_compat(settings, "grok")
+
+
+def create_groq_provider(settings: Settings) -> LLMProvider:
+    return _create_compat(settings, "groq")
 
 
 def create_openrouter_provider(settings: Settings) -> LLMProvider:
@@ -243,6 +327,7 @@ __all__ = [
     "PROFILES",
     "OpenAICompatibleProvider",
     "create_grok_provider",
+    "create_groq_provider",
     "create_openai_compatible_provider",
     "create_openai_provider",
     "create_openrouter_provider",

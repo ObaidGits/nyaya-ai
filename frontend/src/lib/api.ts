@@ -60,27 +60,45 @@ export function getSessionId(): string {
 
 // --- Health -------------------------------------------------------------------
 
-export type ModelHealth = 'active' | 'unavailable' | 'unknown'
+/**
+ * Brain status states from the backend's authoritative LLM health contract
+ * (`GET /api/v1/health/llm`). Only "active" (backend: healthy) means the
+ * active provider is configured, authenticated AND its model is offered.
+ */
+export type ModelHealth =
+  | 'active'
+  | 'degraded'
+  | 'unavailable'
+  | 'misconfigured'
+  | 'not_configured'
+  | 'unknown'
 
-interface ReadinessBody {
-  status?: string
-  checks?: Record<string, { status?: string; detail?: string | null }>
+interface LlmHealthBody {
+  state?: string
+  detail?: string
+}
+
+const STATE_MAP: Record<string, ModelHealth> = {
+  healthy: 'active',
+  degraded: 'degraded',
+  unavailable: 'unavailable',
+  invalid_configuration: 'misconfigured',
+  not_configured: 'not_configured',
 }
 
 /**
- * Truthful LLM/provider availability from the backend readiness endpoint
- * (`GET /api/v1/health/ready`). Only the backend's real `model` check decides
- * the outcome; anything unreadable reports "unknown" — never a fake healthy
- * state.
+ * Truthful LLM/provider usability from the backend's classified probe of the
+ * ACTIVE provider. The frontend never derives brain status from local state
+ * (settings presence, a selected provider name, an API key) — only the
+ * backend's real probe decides. Anything unreadable reports "unknown",
+ * never a fake healthy state.
  */
 export async function fetchModelHealth(): Promise<ModelHealth> {
   try {
-    const response = await fetch(`${API_BASE}/api/v1/health/ready`)
-    const body = (await response.json()) as ReadinessBody
-    const model = body?.checks?.model?.status
-    if (model === 'ok') return 'active'
-    if (model === 'fail') return 'unavailable'
-    return 'unknown'
+    const response = await fetch(`${API_BASE}/api/v1/health/llm`)
+    if (!response.ok) return 'unknown'
+    const body = (await response.json()) as LlmHealthBody
+    return STATE_MAP[body.state ?? ''] ?? 'unknown'
   } catch {
     return 'unknown'
   }
