@@ -1283,6 +1283,37 @@ class StructureParser:
                     sections[si].title = cluster.text.rstrip(".")
                     sections[si].title_confident = False
                     break
+        # Junk swap: an unused cluster can be a section's REAL note while the
+        # section still holds an unconfirmed all-boilerplate fragment that
+        # scores the same coverage but is NOT distinctive (s.316 held
+        # "Dishonest of that of property" while "Criminal breach of trust"
+        # sat unused). A distinctive candidate replaces a non-distinctive
+        # unconfirmed title at equal-or-better coverage.
+        swapped_norms: set[str] = set()
+        for n_sec, cluster in candidates:
+            norm = _norm_cluster_text(cluster.text.rstrip("."))
+            if norm in used or norm in swapped_norms:
+                continue
+            for si, section in enumerate(sections):
+                if not section.title or section.title_confident:
+                    continue
+                if abs(n_sec - (si + 1)) > 1:
+                    continue
+                m = _title_match(cluster.text, section, weights)
+                if not m.distinctive or m.coverage < 0.5:
+                    continue
+                held = _title_match(section.title, section, weights)
+                if held.distinctive or m.coverage < held.coverage:
+                    continue
+                section.title = cluster.text.rstrip(".")
+                section.title_confident = False
+                swapped_norms.add(norm)
+                break
+        candidates = [
+            (n, c)
+            for n, c in candidates
+            if _norm_cluster_text(c.text.rstrip(".")) not in swapped_norms
+        ]
         untitled = [i for i, s in enumerate(sections) if s.title is None]
         if not untitled:
             return
