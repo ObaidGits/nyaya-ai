@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 from app.ingestion.extract import PypdfPageExtractor
-from app.ingestion.models import CorpusSpec
+from app.ingestion.models import CorpusSpec, ParsedAct
 from app.ingestion.parser import StructureParser
 
 BNS_PDF = Path(__file__).resolve().parents[3] / "data" / "raw" / "BNS_gazette_2023.pdf"
@@ -42,7 +42,7 @@ def _norm(s: str | None) -> str:
 
 
 @pytest.fixture(scope="module")
-def act() -> object:
+def act() -> ParsedAct:
     pages = PypdfPageExtractor().extract(str(BNS_PDF))
     return StructureParser(CorpusSpec.bns()).parse(pages)
 
@@ -56,7 +56,7 @@ def _load_reference() -> dict[int, str]:
 
 
 @pytest.fixture(scope="module")
-def grades(act: object) -> dict[str, list[int]]:
+def grades(act: ParsedAct) -> dict[str, list[int]]:
     ref = _load_reference()
     out: dict[str, list[int]] = {
         "exact": [],
@@ -86,8 +86,8 @@ def grades(act: object) -> dict[str, list[int]]:
     return out
 
 
-def test_section_count_and_consecutive_numbering(act: object) -> None:
-    sections = act.sections  # type: ignore[attr-defined]
+def test_section_count_and_consecutive_numbering(act: ParsedAct) -> None:
+    sections = act.sections
     assert len(sections) == 358
     assert [s.number for s in sections] == list(range(1, 359))
 
@@ -103,7 +103,7 @@ def test_no_known_wrong_title_is_asserted_confidently(
     assert not offenders, f"confidently wrong titles: {offenders}"
 
 
-def test_title_quality_floor(act: object, grades: dict[str, list[int]]) -> None:
+def test_title_quality_floor(act: ParsedAct, grades: dict[str, list[int]]) -> None:
     """P0 floor: the large majority of titles exact, none asserted wrong,
     MISSING honestly flagged rather than junk-filled."""
     assert len(grades["exact"]) >= 250, f"exact titles {len(grades['exact'])} < 250"
@@ -122,7 +122,7 @@ def test_title_quality_floor(act: object, grades: dict[str, list[int]]) -> None:
             )
 
 
-def test_marginal_notes_do_not_leak_into_section_text(act: object) -> None:
+def test_marginal_notes_do_not_leak_into_section_text(act: ParsedAct) -> None:
     """The P0 audit issue: marginal-note words corrupting the statute body
     (body integrity, 72/425 fragments at audit time). Spot-gate the exact
     regression shapes: note-only phrases must not appear in body text."""
@@ -136,7 +136,7 @@ def test_marginal_notes_do_not_leak_into_section_text(act: object) -> None:
     assert "committed by such person himself" in by_number[95].text
 
 
-def test_body_integrity_note_words_not_glued_into_body(act: object) -> None:
+def test_body_integrity_note_words_not_glued_into_body(act: ParsedAct) -> None:
     """Body integrity, quantified (72/425 corrupted fragments at audit).
 
     A section body must not end on a dangling word that also appears in
@@ -157,7 +157,7 @@ def test_body_integrity_note_words_not_glued_into_body(act: object) -> None:
     assert len(offenders) <= 3, offenders
 
 
-def test_unconfirmed_titles_flagged_in_chunk_metadata(act: object) -> None:
+def test_unconfirmed_titles_flagged_in_chunk_metadata(act: ParsedAct) -> None:
     """Every unconfirmed title must carry the downstream needs_review flag
     so retrieval metadata honestly reports uncertainty (chunker contract)."""
     from app.ingestion.chunker import StructureAwareChunker
@@ -165,13 +165,9 @@ def test_unconfirmed_titles_flagged_in_chunk_metadata(act: object) -> None:
     chunks = StructureAwareChunker().chunk(
         act,
         "pdf:sha256-test",
-        "2026-09-02T00:00:00Z",  # type: ignore[arg-defined]
+        "2026-09-02T00:00:00Z",
     )
-    confident_numbers = {
-        str(s.number)
-        for s in act.sections
-        if s.title_confident  # type: ignore[attr-defined]
-    }
+    confident_numbers = {str(s.number) for s in act.sections if s.title_confident}
     bad = [
         c.chunk_id
         for c in chunks
