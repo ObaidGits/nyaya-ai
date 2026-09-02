@@ -338,6 +338,7 @@ _SUFFIXES = (
     "ings",
     "ing",
     "ies",
+    "ly",
     "ed",
     "es",
     "age",
@@ -939,12 +940,14 @@ class StructureParser:
         evidence is flagged title_confident=False for review.
         """
         weights = _df_weights(sections)
+        prepared: list[tuple[_FlushEvent, list[_NoteCluster]]] = []
         for event in events:
             clusters = [c for c in event.clusters if c.text]
             clusters = self._dedupe_clusters(clusters)
             clusters = self._merge_split_clusters(clusters)
             clusters = self._append_continuations(clusters, sections, event, weights)
             clusters = [c for c in clusters if not self._is_body_echo(c, sections, event)]
+            prepared.append((event, clusters))
             if not clusters:
                 continue
             pending = [s for s in sections[: event.n_sections] if s.title is None]
@@ -1040,6 +1043,322 @@ class StructureParser:
                 # in its margin), challenger the next section.
                 default_idx, other_idx = event.n_sections - 1, event.n_sections
             self._assign_last(last, sections, default_idx, other_idx, weights, event)
+
+        self._merge_cross_event_fragments(prepared, sections, weights)
+        self._reject_fragment_titles(sections)
+        self._sweep_unassigned_clusters(prepared, sections, weights)
+
+    @staticmethod
+    def _is_fragment_text(text: str) -> bool:
+        """A cluster/title that is a stranded fragment, not a note.
+
+        Marginal notes are TitleCase noun phrases ending on a content
+        word. Text that starts lowercase or ends on a dangling
+        connective/continuation word is a mid-phrase fragment of the
+        flat text layer — never presentable as a title.
+        """
+        words = text.split()
+        if not words:
+            return True
+        # Prepositions legitimately end Gazette notes ("...not otherwise
+        # provided for"); only clear continuation adverbs mark a fragment.
+        bad_endings = _BODY_TAIL_STARTERS | {
+            "other",
+            "when",
+            "acting",
+            "against",
+            "both",
+            "not",
+        }
+        return text[:1].islower() or words[-1].strip(".,;:").lower() in bad_endings
+
+    @staticmethod
+    def _fragment_tail_only(text: str) -> bool:
+        """Text that ends well but opens lowercase: a continuation tail
+        (or a lost note head), never a standalone title."""
+        words = text.split()
+        if not words:
+            return True
+        bad_endings = _BODY_TAIL_STARTERS | {
+            "other",
+            "when",
+            "acting",
+            "against",
+            "both",
+            "not",
+        }
+        return words[-1].strip(".,;:").lower() in bad_endings
+
+    @staticmethod
+    def _reject_fragment_titles(sections: list[Section]) -> None:
+        """Drop titles that are body fragments, not marginal notes.
+
+        Keeping a fragment would present a wrong title; the section is
+        returned to untitled (flagged for review) instead. Fragments were
+        always title_confident=False, so no confident title is withdrawn.
+        Trailing ", etc" is a legitimate Gazette title ending and kept.
+        """
+        for section in sections:
+            if section.title and StructureParser._is_fragment_text(section.title):
+                section.title = None
+                section.title_confident = False
+
+    @staticmethod
+    def _merge_cross_event_fragments(
+        prepared: list[tuple[_FlushEvent, list[_NoteCluster]]],
+        sections: list[Section],
+        weights: dict[str, float],
+    ) -> None:
+        """Rejoin a note split across TWO flush events.
+
+        A note broken at a page/section boundary flushes its head in one
+        event and its lowercase tail in the next, so the in-event merge
+        cannot see the pair. An unconfirmed title that ends DANGLING (on
+        a connective) is extended by a nearby unused lowercase-start
+        cluster when the merged text describes the section at least as
+        well as the head alone (same contract as _append_continuations).
+        """
+        used = {_norm_cluster_text(s.title) for s in sections if s.title}
+        tails: list[tuple[int, _NoteCluster]] = []
+        for event, clusters in prepared:
+            for cluster in clusters:
+                norm = _norm_cluster_text(cluster.text.rstrip("."))
+                if (
+                    cluster.text[:1].islower()
+                    and norm not in used
+                    and not StructureParser._fragment_tail_only(cluster.text)
+                ):
+                    tails.append((event.n_sections, cluster))
+        for idx, section in enumerate(sections):
+            title = section.title
+            if not title or section.title_confident or not StructureParser._is_fragment_text(title):
+                continue
+            head = title.rsplit(maxsplit=1)[-1].lower()
+            if head not in _DANGLING_CONNECTIVES:
+                continue
+            before = _title_match(title, section, weights).coverage
+            for pos, (n_sec, tail) in enumerate(tails):
+                if abs(n_sec - (idx + 1)) > 1:
+                    continue
+                merged = f"{title} {tail.text.rstrip('.')}"
+                after = _title_match(merged, section, weights).coverage
+                # A dangling head scores near-perfectly on its own words;
+                # the tail's extra tokens can only dilute coverage. The
+                # dangling ending itself proves incompleteness, so the
+                # bar is that the merged note still describes the section.
+                if after >= 0.5 and after >= before - 0.3:
+                    section.title = merged
+                    tails.pop(pos)
+                    break
+
+    def _sweep_unassigned_clusters(
+        self,
+        prepared: list[tuple[_FlushEvent, list[_NoteCluster]]],
+        sections: list[Section],
+        weights: dict[str, float],
+    ) -> None:
+        """Final pass: give still-untitled sections their leftover notes.
+
+        The per-event passes are conservative: a cluster whose content
+        match is weak (not distinctive) is skipped even when it is the
+        ONLY plausible candidate left, and a single-cluster event can
+        leave the true owner one section off the arbitration pair. After
+        all events, every section holds at most one title, so the set of
+        cluster texts that no section owns is known exactly. Each
+        still-untitled section takes the best-matching unused cluster
+        from a nearby flush (within 3 sections), provided the match beats
+        every other untitled section's claim on that cluster by a clear
+        margin. Sweep-assigned titles are always title_confident=False —
+        an honest review flag, never a confident guess.
+        """
+        used = {_norm_cluster_text(s.title) for s in sections if s.title}
+        candidates: list[tuple[int, _NoteCluster]] = []
+        long_fragments: list[tuple[int, _NoteCluster]] = []
+        for event, clusters in prepared:
+            for cluster in clusters:
+                text = cluster.text.rstrip(".")
+                if _norm_cluster_text(text) in used:
+                    continue
+                if not self._is_fragment_text(text):
+                    candidates.append((event.n_sections, cluster))
+                elif len(text.split()) >= 4 and text[-1].isalpha() and text[-1] not in ".;":
+                    # A LONG lowercase fragment can still be a near-complete
+                    # note ("good faith for benefit of a person without
+                    # consent" = s.30's title minus its first words): body
+                    # fragments are short/generic, these carry the note's
+                    # distinctive content. Kept in a separate, stricter pool.
+                    long_fragments.append((event.n_sections, cluster))
+        # Reattach split heads: an unused cluster ending on a dangling word
+        # ("Culpable homicide by causing death of person other") is half a
+        # note; an adjacent unused lowercase cluster is its tail ("whose
+        # death was intended"). The merged text is the real marginal note.
+        merged_texts: list[tuple[int, str]] = []
+        consumed: set[int] = set()
+        flat: list[tuple[int, _NoteCluster, int]] = [
+            (event.n_sections, cluster, ei)
+            for ei, (event, clusters) in enumerate(prepared)
+            for cluster in clusters
+        ]
+        for hi, (n_head, head, hei) in enumerate(flat):
+            head_text = head.text.rstrip(".")
+            if (
+                self._is_fragment_text(head_text)
+                and head_text.rsplit(maxsplit=1)[-1].lower() not in _DANGLING_CONNECTIVES
+            ):
+                continue
+            if _norm_cluster_text(head_text) in used or hi in consumed:
+                continue
+            for ti, (n_tail, tail, tei) in enumerate(flat):
+                if ti == hi or ti in consumed or tei < hei:
+                    continue
+                tail_text = tail.text.rstrip(".")
+                if not tail_text[:1].islower() or self._fragment_tail_only(tail_text):
+                    continue
+                if _norm_cluster_text(tail_text) in used:
+                    continue
+                if abs(n_tail - n_head) > 1:
+                    continue
+                merged = f"{head_text} {tail_text}"
+                if not self._is_fragment_text(merged):
+                    merged_texts.append((n_head, merged))
+                    consumed.update({hi, ti})
+                    break
+        for n_sec, merged in merged_texts:
+            synthetic = _NoteCluster(text=merged + ".", forced=False)
+            candidates.append((n_sec, synthetic))
+        merged_norms = {_norm_cluster_text(m) for _, m in merged_texts}
+        long_fragments = [
+            (n, c) for n, c in long_fragments if _norm_cluster_text(c.text) not in merged_norms
+        ]
+        holders = {_norm_cluster_text(s.title): i for i, s in enumerate(sections) if s.title}
+        untitled = [i for i, s in enumerate(sections) if s.title is None]
+        if not untitled:
+            return
+        # The steal pool spans ALL clusters, including ones already held by
+        # an unconfirmed neighbour: the classic failure is an off-by-one
+        # arbitration that put the true owner's note on the next section.
+        steal_pool: list[tuple[int, _NoteCluster]] = list(candidates)
+        for event, clusters in prepared:
+            for cluster in clusters:
+                text = cluster.text.rstrip(".")
+                norm = _norm_cluster_text(text)
+                holder = holders.get(norm)
+                if (
+                    holder is not None
+                    and not sections[holder].title_confident
+                    and not self._is_fragment_text(text)
+                ):
+                    steal_pool.append((event.n_sections, cluster))
+        for n_sec, cluster in steal_pool:
+            norm = _norm_cluster_text(cluster.text.rstrip("."))
+            holder = holders.get(norm)
+            if holder is None or sections[holder].title_confident:
+                continue
+            for si in untitled:
+                if si == holder or abs(n_sec - (si + 1)) > 2:
+                    continue
+                m = _title_match(cluster.text, sections[si], weights)
+                h = _title_match(cluster.text, sections[holder], weights)
+                if not (m.coverage >= 0.8 and m.distinctive):
+                    continue
+                margin = m.coverage - h.coverage
+                # Content tie: when the note matches BOTH sections equally,
+                # prefer the EARLIER (untitled) section — notes flush in
+                # document order, so a tie means arbitration shifted the
+                # note one section late. Only steal when the vacated holder
+                # has a replacement candidate nearby, so the steal cannot
+                # create a new missing title.
+                if margin >= 0.2 or (
+                    margin == 0
+                    and si < holder
+                    and n_sec <= holder + 1
+                    and any(
+                        abs(hn - (holder + 1)) <= 2
+                        and _title_match(bc.text, sections[holder], weights).coverage >= 0.5
+                        for hn, bc in candidates
+                    )
+                ):
+                    sections[holder].title = None
+                    sections[holder].title_confident = False
+                    sections[si].title = cluster.text.rstrip(".")
+                    sections[si].title_confident = False
+                    break
+        untitled = [i for i, s in enumerate(sections) if s.title is None]
+        if not untitled:
+            return
+        # Pair scores: (section, cluster) -> coverage.
+        all_candidates = candidates + long_fragments
+        scores: dict[tuple[int, int], float] = {}
+        distinctive: set[tuple[int, int]] = set()
+        positional_strict: set[tuple[int, int]] = set()
+        for si in untitled:
+            for ci, (n_sec, cluster) in enumerate(all_candidates):
+                if abs(n_sec - (si + 1)) > 2:
+                    continue
+                match = _title_match(cluster.text, sections[si], weights)
+                scores[(si, ci)] = match.coverage
+                if match.distinctive:
+                    distinctive.add((si, ci))
+                # Long lowercase fragments are admitted only on a
+                # distinctive match at full coverage, flush-adjacent:
+                # near-complete notes, never generic body prose.
+                if ci >= len(candidates) and abs(n_sec - (si + 1)) <= 1 and match.coverage >= 0.6:
+                    positional_strict.add((si, ci))
+        # Greedy best-first assignment with a discrimination margin.
+        pairs = sorted(
+            (
+                (cov, si, ci)
+                for (si, ci), cov in scores.items()
+                if (
+                    ci < len(candidates)
+                    and cov >= 0.3
+                    and (
+                        (si, ci) in distinctive
+                        or self._sweep_positional_ok(cov, si, ci, all_candidates)
+                    )
+                )
+                or ((si, ci) in positional_strict)
+            ),
+            reverse=True,
+        )
+        taken_sections: set[int] = set()
+        taken_clusters: set[int] = set()
+        for cov, si, ci in pairs:
+            if si in taken_sections or ci in taken_clusters:
+                continue
+            rivals = [
+                (scores.get((other, ci), 0.0), other)
+                for other in untitled
+                if other != si and other not in taken_sections
+            ]
+            best_rival = max(rivals, default=(0.0, -1))
+            if cov - best_rival[0] < 0.15 and not (
+                # Exact content tie: the EARLIER section wins — notes flush
+                # in document order, so a tie means the neighbour stole it.
+                cov == best_rival[0] and si < best_rival[1]
+            ):
+                continue
+            n_sec, cluster = all_candidates[ci]
+            sections[si].title = cluster.text.rstrip(".")
+            sections[si].title_confident = False
+            taken_sections.add(si)
+            taken_clusters.add(ci)
+
+    @staticmethod
+    def _sweep_positional_ok(
+        cov: float, si: int, ci: int, candidates: list[tuple[int, _NoteCluster]]
+    ) -> bool:
+        """Non-distinctive match allowed when position alone is strong.
+
+        Some real notes share only common words with their section
+        ("Enhanced punishment for certain offences after previous
+        conviction" vs a body about convictions and offences). When the
+        cluster flushed within one section of this section AND beats every
+        rival by a wide coverage margin, the assignment stands — still
+        flagged title_confident=False for review.
+        """
+        n_sec, _ = candidates[ci]
+        return abs(n_sec - (si + 1)) <= 1 and cov >= 0.35
 
     @staticmethod
     def _dedupe_clusters(clusters: list[_NoteCluster]) -> list[_NoteCluster]:
@@ -1320,6 +1639,17 @@ class StructureParser:
         if other is not None and other.title is not None and other.title_confident:
             other = None
         if default is None and other is None:
+            # Both boundary neighbours already own confident titles, but a
+            # note flushed one section LATE (its section's header consumed
+            # a glued fragment, so the cluster flushed after the next
+            # section started) still has a rightful owner at n-2. Only a
+            # decisive content match claims it — never positional guess.
+            back = at(default_idx - 1)
+            if back is not None and back.title is None:
+                bm = _title_match(cluster.text, back, weights)
+                if _decisive(bm, None):
+                    back.title = cluster.text.rstrip(".")
+                    back.title_confident = not cluster.forced and _decisive(bm, None)
             return
 
         default_open = default is not None and default.title is None
