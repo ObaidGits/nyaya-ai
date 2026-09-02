@@ -10,13 +10,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.v1.documents import get_session_id
 from app.core.errors import AppError
 from app.documents.retrieval import DocumentRetrievalService
-from app.retrieval.models import RetrievedEvidence
+from app.retrieval.models import MetadataFilter, RetrievalRoute, RetrievedEvidence
 from app.retrieval.service import RetrievalService
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -29,6 +29,30 @@ class SearchRequest(BaseModel):
     route: str | None = Field(
         default=None,
         description="Optional route override: statute | document | combined.",
+    )
+    chapter: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Restrict statute retrieval to this chapter (A3-008).",
+    )
+    section_number: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Restrict statute retrieval to this section (A3-010).",
+    )
+    act: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Restrict statute retrieval to this act's full name (A3-009).",
+    )
+    act_short: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Restrict statute retrieval to this act's short label (A3-009).",
     )
 
 
@@ -82,29 +106,69 @@ def _statute_view(evidence: RetrievedEvidence) -> StatuteResults:
     )
 
 
-@router.post("")
-async def search(
-    request: SearchRequest,
-    session_id: Annotated[str, Depends(get_session_id)],
-    statute: Annotated[RetrievalService | None, Depends(get_statute_retrieval)],
-    documents: Annotated[DocumentRetrievalService | None, Depends(get_document_retrieval)],
-) -> SearchResponse:
-    """Raw retrieval for debugging/evaluation (D-019/D-020)."""
+def _build_filter(
+    chapter: str | None, section_number: str | None, act: str | None, act_short: str | None
+) -> MetadataFilter | None:
+    """Assemble the server-side retrieval filter (A3-008/A3-009/A3-010).
+
+    Returns None when no filter field was supplied (unchanged behavior).
+    Unknown values are NOT an error here: the retrieval layer enforces the
+    filter server-side and fails closed — an unknown chapter/section
+    yields empty results, never an unfiltered fallback.
+    """
+    values: dict[str, str | None] = {
+        "chapter": chapter,
+        "section_number": section_number,
+        "act": act,
+        "act_short": act_short,
+    }
+    if all(v is None for v in values.values()):
+        return None
+    return MetadataFilter(**values)
+
+
+def _resolve_route(query: str, route_override: str | None) -> RetrievalRoute:
+    """Classify the route, honoring an explicit override and filter scope."""
     from app.retrieval.intent import classify_route
-    from app.retrieval.models import RetrievalRoute
 
-    route = classify_route(request.query)
-    if request.route is not None:
-        try:
-            route = RetrievalRoute(request.route)
-        except ValueError:
+    route = classify_route(query)
+    if route_override is None:
+        return route
+    try:
+        return RetrievalRoute(route_override)
+    except ValueError:
+        raise AppError(
+            "Invalid route. Use statute, document or combined.",
+            status_code=422,
+            code="INVALID_ROUTE",
+        ) from None
+
+
+def _execute_search(
+    *,
+    query: str,
+    route_override: str | None,
+    flt: MetadataFilter | None,
+    session_id: str,
+    statute: RetrievalService | None,
+    documents: DocumentRetrievalService | None,
+) -> SearchResponse:
+    """Shared GET/POST logic: route, filter, retrieve, shape the response."""
+    route = _resolve_route(query, route_override)
+    if flt is not None and route == RetrievalRoute.DOCUMENT:
+        if route_override is not None:
+            # Explicitly asking for documents while filtering statute
+            # metadata is a client bug, not an implicit scope hint.
             raise AppError(
-                "Invalid route. Use statute, document or combined.",
+                "Metadata filters apply to statute retrieval only.",
                 status_code=422,
-                code="INVALID_ROUTE",
-            ) from None
+                code="INVALID_FILTER",
+            )
+        # A filter is an explicit statute-scope hint: do not let intent
+        # classification silently drop it on the document route.
+        route = RetrievalRoute.STATUTE
 
-    response = SearchResponse(query=request.query)
+    response = SearchResponse(query=query)
     if route in (RetrievalRoute.STATUTE, RetrievalRoute.COMBINED):
         if statute is None:
             raise AppError(
@@ -112,7 +176,7 @@ async def search(
                 status_code=503,
                 code="RETRIEVAL_NOT_CONFIGURED",
             )
-        statute_evidence = statute.retrieve(request.query)
+        statute_evidence = statute.retrieve(query, flt)
         response.statute = _statute_view(statute_evidence)
     if route in (RetrievalRoute.DOCUMENT, RetrievalRoute.COMBINED):
         if documents is None:
@@ -121,6 +185,61 @@ async def search(
                 status_code=503,
                 code="DOCUMENTS_NOT_CONFIGURED",
             )
-        document_evidence = documents.retrieve(session_id, request.query)
+        document_evidence = documents.retrieve(session_id, query)
         response.documents = DocumentResults(hits=[h.model_dump() for h in document_evidence.hits])
     return response
+
+
+@router.post("")
+async def search(
+    request: SearchRequest,
+    session_id: Annotated[str, Depends(get_session_id)],
+    statute: Annotated[RetrievalService | None, Depends(get_statute_retrieval)],
+    documents: Annotated[DocumentRetrievalService | None, Depends(get_document_retrieval)],
+) -> SearchResponse:
+    """Raw retrieval for debugging/evaluation (D-019/D-020).
+
+    Optional metadata filters (chapter, section_number, act, act_short)
+    restrict statute retrieval (A3-008/A3-009/A3-010); they never widen
+    it — unknown values return empty results.
+    """
+    flt = _build_filter(
+        chapter=request.chapter,
+        section_number=request.section_number,
+        act=request.act,
+        act_short=request.act_short,
+    )
+    return _execute_search(
+        query=request.query,
+        route_override=request.route,
+        flt=flt,
+        session_id=session_id,
+        statute=statute,
+        documents=documents,
+    )
+
+
+@router.get("")
+async def search_get(
+    session_id: Annotated[str, Depends(get_session_id)],
+    statute: Annotated[RetrievalService | None, Depends(get_statute_retrieval)],
+    documents: Annotated[DocumentRetrievalService | None, Depends(get_document_retrieval)],
+    q: Annotated[str, Query(min_length=1, max_length=4000)],
+    route: Annotated[str | None, Query(max_length=32)] = None,
+    chapter: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+    section_number: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+    act: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+    act_short: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+) -> SearchResponse:
+    """GET variant of POST /api/v1/search: raw retrieval with optional
+    metadata filters as query parameters (D-019/D-020, A3-008..A3-010).
+    """
+    flt = _build_filter(chapter, section_number, act, act_short)
+    return _execute_search(
+        query=q,
+        route_override=route,
+        flt=flt,
+        session_id=session_id,
+        statute=statute,
+        documents=documents,
+    )

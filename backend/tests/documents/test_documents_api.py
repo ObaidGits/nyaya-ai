@@ -290,6 +290,131 @@ def test_search_rejects_invalid_route(client: TestClient) -> None:
     assert response.json()["error"]["code"] == "INVALID_ROUTE"
 
 
+# --- Statute metadata filtering over the API (A3-008/A3-009/A3-010) ---
+
+
+def _statute_app(tmp_path: Path) -> FastAPI:
+    """App backed by the synthetic statute corpus from retrieval fixtures."""
+    from app.retrieval.dense import CosineDenseIndex
+    from app.retrieval.service import RetrievalService
+    from app.retrieval.sparse import Bm25SparseIndex
+    from app.retrieval.store import ChunkStore
+    from tests.retrieval.fixtures import DeterministicEmbedder, make_corpus
+
+    app = _app(tmp_path)
+    chunks = make_corpus()
+    store = ChunkStore(chunks)
+    app.state.retrieval_service = RetrievalService(
+        store,
+        CosineDenseIndex(chunks, DeterministicEmbedder()),
+        Bm25SparseIndex(chunks),
+        document_retrieval=app.state.document_retrieval_service,
+    )
+    return app
+
+
+def _sections(body: dict) -> list[str]:
+    return [r["section_number"] for r in body["statute"]["results"]]
+
+
+@pytest.fixture
+def statute_client(tmp_path: Path) -> Iterator[TestClient]:
+    with TestClient(_statute_app(tmp_path)) as test_client:
+        yield test_client
+
+
+def test_search_filter_by_chapter_returns_only_that_chapter(statute_client: TestClient) -> None:
+    """chapter filter restricts retrieval to that chapter (A3-008)."""
+    unfiltered = statute_client.post(
+        "/api/v1/search",
+        json={"query": "offence"},
+        headers={"X-Session-Id": SESSION},
+    ).json()
+    assert set(_sections(unfiltered)) == {"1", "2", "9"}  # chapters I and XVII
+
+    filtered = statute_client.post(
+        "/api/v1/search",
+        json={"query": "offence", "chapter": "XVII"},
+        headers={"X-Session-Id": SESSION},
+    ).json()
+    assert _sections(filtered) == ["9"]
+    assert filtered["statute"]["results"][0]["chunk_id"] == "ts-s9-001"
+
+
+def test_search_filter_by_section_number_returns_only_that_section(
+    statute_client: TestClient,
+) -> None:
+    """section_number filter restricts retrieval to that section (A3-010)."""
+    body = statute_client.post(
+        "/api/v1/search",
+        json={"query": "punishment for murder", "section_number": "103"},
+        headers={"X-Session-Id": SESSION},
+    ).json()
+    assert set(_sections(body)) == {"103"}
+    for result in body["statute"]["results"]:
+        assert result["chunk_id"].startswith("ts-s103-")
+
+
+def test_search_filter_unknown_value_returns_empty_not_unfiltered(
+    statute_client: TestClient,
+) -> None:
+    """Unknown filter values fail closed: empty results, never a fallback."""
+    for flt in ({"chapter": "ZZZ"}, {"section_number": "9999"}, {"act_short": "NOPE"}):
+        body = statute_client.post(
+            "/api/v1/search",
+            json={"query": "offence", **flt},
+            headers={"X-Session-Id": SESSION},
+        ).json()
+        assert body["statute"]["results"] == [], flt
+        assert body["statute"]["sufficient"] is False
+
+
+def test_search_without_filter_keeps_unfiltered_behavior(
+    statute_client: TestClient,
+) -> None:
+    """No filter fields = same response shape and results as before."""
+    response = statute_client.post(
+        "/api/v1/search",
+        json={"query": "offence"},
+        headers={"X-Session-Id": SESSION},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(_sections(body)) == {"1", "2", "9"}
+
+
+def test_search_filter_with_explicit_document_route_rejected(
+    statute_client: TestClient,
+) -> None:
+    """Filters are statute-scoped; document route + filter is a client error."""
+    response = statute_client.post(
+        "/api/v1/search",
+        json={"query": "offence", "route": "document", "chapter": "XVII"},
+        headers={"X-Session-Id": SESSION},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_FILTER"
+
+
+def test_search_get_variant_supports_filters(statute_client: TestClient) -> None:
+    """GET /api/v1/search exposes the same filters as query parameters."""
+    response = statute_client.get(
+        "/api/v1/search",
+        params={"q": "offence", "chapter": "XVII"},
+        headers={"X-Session-Id": SESSION},
+    )
+    assert response.status_code == 200
+    assert _sections(response.json()) == ["9"]
+
+    empty = statute_client.get(
+        "/api/v1/search",
+        params={"q": "offence", "chapter": "ZZZ"},
+        headers={"X-Session-Id": SESSION},
+    )
+    assert empty.status_code == 200
+    assert empty.json()["statute"]["results"] == []
+
+
 def test_chat_answers_document_questions_from_session_documents(tmp_path: Path) -> None:
     """End-to-end: upload, then chat about the document (§34)."""
     settings = Settings(
