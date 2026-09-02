@@ -7,6 +7,14 @@
  * Citations are parsed from the answer text and matched against the
  * `sources` payload the backend sent — the frontend never invents source
  * details (C-012/C-013: everything shown comes from the backend payload).
+ *
+ * Matching is PREFIX-based, not exact: the answer may cite a subsection
+ * ([BNS s.103(1)]) while the source payload carries the whole section
+ * ([BNS s.103]) — the subsection is evidence-backed by that chunk (the
+ * backend citation guard validates granularity), so the drawer must open
+ * the section source rather than show "no source on record". Likewise a
+ * document citation with a page ([Document <id> p.2]) matches the source
+ * for the same document (chunk pages are in the payload fields).
  */
 
 import type { Source } from '../types'
@@ -40,10 +48,50 @@ function isCitationLabel(label: string): boolean {
 /** Bracket-insensitive key: backend citations may arrive wrapped in []. */
 const citationKey = (label: string) => label.replace(/^\[|\]$/g, '').trim()
 
+/**
+ * Statute citation base: act + section without subsections.
+ * "[BNS s.103(1)]" → "bns s.103" — subsection citations resolve to the
+ * whole-section source chunk that covers them.
+ */
+function statuteBase(label: string): string | null {
+  const match = label.match(/^([A-Za-z]{2,6})\s+s\.(\d+)/i)
+  return match ? `${match[1].toLowerCase()} s.${match[2]}` : null
+}
+
+/** Document citation base: "[Document <id> p.2]" → "<id>". */
+function documentBase(label: string): string | null {
+  const match = label.match(/^Document\s+(\S+?)(\s+p\.\d+)?$/i)
+  return match ? match[1] : null
+}
+
 /** Attach backend sources to parsed citation labels. */
 export function matchCitations(text: string, sources: Source[]): Citation[] {
-  return parseCitations(text).map((label) => ({
-    label,
-    source: sources.find((s) => citationKey(s.citation) === citationKey(label)),
-  }))
+  return parseCitations(text).map((label) => {
+    const key = citationKey(label)
+    let source = sources.find((s) => citationKey(s.citation) === key)
+
+    if (!source) {
+      // Subsection statute citation → whole-section source:
+      // [BNS s.103(1)] resolves against the [BNS s.103] payload entry.
+      const base = statuteBase(key)
+      if (base) {
+        source = sources.find((s) => statuteBase(citationKey(s.citation)) === base)
+      }
+    }
+
+    if (!source) {
+      // Document citation (with or without page) → any source entry for
+      // the same document id; the payload carries page_start/page_end.
+      const docId = documentBase(key)
+      if (docId) {
+        source = sources.find(
+          (s) =>
+            s.source_type === 'user_document' &&
+            documentBase(citationKey(s.citation)) === docId,
+        )
+      }
+    }
+
+    return { label, source }
+  })
 }
