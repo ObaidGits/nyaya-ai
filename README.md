@@ -469,14 +469,18 @@ dependency checks landed).
    qwen2.5:7b on the BNS golden set (2026-09-02) refusal correctness is
    1.000 and citation accuracy 0.958 — the guard never lets an uncited
    legal answer through.
-3. **Marginal-note titles (D-091 remediation, 2026-09-02):** the Gazette
-   flat text layer interleaves marginal notes with body text; the parser
-   now reconstructs them via DP alignment with content-confirmation
-   (EXACT 256 / NEAR 49 / PARTIAL 35 / WRONG 7 / MISSING 11 of 358
-   titles against an independently sourced reference list). Every WRONG
-   or MISSING title carries `title_confident=False` → `needs_review` in
-   chunk metadata: no false certainty, no junk-body-fragment titles.
-   Automated gate: `backend/tests/ingestion/test_bns_corpus.py`.
+3. **Marginal-note titles (D-091 remediation + final sweep passes,
+   2026-09-02):** the Gazette flat text layer interleaves marginal notes
+   with body text; the parser reconstructs them via DP alignment with
+   content-confirmation plus four final recovery passes (cross-event
+   fragment merge, fragment-title rejection, head/tail reattachment,
+   steal/junk-swap sweep) — EXACT 264 / NEAR 47 / PARTIAL 38 / WRONG 7 /
+   MISSING 2 of 358 titles against an independently sourced reference
+   list. Every WRONG or MISSING title carries `title_confident=False` →
+   `needs_review` in chunk metadata: no false certainty, no
+   junk-body-fragment titles. The two remaining gaps (s.15, s.176) have
+   no recoverable note cluster in the source text layer. Automated gate:
+   `backend/tests/ingestion/test_bns_corpus.py`.
 4. **Groq cloud provider key is currently invalid (2026-09-02):** the
    configured `LLM_API_KEY` returns HTTP 401 `invalid_api_key` from Groq.
    The runtime provider was switched to local Ollama (qwen2.5:7b) through
