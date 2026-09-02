@@ -368,9 +368,7 @@ class GeminiProvider(LLMProvider):
         status = response.status_code
         if status == 200:
             try:
-                text = str(
-                    response.json()["candidates"][0]["content"]["parts"][0]["text"] or ""
-                )
+                text = str(response.json()["candidates"][0]["content"]["parts"][0]["text"] or "")
             except (ValueError, KeyError, IndexError, TypeError):
                 text = ""
             if text.strip():

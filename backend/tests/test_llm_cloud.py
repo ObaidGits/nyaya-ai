@@ -552,9 +552,7 @@ class TestChatVerification:
         assert posts == ["/v1/models"]
 
     @pytest.mark.asyncio
-    async def test_verified_chat_is_healthy(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_verified_chat_is_healthy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A reasoning model that emits hidden reasoning before its visible
         answer verifies fine — the probe must not cap the output budget."""
         reasoning_served = False
@@ -642,9 +640,7 @@ class TestChatVerification:
         assert "429" in health.detail
 
     @pytest.mark.asyncio
-    async def test_chat_404_is_invalid_configuration(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_chat_404_is_invalid_configuration(self, monkeypatch: pytest.MonkeyPatch) -> None:
         handler = self._models_handler(lambda request: httpx.Response(404))
         _mock(monkeypatch, handler)
         health = await self._grok().probe(verify_chat=True)
@@ -653,9 +649,7 @@ class TestChatVerification:
         assert "404" in health.detail
 
     @pytest.mark.asyncio
-    async def test_chat_401_is_invalid_configuration(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_chat_401_is_invalid_configuration(self, monkeypatch: pytest.MonkeyPatch) -> None:
         handler = self._models_handler(lambda request: httpx.Response(401))
         _mock(monkeypatch, handler)
         health = await self._grok().probe(verify_chat=True)
@@ -663,9 +657,7 @@ class TestChatVerification:
         assert health.chat_verified is False
 
     @pytest.mark.asyncio
-    async def test_empty_chat_response_is_degraded(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_empty_chat_response_is_degraded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         handler = self._models_handler(
             lambda request: httpx.Response(200, json={"choices": [{"message": {"content": ""}}]})
         )
@@ -675,9 +667,7 @@ class TestChatVerification:
         assert health.chat_verified is False
 
     @pytest.mark.asyncio
-    async def test_chat_network_error_is_unavailable(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_chat_network_error_is_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/v1/models":
                 return httpx.Response(200, json={"data": [{"id": "grok-4.6"}]})
@@ -689,20 +679,14 @@ class TestChatVerification:
         assert health.chat_verified is False
 
     @pytest.mark.asyncio
-    async def test_gemini_verified_chat_is_healthy(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_gemini_verified_chat_is_healthy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/v1beta/models":
-                return httpx.Response(
-                    200, json={"models": [{"name": "models/gemini-2.0-flash"}]}
-                )
+                return httpx.Response(200, json={"models": [{"name": "models/gemini-2.0-flash"}]})
             assert request.url.path == "/v1beta/models/gemini-2.0-flash:generateContent"
             # No maxOutputTokens cap — thinking models burn a small cap on
             # hidden thought and return no visible text.
-            assert "maxOutputTokens" not in json.loads(request.content).get(
-                "generationConfig", {}
-            )
+            assert "maxOutputTokens" not in json.loads(request.content).get("generationConfig", {})
             return httpx.Response(
                 200, json={"candidates": [{"content": {"parts": [{"text": "OK"}]}}]}
             )
@@ -719,9 +703,7 @@ class TestChatVerification:
     ) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/v1beta/models":
-                return httpx.Response(
-                    200, json={"models": [{"name": "models/gemini-2.0-flash"}]}
-                )
+                return httpx.Response(200, json={"models": [{"name": "models/gemini-2.0-flash"}]})
             return httpx.Response(400)
 
         _mock(monkeypatch, handler)
@@ -731,9 +713,7 @@ class TestChatVerification:
         assert health.chat_verified is False
 
     @pytest.mark.asyncio
-    async def test_ollama_verified_chat_is_healthy(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_ollama_verified_chat_is_healthy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import app.llm.ollama as ollama_module
         from app.llm.ollama import OllamaProvider
 

@@ -174,6 +174,15 @@ curl -X POST http://localhost:8000/api/v1/documents/upload \
   -H 'X-Session-Id: my-session-0001' -F 'file=@./my-notice.pdf'
 curl -s http://localhost:8000/api/v1/documents -H 'X-Session-Id: my-session-0001'
 
+# raw retrieval (debugging/evaluation); optional metadata filters
+# (chapter, section_number, act, act_short) restrict statute retrieval
+# and fail closed — unknown values return empty results, never unfiltered
+curl -s -X POST http://localhost:8000/api/v1/search \
+  -H 'Content-Type: application/json' -H 'X-Session-Id: my-session-0001' \
+  -d '{"query":"What is the punishment for murder?","chapter":"XXII"}'
+curl -s 'http://localhost:8000/api/v1/search?q=offence&section_number=103' \
+  -H 'X-Session-Id: my-session-0001'
+
 # forms
 curl -s http://localhost:8000/api/v1/forms
 curl -s 'http://localhost:8000/api/v1/forms/search?q=warrant' | head -c 400
@@ -202,6 +211,24 @@ cd frontend && npm ci && npm test
 cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app
 cd frontend && npm run lint && npm run typecheck && npm run build
 ```
+
+### Browser E2E (Playwright)
+
+Real Chromium against the live docker stack — the full
+frontend → API → hybrid retrieval → live LLM path, no mocks:
+
+```bash
+docker compose up -d                      # stack must be running
+cd frontend && npm ci
+npx playwright install chromium           # once; already present on CI/dev box
+npx playwright test --config e2e/playwright.config.ts
+```
+
+Covered: a grounded answer streams into the conversation log with the
+correct statute citation, and an off-corpus question is refused in the
+browser. Spec lives in `frontend/e2e/live-chat.spec.ts`; config in
+`frontend/e2e/playwright.config.ts` (override the target with
+`E2E_BASE_URL`).
 
 ## Evaluation
 
@@ -247,6 +274,26 @@ only: hybrid R@5 0.655 / R@10 0.759 / MRR 0.622, refusal correctness
 D-093 (one colloquial rioting miss; the injection-payload case is
 defended at the generation layer, so the retrieval-refusal metric scores
 it as answered).
+
+**Post-remediation re-run (2026-09-02, after the D-091 marginal-note
+title fix and full corpus re-ingestion)** — same golden set, same corpus
+artifact, regenerated embeddings:
+
+| Configuration | Recall@5 | Recall@10 | MRR | Refusal correctness | Citation accuracy |
+| ------------- | -------- | --------- | --- | ------------------- | ----------------- |
+| hybrid (BGE), retrieval only | 0.672 | 0.759 | 0.604 | 0.966 | — |
+| hybrid (BGE) + live LLM (qwen2.5:7b) | 0.672 | 0.759 | 0.604 | **1.000** | **0.958** |
+
+Citation accuracy 0.958 and refusal correctness 1.000 with the live
+generation path (citation guard active): all 6 off-corpus/injection cases
+refused. Two retrieval-layer misses, documented not gamed:
+`bns-s10` ("a mob damaged shops") is genuinely ambiguous between mischief
+(s.324) and unlawful assembly/rioting (ss.189–191) — both readings
+retrieved, no threshold adjusted; `bns-x5` (prompt injection) retrieves
+statute chunks at the retrieval layer by design and is refused at the
+generation layer (tests/security/test_hardening.py). Results:
+`eval/results/bns_retrieval_2026-09-02.json`,
+`eval/results/bns_llm_ollama_2026-09-02.json`.
 
 ## Observability
 
@@ -304,6 +351,43 @@ local speech model is likely to exceed them.
 - **Rollback:** CI tags images with the commit SHA in GHCR; redeploy the
   previous SHA tag and `docker compose up -d api worker`. Recovery is a
   container restart (<1 min) — state lives in named volumes, not images.
+
+### Persistent data — what survives which command
+
+| Command | Console settings | Console API keys | Corpus / vectors / docs | DBs |
+| --- | --- | --- | --- | --- |
+| `docker compose restart` / app crash | kept | kept (encrypted) | kept | kept |
+| `docker compose down` | kept | kept (encrypted) | kept | kept |
+| `docker compose down --remove-orphans` | kept | kept (encrypted) | kept | kept |
+| `docker compose up -d` with new images (recreation) | kept | kept (encrypted) | kept | kept |
+| `docker compose down -v` | **lost** | **lost** | **lost** | **lost** |
+
+Everything above the last row lives in named volumes (`storage_data`,
+`postgres_data`, `redis_data`, `qdrant_data`, `ollama_models`); only
+`down -v` (or an explicit `docker volume rm`) removes them.
+
+Console API keys are stored as **Fernet ciphertext** in
+`storage/admin/admin.json`, keyed by a master key that is either
+`NYAYA_SECRET_KEY` (set it yourself — see `.env.example`) or a
+once-generated `storage/admin/secret.key` on the same volume. If that key
+is ever lost or rotated, stored keys are **preserved** (never deleted) but
+cannot be decrypted: the admin console shows a warning per affected field
+and the environment values apply instead. Re-entering a key (or restoring
+the old key) resolves it.
+
+**Backup / restore** (captures console settings, encrypted keys, the key
+file, and uploaded documents):
+
+```bash
+# volume name is <compose-project>_storage_data — check `docker volume ls`
+docker run --rm -v <compose-project>_storage_data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/storage-data.tgz /data
+# restore: swap czf for xzf
+```
+
+The API-key material inside the backup is ciphertext; the backup is safe to
+store wherever the `secret.key`/`NYAYA_SECRET_KEY` it also contains is
+safe.
 - CI (`.github/workflows/ci.yml`): PR + push-to-main triggers; backend
   lint/format/mypy/pytest with coverage ≥80% (includes the golden-set
   retrieval assertions, `tests/evaluation/test_golden_retrieval.py`);
@@ -380,29 +464,38 @@ dependency checks landed).
    bare-act PDF (pages 190–249), which is actually a BNSS gazette. The
    manifest records the true source SHA-256; no BNSS text is served as BNS
    statute content.
-2. **Refusal correctness is 0.793, not ~1.0:** the 3B local model sometimes
-   fails citation formatting and the guard correctly refuses ("no grounded
-   sentence survived validation"). The guard never lets an uncited legal
-   answer through; the cost is occasional over-refusal.
-3. **46 untitled sections:** Gazette marginal notes are interleaved
-   mid-sentence by the PDF text layer (e.g. s.282, s.300); the parser
-   refuses to guess titles (no manufacturing) and flags them in the
-   manifest. A three-iteration pdfplumber layout prototype recovered only
-   3/46 with one WRONG title (missing word) under strict validation — the
-   layout genuinely prevents reliable extraction (zero positional gap, no
-   font discriminator, adjacent-section note concatenation). All 46 stay
-   `needs_review`; evidence in DECISIONS.md D-084.
-4. **Speech voices:** STT/TTS verified live for English and Hindi only;
+2. **Local-model over-refusal (fixed for the BNS golden set):** the 3B
+   model failed citation formatting and the guard correctly refused. With
+   qwen2.5:7b on the BNS golden set (2026-09-02) refusal correctness is
+   1.000 and citation accuracy 0.958 — the guard never lets an uncited
+   legal answer through.
+3. **Marginal-note titles (D-091 remediation, 2026-09-02):** the Gazette
+   flat text layer interleaves marginal notes with body text; the parser
+   now reconstructs them via DP alignment with content-confirmation
+   (EXACT 256 / NEAR 49 / PARTIAL 35 / WRONG 7 / MISSING 11 of 358
+   titles against an independently sourced reference list). Every WRONG
+   or MISSING title carries `title_confident=False` → `needs_review` in
+   chunk metadata: no false certainty, no junk-body-fragment titles.
+   Automated gate: `backend/tests/ingestion/test_bns_corpus.py`.
+4. **Groq cloud provider key is currently invalid (2026-09-02):** the
+   configured `LLM_API_KEY` returns HTTP 401 `invalid_api_key` from Groq.
+   The runtime provider was switched to local Ollama (qwen2.5:7b) through
+   the admin console — configuration-selected, verified at save time.
+   Rotating the Groq key in the admin console restores the cloud path
+   with no code change.
+5. **Speech voices:** STT/TTS verified live for English and Hindi only;
    the mr/gu/ta Piper voices synthesize unintelligible audio from Indic
-   script — NOT VERIFIED for those languages.
-5. **GHCR publish + deploy-on-main (E-014/E-016): VERIFIED.** CI run
+   script — NOT VERIFIED for those languages. Speech defaults to
+   browser-side STT/TTS (D-079): the server endpoints honestly return
+   503 rather than pretending.
+6. **GHCR publish + deploy-on-main (E-014/E-016): VERIFIED.** CI run
    33390563891 is green end-to-end on GitHub: backend (628 passed, 85%
    coverage ≥80), frontend (93 tests + build), gitleaks (pinned 8.24.3
    CLI, clean), Docker build + Trivy fail-closed scans, and
    `ghcr.io/obaidgits/nyaya-ai/nyaya-{backend,frontend}:<sha>` pushed to
    GHCR. The gated `deploy` job records a release summary; the actual
    server rollout needs the `production` environment (manual).
-6. **Readiness dependency checks** cover vector DB, model provider, storage
+7. **Readiness dependency checks** cover vector DB, model provider, storage
    and Redis reachability, but do not validate model *correctness*.
 7. **Feedback persistence is in-process memory** (telemetry only; no account
    model to attach votes to). The store is a single swap-point class.

@@ -15,5 +15,8 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // e2e/ is Playwright territory (real browser, live stack) — keep the
+    // vitest jsdom runner away from it.
+    exclude: ['node_modules/**', 'e2e/**', 'dist/**'],
   },
 })
