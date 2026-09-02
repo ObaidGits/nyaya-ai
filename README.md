@@ -282,11 +282,15 @@ artifact, regenerated embeddings:
 | Configuration | Recall@5 | Recall@10 | MRR | Refusal correctness | Citation accuracy |
 | ------------- | -------- | --------- | --- | ------------------- | ----------------- |
 | hybrid (BGE), retrieval only | 0.672 | 0.759 | 0.604 | 0.966 | — |
-| hybrid (BGE) + live LLM (qwen2.5:7b) | 0.672 | 0.759 | 0.604 | **1.000** | **0.958** |
+| hybrid (BGE) + live LLM (qwen2.5:7b) | 0.672 | 0.759 | 0.604 | 0.966 | 0.917 |
 
-Citation accuracy 0.958 and refusal correctness 1.000 with the live
-generation path (citation guard active): all 6 off-corpus/injection cases
-refused. Two retrieval-layer misses, documented not gamed:
+Citation accuracy 0.917 and refusal correctness 0.966 on the final
+post-title-fix re-run (2026-09-02,
+`eval/results/bns_llm_ollama_2026-09-02_final.json`; the earlier run of
+the same suite scored 0.958/1.000 — local-model run-to-run variance, both
+runs with the citation guard active and no uncited legal answer passing).
+All off-corpus/injection cases refused or honestly gated. Two
+retrieval-layer misses, documented not gamed:
 `bns-s10` ("a mob damaged shops") is genuinely ambiguous between mischief
 (s.324) and unlawful assembly/rioting (ss.189–191) — both readings
 retrieved, no threshold adjusted; `bns-x5` (prompt injection) retrieves
