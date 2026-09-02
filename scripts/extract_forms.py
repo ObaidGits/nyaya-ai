@@ -18,7 +18,9 @@ forms). Detection never relies on a hardcoded list of form titles.
 The file currently in ``data/raw/`` is the BNSS development fixture while
 the correct BNS source is awaited from DhronAI; the forms it carries are the
 Second Schedule forms of that fixture and the manifest records the exact
-source filename and SHA-256 for traceability.
+source filename, SHA-256, and the act title detected from the source text
+(the BNSS, per DECISIONS #74 — never the misleading filename) for
+traceability.
 """
 
 from __future__ import annotations
@@ -84,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
 
     review = sum(1 for form in manifest.forms if form.needs_review)
     print(f"source: {manifest.source.filename} (sha256 {manifest.source.sha256[:12]}...)")
+    print(f"act:    {manifest.source.act_title or 'not detected in source text'}")
     print(f"range:  pages {manifest.source.page_start}-{manifest.source.page_end}")
     print(f"forms:  {len(manifest.forms)} extracted, {review} flagged needs_review")
     print(f"output: {args.output / MANIFEST_FILENAME}")

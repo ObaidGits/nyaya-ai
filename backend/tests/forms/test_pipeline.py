@@ -56,6 +56,8 @@ def test_manifest_written_with_required_fields(tmp_path: Path) -> None:
     assert data["source"]["filename"] == "source.pdf"
     assert data["source"]["page_start"] == 1
     assert data["source"]["page_end"] == 5
+    # No act title in the synthetic source: recorded as null, never guessed.
+    assert data["source"]["act_title"] is None
     for form in data["forms"]:
         for key in (
             "form_number",
@@ -120,6 +122,25 @@ def test_source_traceability_in_manifest(tmp_path: Path) -> None:
     assert manifest.source.sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
 
 
+def test_manifest_records_act_detected_from_source_text(tmp_path: Path) -> None:
+    """§17 honesty: the manifest identifies the Act the source actually
+    contains, detected from its opening text — never from the filename
+    (DECISIONS #74: the supplied "BNS" file is really the BNSS).
+    """
+    pages = [
+        [
+            "THE BHARATIYA NAGARIK SURAKSHA SANHITA, 2023",
+            "NO. 46 OF 2023",
+            "An Act to consolidate and amend the law relating to Criminal Procedure.",
+        ],
+        ["FORM No. 1", "NOTICE FOR APPEARANCE BY THE POLICE", "body"],
+    ]
+    source = tmp_path / "deceptively-named.pdf"
+    source.write_bytes(make_forms_pdf(pages))
+    manifest = _extractor().extract(str(source), tmp_path / "forms")
+    assert manifest.source.act_title == "The Bharatiya Nagarik Suraksha Sanhita, 2023"
+
+
 def test_ocr_repair_flows_into_extraction(tmp_path: Path) -> None:
     # Page 2 has no text layer: OCR (faked) recovers the form header.
     pages = [
@@ -135,6 +156,12 @@ def test_ocr_repair_flows_into_extraction(tmp_path: Path) -> None:
 
     assert [f.form_number for f in manifest.forms] == [1, 2, 3]
     assert manifest.forms[1].title == "SUMMONS TO AN ACCUSED PERSON"
+    # OCR-repaired text is honest about its provenance: needs_review with
+    # capped confidence, while native-text forms keep full confidence.
+    assert manifest.forms[1].needs_review is True
+    assert manifest.forms[1].extraction_confidence <= 0.6
+    assert manifest.forms[0].needs_review is False
+    assert manifest.forms[2].needs_review is False
 
 
 def test_missing_source_fails_clearly(tmp_path: Path) -> None:

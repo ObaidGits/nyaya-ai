@@ -32,6 +32,10 @@ class ManifestSource(BaseModel):
     sha256: str
     page_start: int
     page_end: int
+    # Act the source actually contains, detected from its text (never from
+    # the filename — DECISIONS #74: the supplied file is BNSS, not BNS).
+    # None = no act title detected; recorded honestly rather than guessed.
+    act_title: str | None = None
 
 
 class FormsManifest(BaseModel):

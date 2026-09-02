@@ -97,3 +97,42 @@ class FakeOcrEngine:
         if self._fail:
             raise RuntimeError("tesseract exploded")
         return self._text
+
+
+def make_scanned_forms_pdf(
+    leading_pages: list[list[str]], scanned_lines: list[str], trailing_pages: list[list[str]]
+) -> bytes:
+    """PDF with one image-only ("scanned") page between clean text pages.
+
+    The scanned page's lines are rendered into a raster image (pymupdf) and
+    embedded with no text layer, so text extraction yields nothing while the
+    rendered page still shows the text — exactly the shape the OCR fallback
+    exists for. The clean pages keep real text layers like ``make_forms_pdf``.
+    """
+    import pymupdf  # deferred: only needed for the scanned-page fixture
+
+    doc = pymupdf.open()
+
+    def _add_text_page(lines: list[str], fontsize: float, leading: float) -> None:
+        page = doc.new_page(width=612, height=792)
+        cursor_y = 72.0
+        for line in lines:
+            page.insert_text((72, cursor_y), line, fontsize=fontsize, fontname="helv")
+            cursor_y += leading
+
+    for lines in leading_pages:
+        _add_text_page(lines, fontsize=12, leading=14)
+    # Render the "scanned" content off-page and embed it as an image.
+    scratch = pymupdf.open()
+    scratch_page = scratch.new_page(width=612, height=792)
+    cursor_y = 100.0
+    for line in scanned_lines:
+        scratch_page.insert_text((72, cursor_y), line, fontsize=32, fontname="helv")
+        cursor_y += 60
+    pixmap = scratch_page.get_pixmap(dpi=200)
+    scanned = doc.new_page(width=612, height=792)
+    scanned.insert_image(pymupdf.Rect(0, 0, 612, 792), pixmap=pixmap)
+    for lines in trailing_pages:
+        _add_text_page(lines, fontsize=12, leading=14)
+
+    return doc.tobytes()

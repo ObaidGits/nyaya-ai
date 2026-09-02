@@ -27,6 +27,7 @@ from app.forms.naming import ensure_unique, form_filename
 from app.forms.ocr import OcrFallback
 from app.ingestion.cleaning import clean_page_lines
 from app.ingestion.models import PageText
+from app.ingestion.validation import detect_act_title
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,11 @@ def _normalize_form_header(raw_lines: list[str]) -> list[str]:
 # extraction; this range only bounds it.
 DEFAULT_FORMS_PAGE_START = 190
 DEFAULT_FORMS_PAGE_END = 249
+
+# A form whose pages were repaired by the OCR fallback is flagged for review
+# with capped confidence: OCR text has no native text layer to verify against,
+# so 1.0 parser confidence would overstate trust (§29 honesty).
+_OCR_FORM_CONFIDENCE_CAP = 0.6
 
 
 class FormsExtractionError(AppError):
@@ -160,6 +166,7 @@ class FormsExtractor:
         output_dir.mkdir(parents=True, exist_ok=True)
         records: list[FormRecord] = []
         taken: set[str] = set()
+        ocr_page_indexes = set(ocr_pages)
         for form in forms:
             filename = ensure_unique(form_filename(form.form_number, form.title), taken)
             taken.add(filename)
@@ -170,6 +177,10 @@ class FormsExtractor:
                 form.end_page_index,
             )
             (output_dir / filename).write_bytes(data)
+            ocr_repaired = any(
+                index in ocr_page_indexes
+                for index in range(form.start_page_index, form.end_page_index + 1)
+            )
             records.append(
                 FormRecord(
                     form_number=form.form_number,
@@ -179,8 +190,12 @@ class FormsExtractor:
                     output_filename=filename,
                     byte_size=len(data),
                     sha256=_sha256_bytes(data),
-                    extraction_confidence=form.confidence,
-                    needs_review=form.needs_review,
+                    extraction_confidence=(
+                        min(form.confidence, _OCR_FORM_CONFIDENCE_CAP)
+                        if ocr_repaired
+                        else form.confidence
+                    ),
+                    needs_review=form.needs_review or ocr_repaired,
                 )
             )
 
@@ -190,6 +205,10 @@ class FormsExtractor:
                 sha256=_sha256_bytes(source.read_bytes()),
                 page_start=self._page_start,
                 page_end=last_index + 1,
+                # Act identity is detected from the source text, never taken
+                # from the filename (DECISIONS #74: the supplied "BNS" file
+                # actually contains the BNSS). None when nothing was detected.
+                act_title=detect_act_title(all_pages),
             ),
             forms=records,
         )
