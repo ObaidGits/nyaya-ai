@@ -3479,3 +3479,14 @@ probe, and 400. `tests/admin/test_admin.py` — save gate passes
 `verify_chat=True` and rejects a classifier model with "not chat-capable"
 in the error; Test button reports chat-verified success and the classifier
 failure.
+
+**Follow-up (2026-09-02, live):** the first implementation capped the
+verification completion at 8 output tokens. gpt-oss-120b (a reasoning
+model) spends those tokens on hidden reasoning and returns HTTP 200 with
+an EMPTY `content` — a fully working model was reported "The model
+returned an empty response to a test chat request" and blocked at the
+save gate. Fix: the verification request carries no output cap at all
+(`max_tokens`/`num_predict`/`maxOutputTokens` removed for openai-compat,
+Ollama and Gemini). The prompt is one short sentence; an uncapped answer
+stays cheap, and reasoning models finally get to produce visible text.
+Regression tests pin the absence of the caps in all three payloads.

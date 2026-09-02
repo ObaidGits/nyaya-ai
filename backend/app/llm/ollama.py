@@ -236,12 +236,13 @@ class OllamaProvider(LLMProvider):
 
     async def _verify_chat(self) -> ProviderHealth:
         """One tiny ``/api/chat`` completion (D-096). The first call may have
-        to load the model into memory, hence the generous timeout."""
+        to load the model into memory, hence the generous timeout. No
+        ``num_predict`` cap: reasoning models burn a small cap on hidden
+        reasoning and return an empty visible answer."""
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": self._CHAT_VERIFY_PROMPT}],
             "stream": False,
-            "options": {"num_predict": 8},
         }
         try:
             async with httpx.AsyncClient(timeout=90.0) as client:

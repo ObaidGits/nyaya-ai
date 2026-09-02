@@ -522,10 +522,10 @@ class TestChatVerification:
         )
 
     @staticmethod
-    def _models_handler(extra: Any = None) -> Any:
+    def _models_handler(extra: Any = None, model: str = "grok-4.6") -> Any:
         def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/v1/models":
-                return httpx.Response(200, json={"data": [{"id": "grok-4.6"}]})
+            if request.url.path.endswith("/models"):
+                return httpx.Response(200, json={"data": [{"id": model}]})
             if extra is not None:
                 return extra(request)
             return httpx.Response(
@@ -555,14 +555,47 @@ class TestChatVerification:
     async def test_verified_chat_is_healthy(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def assert_prompt(request: httpx.Request) -> httpx.Response:
-            body = json.loads(request.content)
-            assert body["model"] == "grok-4.6"
-            assert body["stream"] is False
-            return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+        """A reasoning model that emits hidden reasoning before its visible
+        answer verifies fine — the probe must not cap the output budget."""
+        reasoning_served = False
 
-        _mock(monkeypatch, self._models_handler(assert_prompt))
-        health = await self._grok().probe(verify_chat=True)
+        def assert_prompt(request: httpx.Request) -> httpx.Response:
+            nonlocal reasoning_served
+            body = json.loads(request.content)
+            assert body["model"] == "openai/gpt-oss-120b"
+            assert body["stream"] is False
+            # No output cap: reasoning models (gpt-oss, QwQ…) spend a small
+            # cap on hidden reasoning and answer 200 with an EMPTY content —
+            # a usable model wrongly reported "empty response" (live incident).
+            assert "max_tokens" not in body
+            assert "max_completion_tokens" not in body
+            reasoning_served = True
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "OK",
+                                "reasoning": "The user wants the word OK.",
+                            }
+                        }
+                    ]
+                },
+            )
+
+        _mock(
+            monkeypatch,
+            self._models_handler(assert_prompt, model="openai/gpt-oss-120b"),
+        )
+        provider = OpenAICompatibleProvider(
+            provider="groq",
+            base_url="https://api.groq.com/openai/v1",
+            model="openai/gpt-oss-120b",
+            api_key="k",
+        )
+        health = await provider.probe(verify_chat=True)
+        assert reasoning_served
         assert health.state is ProviderHealthState.HEALTHY
         assert health.chat_verified is True
         assert "chat verified" in health.detail
@@ -665,6 +698,11 @@ class TestChatVerification:
                     200, json={"models": [{"name": "models/gemini-2.0-flash"}]}
                 )
             assert request.url.path == "/v1beta/models/gemini-2.0-flash:generateContent"
+            # No maxOutputTokens cap — thinking models burn a small cap on
+            # hidden thought and return no visible text.
+            assert "maxOutputTokens" not in json.loads(request.content).get(
+                "generationConfig", {}
+            )
             return httpx.Response(
                 200, json={"candidates": [{"content": {"parts": [{"text": "OK"}]}}]}
             )
@@ -703,6 +741,11 @@ class TestChatVerification:
             if request.url.path == "/api/tags":
                 return httpx.Response(200, json={"models": [{"name": "qwen2.5:7b"}]})
             assert request.url.path == "/api/chat"
+            body = json.loads(request.content)
+            # No num_predict cap — reasoning models burn a small cap on
+            # hidden reasoning and return an empty visible answer.
+            assert "num_predict" not in body.get("options", {})
+            assert body["stream"] is False
             return httpx.Response(200, json={"message": {"content": "OK"}})
 
         monkeypatch.setattr(ollama_module, "httpx", _HttpxShim(handler))

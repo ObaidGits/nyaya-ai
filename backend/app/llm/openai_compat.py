@@ -418,11 +418,16 @@ class OpenAICompatibleProvider(LLMProvider):
     _CHAT_VERIFY_PROMPT = "Reply with the single word OK."
 
     async def _verify_chat(self) -> ProviderHealth:
-        """One tiny completion; classifies exactly why a model cannot answer."""
+        """One tiny completion; classifies exactly why a model cannot answer.
+
+        No ``max_tokens`` cap: reasoning models (gpt-oss, QwQ…) spend the
+        first tokens of their budget on hidden reasoning, so a small cap
+        yields HTTP 200 with an EMPTY ``content`` — a working model wrongly
+        classified as degraded (live incident, D-096 follow-up).
+        """
         payload = {
             "model": self._model,
             "messages": [{"role": "user", "content": self._CHAT_VERIFY_PROMPT}],
-            "max_tokens": 8,
             "stream": False,
         }
         try:

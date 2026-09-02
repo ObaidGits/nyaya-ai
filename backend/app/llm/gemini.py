@@ -343,10 +343,11 @@ class GeminiProvider(LLMProvider):
     _CHAT_VERIFY_PROMPT = "Reply with the single word OK."
 
     async def _verify_chat(self) -> ProviderHealth:
-        """One tiny ``generateContent`` call (D-096)."""
+        """One tiny ``generateContent`` call (D-096). No ``maxOutputTokens``
+        cap: thinking models (Gemini 2.5…) spend a small cap on hidden
+        thought and return no visible text."""
         payload = {
             "contents": [{"parts": [{"text": self._CHAT_VERIFY_PROMPT}]}],
-            "generationConfig": {"maxOutputTokens": 8},
         }
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
