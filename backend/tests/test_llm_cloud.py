@@ -328,7 +328,10 @@ class TestGemini:
     async def test_generate_parses_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             assert "generateContent" in request.url.path
-            assert request.url.params["key"] == "gem-key"
+            # The key travels in the header (never the URL: httpx logs full
+            # URLs, so a query-param key would leak into logs).
+            assert request.headers["x-goog-api-key"] == "gem-key"
+            assert "key" not in request.url.params
             return httpx.Response(
                 200,
                 json={

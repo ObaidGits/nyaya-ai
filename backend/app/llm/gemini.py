@@ -100,7 +100,7 @@ class GeminiProvider(LLMProvider):
                 async with httpx.AsyncClient(timeout=self._timeout) as client:
                     response = await client.post(
                         url,
-                        params={"key": self._api_key},
+                        headers={"x-goog-api-key": self._api_key},
                         json=self._payload(request),
                     )
                     response.raise_for_status()
@@ -174,7 +174,8 @@ class GeminiProvider(LLMProvider):
                     client.stream(
                         "POST",
                         url,
-                        params={"key": self._api_key, "alt": "sse"},
+                        params={"alt": "sse"},
+                        headers={"x-goog-api-key": self._api_key},
                         json=self._payload(request),
                     ) as response,
                 ):
@@ -261,7 +262,7 @@ class GeminiProvider(LLMProvider):
             async with httpx.AsyncClient(timeout=8.0) as client:
                 response = await client.get(
                     f"{self._base_url}/models",
-                    params={"key": self._api_key},
+                    headers={"x-goog-api-key": self._api_key},
                 )
                 # 4xx means a bad/missing key or model — NOT reachable.
                 return response.status_code == 200
@@ -292,7 +293,7 @@ class GeminiProvider(LLMProvider):
             async with httpx.AsyncClient(timeout=8.0) as client:
                 response = await client.get(
                     f"{self._base_url}/models",
-                    params={"key": self._api_key},
+                    headers={"x-goog-api-key": self._api_key},
                 )
         except httpx.HTTPError:
             return ProviderHealth(
@@ -353,7 +354,7 @@ class GeminiProvider(LLMProvider):
             async with httpx.AsyncClient(timeout=20.0) as client:
                 response = await client.post(
                     f"{self._base_url}/models/{self._model}:generateContent",
-                    params={"key": self._api_key},
+                    headers={"x-goog-api-key": self._api_key},
                     json=payload,
                 )
         except httpx.HTTPError:
