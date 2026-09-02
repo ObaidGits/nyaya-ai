@@ -128,6 +128,10 @@ class RedisDocumentIndex(DocumentIndex):
             return None
         return raw
 
+    def chunk_ids(self, session_id: str) -> list[str]:
+        keys = self._redis.hkeys(f"{_TEXTS_KEY_PREFIX}{session_id}")
+        return [key.decode() if isinstance(key, bytes) else key for key in keys]
+
 
 def _cosine(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):

@@ -82,6 +82,10 @@ class DocumentIndex:
         """Owner-scoped chunk text lookup (source drawer payload)."""
         raise NotImplementedError
 
+    def chunk_ids(self, session_id: str) -> list[str]:
+        """Every chunk id stored for the session (lexical candidate pool)."""
+        raise NotImplementedError
+
 
 class DocumentWorkspace:
     """Everything an ingestion job needs, injectable for tests/arq."""
@@ -151,6 +155,9 @@ class _InMemoryDocumentIndex(DocumentIndex):
         if chunk_id not in self._vectors.get(session_id, {}):
             return None
         return self._texts.get(chunk_id)
+
+    def chunk_ids(self, session_id: str) -> list[str]:
+        return list(self._vectors.get(session_id, {}))
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
