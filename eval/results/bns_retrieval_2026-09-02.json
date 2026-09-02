@@ -1,0 +1,41 @@
+{
+  "golden_set": "eval/golden_set_bns.jsonl",
+  "corpus": "data/processed/bns_corpus.jsonl",
+  "deterministic": true,
+  "llm_mode": false,
+  "configurations": [
+    {
+      "config": "dense_only",
+      "cases": 29,
+      "failed_cases": 0,
+      "failures": [],
+      "recall_at_5": 0.6551724137931034,
+      "recall_at_10": 0.7586206896551724,
+      "mrr": 0.5997536945812808,
+      "citation_accuracy": null,
+      "refusal_correctness": 0.9655172413793104,
+      "document_hit_rate": null,
+      "retrieval_latency_p50": 0.04533838800853118,
+      "retrieval_latency_p95": 0.05105679505504668,
+      "generation_latency_p50": null,
+      "generation_latency_p95": null
+    },
+    {
+      "config": "hybrid",
+      "cases": 29,
+      "failed_cases": 0,
+      "failures": [],
+      "recall_at_5": 0.6724137931034483,
+      "recall_at_10": 0.7586206896551724,
+      "mrr": 0.6044061302681992,
+      "citation_accuracy": null,
+      "refusal_correctness": 0.9655172413793104,
+      "document_hit_rate": null,
+      "retrieval_latency_p50": 0.04277549602556974,
+      "retrieval_latency_p95": 0.045197772968094796,
+      "generation_latency_p50": null,
+      "generation_latency_p95": null
+    }
+  ],
+  "executed_at": "2026-09-02T10:33:20.737833+00:00"
+}

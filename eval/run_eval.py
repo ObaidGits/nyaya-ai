@@ -99,10 +99,11 @@ def main() -> int:
     provider = None
     if args.llm:
         from app.core.config import get_settings
-        from app.llm.ollama import OllamaProvider
+        from app.llm.registry import create_default_registry
 
         settings = get_settings()
-        provider = OllamaProvider(settings.llm_base_url, settings.llm_model or "qwen2.5:3b")
+        provider = create_default_registry().create(settings.llm_provider, settings)
+        print(f"llm provider: {settings.llm_provider} ({settings.llm_model})")
 
     embedder = None
     if args.bge:
