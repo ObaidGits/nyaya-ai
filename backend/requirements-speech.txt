@@ -11,7 +11,7 @@ torch==2.6.0
 torchaudio==2.6.0
 # 5.5.4: Trivy fail-closed on CRITICAL/HIGH found CVE-2024-11392..94,
 # CVE-2026-4372, CVE-2026-5241 in 4.46.1 (fix ≥5.5.0) — CI run 33384078128.
-transformers==5.5.4
+transformers==5.10.0
 tokenizers>=0.22
 soundfile==0.14.0
 faster-whisper==1.1.0
