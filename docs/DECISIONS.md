@@ -3490,3 +3490,49 @@ save gate. Fix: the verification request carries no output cap at all
 Ollama and Gemini). The prompt is one short sentence; an uncapped answer
 stays cheap, and reasoning models finally get to produce visible text.
 Regression tests pin the absence of the caps in all three payloads.
+
+## D-097 — bns-s10 colloquial miss: genuine embedding limitation, no fix forced (2026-09-02)
+
+`bns-s10` ("A mob damaged shops after an argument turned violent", expects
+BNS ss. 189/190) misses Recall@10. A layer-by-layer investigation traced
+the real runtime path (dense pool 20 → sparse pool 20 → RRF → top 10) and
+ran control experiments before touching anything.
+
+**Findings (all reproduced on the live corpus):**
+
+- Dense: s.189 mega-chunk cosine 0.4154 (rank 58), s.190 0.3486 (rank
+  248) — the rioting-chapter neighbours (ss. 191–194) outrank them at
+  0.48–0.51. Disproved fix candidates by direct experiment: (a) the
+  4 000-char s.189 chunk is NOT dilution — embedding its clean
+  definitional subsection (1) alone scores 0.4074, *below* the mega-chunk;
+  (b) prefixing the embedded text with the section title does not help
+  either (s.189 drops to 0.4024; s.190 rises only with the *buggy* "Rioting"
+  title, 0.4563, and stays at 0.3573 with the correct title).
+- Sparse: zero BM25 token overlap — the query shares no stem with ss. 189/
+  190 (mob/shops/damaged/argument vs assembly/mischief/unlawful). Inherent
+  to lexical search for colloquial phrasing, not a bug.
+- Controls: statutory wording ("Every member of unlawful assembly guilty
+  of offence committed in prosecution of common object") retrieves
+  s.189/190 at dense ranks 1/2 instantly; every colloquial paraphrase
+  stays at ranks 17–250. The gap is colloquial↔statutory vocabulary, and
+  BGE-base cannot bridge it for this query. This is a genuine semantic
+  limitation of the current embedding model, stated explicitly.
+- Confidence/refusal layers are NOT implicated: confidence 0.407,
+  retrieval proceeds — the evidence is simply the wrong sections.
+
+**Separate systemic finding (parser, not causal for bns-s10):** the
+gazette's one-word-per-line marginal notes corrupt reconstruction —
+"Every" is in `_SENTENCE_STARTERS` (parser.py:106) so s.190's note head
+"Every member" glues into its body; flush mis-sequencing swaps titles
+(s.190 titled "Rioting", s.191 gets s.190's note, s.193 gets a "not
+committed" prefix). Corpus-wide scan: ~156/425 chunks carry anomalous
+(split-half or misassigned) titles, ~75 bodies end mid-sentence. These
+hurt citation display quality, not this query's recall (dense embeds body
+text only; BM25 has zero overlap either way) — left as a follow-up.
+
+**Decision: no code change.** Every small general fix candidate was tested
+and disproved; the remaining options (legal-concept query expansion, a
+cross-encoder reranker, or a stronger embedding model) are architectural
+choices to be evaluated on the full golden set, not forced through on one
+case. The golden-set expectation stands — ss. 189/190 are the correct
+answer for this fact pattern.
