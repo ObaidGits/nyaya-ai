@@ -156,7 +156,33 @@ class RetrievalService:
                 statute_evidence.reasons.append("session document evidence retrieved")
             return statute_evidence
 
-        return self._statute_evidence(query, resolved_route, intent, flt, reasons)
+        evidence = self._statute_evidence(query, resolved_route, intent, flt, reasons)
+        # Document fallback (ARCHITECTURE §14 remediation): a statute-routed
+        # query whose statute evidence is INSUFFICIENT falls through to the
+        # session's documents before failing closed. The keyword router
+        # cannot enumerate every way a user references their upload ("What
+        # is the filing date?", "What did the petitioner seek?"), so the
+        # route hint is advisory: when the statute corpus cannot ground the
+        # question but the session's own documents can, the documents are
+        # the evidence. A session without documents, or document retrieval
+        # below its confidence threshold, still refuses honestly — the
+        # fallback only rescues document-groundable questions, never
+        # substitutes weak statute evidence for a refusal.
+        if (
+            not evidence.sufficient
+            and session_id is not None
+            and self._document_retrieval is not None
+        ):
+            document_evidence = self._document_evidence(
+                query, resolved_route, intent, session_id, reasons
+            )
+            if document_evidence.sufficient:
+                document_evidence.route = resolved_route
+                document_evidence.reasons.append(
+                    "statute evidence insufficient; session documents retrieved"
+                )
+                return document_evidence
+        return evidence
 
     def _document_evidence(
         self,

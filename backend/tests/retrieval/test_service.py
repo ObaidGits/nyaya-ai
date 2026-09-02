@@ -367,3 +367,69 @@ def test_constitution_and_amendment_mentions_refuse() -> None:
         evidence = service.retrieve(query)
         assert not evidence.sufficient, query
         assert evidence.results == [], query
+
+
+# ---------------------------------------------------------------------------
+# Document fallback for statute-routed queries (§14 remediation)
+# ---------------------------------------------------------------------------
+
+
+def test_statute_route_falls_back_to_session_documents() -> None:
+    """A query the keyword router sends STATUTE ("What is the filing date in
+    the writ petition?" — no recognized artifact noun at the time) whose
+    statute evidence is insufficient must fall through to the session's
+    documents before refusing. Live regression: the writ-petition question
+    was routed statute, retrieved irrelevant BNS chunks, and refused while
+    the uploaded document was READY."""
+    service = _service(document_retrieval=_StubDocumentRetrieval([_doc_hit(0.9)]))
+    # "zzqqxx" matches nothing in the statute corpus → insufficient.
+    evidence = service.retrieve("zzqqxx about the filing date", session_id="sess-1")
+    assert evidence.document_hits
+    assert evidence.sufficient
+    assert evidence.route == RetrievalRoute.STATUTE
+    assert any("session documents retrieved" in r for r in evidence.reasons)
+
+
+def test_statute_route_no_fallback_without_session() -> None:
+    """No session id → no document fallback: the insufficient statute
+    evidence refuses honestly (fail closed, §21)."""
+    service = _service(document_retrieval=_StubDocumentRetrieval([_doc_hit(0.9)]))
+    evidence = service.retrieve("zzqqxx about the filing date")
+    assert evidence.document_hits == []
+    assert not evidence.sufficient
+
+
+def test_statute_route_no_fallback_when_documents_weak() -> None:
+    """Document hits below the confidence gate do not rescue the turn:
+    the fallback only substitutes genuinely sufficient document evidence."""
+    service = _service(
+        document_retrieval=_StubDocumentRetrieval([_doc_hit(0.01)]),
+        document_confidence_threshold=0.1,
+    )
+    evidence = service.retrieve("zzqqxx about the filing date", session_id="sess-1")
+    assert not evidence.sufficient
+
+
+def test_statute_route_no_fallback_when_statute_sufficient() -> None:
+    """Sufficient statute evidence never triggers document retrieval: the
+    fallback must not widen retrieval for in-scope statute questions."""
+    class _Fails:
+        def retrieve(self, session_id: str, query: str) -> DocumentEvidence:
+            raise AssertionError("document retrieval must not run")
+
+    service = _service(document_retrieval=_Fails())
+    # Deterministic section lookup: sufficient by construction (conf 1.0).
+    evidence = service.retrieve("What is section 103 BNS?", session_id="sess-1")
+    assert evidence.results
+    assert evidence.sufficient
+
+
+def test_statute_route_fallback_keeps_foreign_statute_fail_closed() -> None:
+    """A query naming a statute the corpus cannot ground still refuses even
+    with session documents available: the fallback must not answer a Hindu
+    Marriage Act question from the user's upload silently. Document hits
+    below the gate stay insufficient."""
+    service = _service(document_retrieval=_StubDocumentRetrieval([_doc_hit(0.01)]))
+    evidence = service.retrieve("What does the Hindu Marriage Act say?", session_id="sess-1")
+    assert not evidence.sufficient
+    assert evidence.document_hits == []
