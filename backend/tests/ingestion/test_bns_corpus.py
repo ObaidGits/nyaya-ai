@@ -134,3 +134,47 @@ def test_marginal_notes_do_not_leak_into_section_text(act: object) -> None:
     # person himself." — the note "Hiring, employing or engaging a child
     # to commit an offence." interleaves word-wise through this sentence.
     assert "committed by such person himself" in by_number[95].text
+
+
+def test_body_integrity_note_words_not_glued_into_body(act: object) -> None:
+    """Body integrity, quantified (72/425 corrupted fragments at audit).
+
+    A section body must not end on a dangling word that also appears in
+    that section's own marginal-note title — that is a note word glued
+    into the body stream. (A trailing period lost to the F1 period-glue
+    title recovery is benign: the word content is intact.)
+    """
+    by_number = {s.number: s for s in act.sections}  # type: ignore[attr-defined]
+    offenders: list[str] = []
+    for section in by_number.values():
+        text = section.text.rstrip()
+        if not text or text[-1] in ".;:?!":
+            continue
+        tail = text.split()[-1].strip(".,;'")
+        title_words = set((section.title or "").lower().split())
+        if tail and tail.lower() in title_words:
+            offenders.append(f"s.{section.number} ends on note word {tail!r}")
+    assert len(offenders) <= 3, offenders
+
+
+def test_unconfirmed_titles_flagged_in_chunk_metadata(act: object) -> None:
+    """Every unconfirmed title must carry the downstream needs_review flag
+    so retrieval metadata honestly reports uncertainty (chunker contract)."""
+    from app.ingestion.chunker import StructureAwareChunker
+
+    chunks = StructureAwareChunker().chunk(
+        act,
+        "pdf:sha256-test",
+        "2026-09-02T00:00:00Z",  # type: ignore[arg-defined]
+    )
+    confident_numbers = {
+        str(s.number)
+        for s in act.sections
+        if s.title_confident  # type: ignore[attr-defined]
+    }
+    bad = [
+        c.chunk_id
+        for c in chunks
+        if c.section_title and not c.needs_review and c.section_number not in confident_numbers
+    ]
+    assert not bad, f"unconfirmed titles missing needs_review: {bad[:5]}"
