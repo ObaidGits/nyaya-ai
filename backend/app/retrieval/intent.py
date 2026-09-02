@@ -51,7 +51,7 @@ _NON_STATUTE_PRECEDER_RE = re.compile(
 # Document nouns: artifacts a user may hold and ask about. Grouped so the
 # hint pattern and the procedural-exception patterns below stay in sync.
 _DOCUMENT_NOUN_RE = (
-    r"(?:documents?|notices?|agreements?|contracts?|letters?|complaints?"
+    r"(?:documents?|docs?|notices?|agreements?|contracts?|letters?|complaints?"
     r"|firs?|f\.i\.r\.|files?|pdfs?|petitions?|writs?|suits?|plaints?"
     r"|affidavits?|judgements?|judgments?|deeds?|wills?)"
 )

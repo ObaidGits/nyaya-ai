@@ -162,3 +162,21 @@ def test_petition_noun_still_statute_when_procedural() -> None:
     """Filing-verb procedure keeps the statute route: "draft a petition"
     asks about procedure, not an uploaded artifact's content."""
     assert classify_route("How do I file a petition?") == RetrievalRoute.STATUTE
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is this uploaded doc for?",
+        "What is this doc about?",
+        "Summarize my docs",
+        "Show me that uploaded doc",
+    ],
+)
+def test_colloquial_doc_noun_routes_document(query: str) -> None:
+    """The colloquial "doc"/"docs" abbreviation is a document reference.
+    Live regression: "What is this uploaded doc for?" routed STATUTE; the
+    statute corpus then scored the generic phrasing ~0.58 cosine — above
+    its sufficiency threshold — so the document fallback never fired and
+    the model refused on irrelevant statute chunks."""
+    assert classify_route(query) == RetrievalRoute.DOCUMENT
