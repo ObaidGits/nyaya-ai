@@ -52,7 +52,8 @@ _NON_STATUTE_PRECEDER_RE = re.compile(
 # hint pattern and the procedural-exception patterns below stay in sync.
 _DOCUMENT_NOUN_RE = (
     r"(?:documents?|notices?|agreements?|contracts?|letters?|complaints?"
-    r"|firs?|f\.i\.r\.|files?|pdfs?)"
+    r"|firs?|f\.i\.r\.|files?|pdfs?|petitions?|writs?|suits?|plaints?"
+    r"|affidavits?|judgements?|judgments?|deeds?|wills?)"
 )
 _DOCUMENT_DETERMINER_RE = r"(?:my|our|this|that|these|those|his|her|their|the|uploaded|attached)"
 

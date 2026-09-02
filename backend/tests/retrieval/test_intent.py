@@ -133,3 +133,32 @@ def test_marathi_section_query_is_marathi() -> None:
     intent = detect_section_intent("कलम १०३ मध्ये काय तरतूद आहे?")
     assert intent is not None
     assert intent.section_number == "103"
+
+
+# ---------------------------------------------------------------------------
+# Legal-artifact nouns (§14 remediation — live regression)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is the filing date in the writ petition?",
+        "What does the petition pray for?",
+        "What relief does the plaint seek?",
+        "Summarize the suit filed by the plaintiff.",
+        "What does the affidavit state?",
+        "What did the judgment hold?",
+    ],
+)
+def test_legal_artifact_nouns_route_document(query: str) -> None:
+    """Petition/writ/suit/plaint/affidavit/judgment are document artifacts:
+    a question about them must route to the user's uploads, not the statute
+    corpus. Live regression: the writ-petition question routed STATUTE and
+    refused while the upload was READY."""
+    assert classify_route(query) == RetrievalRoute.DOCUMENT
+
+
+def test_petition_noun_still_statute_when_procedural() -> None:
+    """Filing-verb procedure keeps the statute route: "draft a petition"
+    asks about procedure, not an uploaded artifact's content."""
+    assert classify_route("How do I file a petition?") == RetrievalRoute.STATUTE
