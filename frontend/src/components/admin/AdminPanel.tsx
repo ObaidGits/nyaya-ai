@@ -288,6 +288,7 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
             secretSources={secretSources}
             valueSources={valueSources}
             secretCleared={Object.fromEntries(clearedSecrets.map((key) => [key, true]))}
+            secretsUnreadable={view.secrets_unreadable}
             providers={view.llm_providers}
             onValueChange={onValueChange}
             onSecretChange={onSecretChange}

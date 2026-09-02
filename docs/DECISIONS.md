@@ -3536,3 +3536,54 @@ cross-encoder reranker, or a stronger embedding model) are architectural
 choices to be evaluated on the full golden set, not forced through on one
 case. The golden-set expectation stands — ss. 189/190 are the correct
 answer for this fact pattern.
+
+## D-098 — Console API keys persist encrypted at rest; survive `docker compose down` (2026-09-02)
+
+**Problem.** Console-entered API keys (`llm_api_key`, `speech_stt_api_key`,
+`speech_tts_api_key`) were held in process memory only: `AdminSettingsStore`
+kept them in `_runtime_secrets` and `_write()` hard-coded
+`"secrets": {}` into `admin.json`. Non-secret console settings persisted to
+the `storage_data` volume, so every `docker compose down`/`up`, container
+recreation, or plain restart silently lost the keys while everything else
+survived — the operator saw "key gone" after any restart.
+
+**Decision.** Secrets persist as **Fernet ciphertext** inside `admin.json`
+(`secrets_encrypted` section, schema `{"v": 1, "data": <token>}`), keyed by
+a master key that is stable across container recreation by construction:
+
+1. `NYAYA_SECRET_KEY` (operator-provided urlsafe-base64 32-byte Fernet key)
+   wins, or
+2. a key generated exactly ONCE into `secret.key` next to `admin.json` —
+   same persistent volume — via `os.open(O_CREAT | O_EXCL, 0o600)`, so no
+   process can ever overwrite (rotate away from) an existing key.
+
+A dynamically regenerated key would orphan the stored ciphertext — the same
+"lost API key" failure moved one level down — so regeneration is impossible
+unless the operator deletes `secret.key` or rotates the env key. The
+plaintext contract is unchanged: the file never contains a plaintext
+secret (legacy plaintext files are migrated: adopted, re-encrypted,
+scrubbed on first load; if no usable key exists the file is left untouched
+rather than destroying the only copy).
+
+**Fail-safe on missing/changed/malformed key.** Undecryptable entries are
+never deleted or overwritten: they are preserved verbatim on disk, reported
+via `secrets_unreadable` in the settings API (the admin UI shows an amber
+warning), and the environment values apply instead. A save while entries
+are unreadable carries them over verbatim. An invalid `NYAYA_SECRET_KEY`
+disables secret persistence for the process (loud log, memory-only keys,
+no crash, no data destruction).
+
+**Precedence unchanged (D-090):** console key still wins over the env
+value; clearing the console key falls back to env. API responses still
+only ever report set/empty + source — never a value.
+
+**Operator notes.** `docker compose down` / `down --remove-orphans` /
+container recreation / restart all preserve `admin.json` + `secret.key`
+(named volume `storage_data`). `docker compose down -v` destroys the
+volume — including the key material — by design; keys must be re-entered
+and the volume backed up beforehand (`docker run --rm -v
+<project>_storage_data:/data -v $PWD:/backup alpine tar czf
+/backup/storage-data.tgz /data`; the secrets inside are ciphertext, so the
+backup does not expose them). Regression tests:
+`tests/admin/test_secret_persistence.py` (store round-trip, key-file
+stability, rotation fail-safe, legacy migration, API-level recreation).

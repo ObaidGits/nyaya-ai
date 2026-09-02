@@ -48,8 +48,14 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:-}
-      # Persisted admin settings + active corpus manifest survive restarts.
+      # Persisted admin settings + active corpus manifest survive restarts
+      # (named volume storage_data — safe across `docker compose down`).
       ADMIN_SETTINGS_PATH: /app/storage/admin/admin.json
+      # Master key for the ENCRYPTED console API keys (D-098). When empty, a
+      # key is generated once and stored as /app/storage/admin/secret.key
+      # (same persistent volume) — stable across container recreation.
+      # Provide it only to manage rotation yourself.
+      NYAYA_SECRET_KEY: ${NYAYA_SECRET_KEY:-}
     env_file:
       - path: .env
         required: false

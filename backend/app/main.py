@@ -78,12 +78,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=APP_VERSION,
     )
 
-    # Admin configuration store (D-080): persisted admin settings override
-    # environment values. env_settings keeps the pre-override snapshot so the
-    # console can tell "env" from "console" secret origins and fall back to
-    # the environment value when a console secret is explicitly removed.
+    # Admin configuration store (D-080/D-098): persisted admin settings
+    # (including ENCRYPTED console API keys) override environment values.
+    # env_settings keeps the pre-override snapshot so the console can tell
+    # "env" from "console" secret origins and fall back to the environment
+    # value when a console secret is explicitly removed or cannot be
+    # decrypted.
     admin_store = (
-        AdminSettingsStore(settings.admin_settings_path)
+        AdminSettingsStore(
+            settings.admin_settings_path,
+            secret_env_key=(
+                settings.secrets_master_key.get_secret_value()
+                if settings.secrets_master_key
+                else None
+            ),
+        )
         if settings.admin_settings_path
         else AdminSettingsStore("")  # no-op persistence (path unset)
     )

@@ -1,4 +1,4 @@
-"""Admin settings store (Settings page persistence; DECISIONS.md D-080).
+"""Admin settings store (Settings page persistence; DECISIONS.md D-080/D-098).
 
 Persists the admin-configurable subset of application settings as JSON with
 0600 permissions. Precedence (strongest last):
@@ -7,15 +7,20 @@ Persists the admin-configurable subset of application settings as JSON with
 2. Persisted admin configuration (this store)
 3. Runtime application configuration
 
-The persisted file is SECRET-FREE by construction: API keys entered in the
-console live in memory for the running process only and are never written to
-disk (no plaintext secrets at rest). A console key still WINS over an
-environment-provided value while that process runs (D-090): the admin console
-is the authoritative place to rotate provider keys, and a deployment-time env
-key is only the bootstrap default — which is also what applies again after a
-restart, because the console key does not survive one. A legacy file that
-still contains plaintext secrets is migrated on first load: the secrets are
-adopted for the current process and scrubbed from the file immediately.
+Secrets (API keys) are persisted ENCRYPTED AT REST (D-098): Fernet
+ciphertext inside the same JSON file, keyed by a master key that is either
+operator-provided (``NYAYA_SECRET_KEY``) or generated once and stored as
+``secret.key`` next to the file — both live on the same persistent volume,
+so console-entered keys survive ``docker compose down``/``up`` and container
+recreation. The file never contains PLAINTEXT secrets. A legacy file with
+plaintext secrets is migrated on first load: the values are adopted,
+re-encrypted, and scrubbed from the file immediately.
+
+If the master key is missing/changed (operator rotation, deleted key file),
+stored ciphertext can no longer be decrypted: the stored data is PRESERVED
+(not deleted, not overwritten), the affected fields are reported as
+unreadable, and the process falls back to the environment values. A console
+key still WINS over an environment-provided value (D-090).
 """
 
 from __future__ import annotations
@@ -26,6 +31,9 @@ import os
 from pathlib import Path
 from typing import Any
 
+from cryptography.fernet import InvalidToken
+
+from app.admin.secretbox import KEY_FILE_NAME, SecretBox
 from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -68,8 +76,8 @@ EDITABLE_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-#: Secret settings (API keys). Session-only (in memory), never on disk,
-#: masked in reads.
+#: Secret settings (API keys). Persisted as Fernet ciphertext inside the
+#: admin settings file (D-098), masked in reads — never echoed or logged.
 SECRET_FIELDS: frozenset[str] = frozenset(
     {
         "llm_api_key",
@@ -82,55 +90,122 @@ SECRET_FIELDS: frozenset[str] = frozenset(
 class AdminSettingsStore:
     """JSON-backed persistence for admin-configurable settings."""
 
-    def __init__(self, path: str) -> None:
-        self._path = Path(path)
-        # Console-entered secrets for THIS process only (never persisted —
-        # the on-disk file must stay secret-free at all times).
+    def __init__(self, path: str, *, secret_env_key: str | None = None) -> None:
+        self._path = Path(path) if path else Path("")
+        # Console-entered secrets. Loaded from (and saved back to) the
+        # encrypted section of the settings file; kept in memory only when
+        # encryption is unavailable (persistence disabled).
         self._runtime_secrets: dict[str, str] = {}
+        # Fields whose stored ciphertext could not be decrypted with the
+        # current master key. The stored data is preserved untouched.
+        self.secrets_unreadable: list[str] = []
+        # Master key: operator env value wins; otherwise a once-generated
+        # key file NEXT TO the settings file (same persistent volume).
+        key_path = self._path.parent / KEY_FILE_NAME if self._path.name else None
+        self._box = SecretBox(secret_env_key, key_path)
 
     @property
     def path(self) -> Path:
         return self._path
 
-    def load(self) -> dict[str, dict[str, Any]]:
-        """Return {"settings": ..., "secrets": ..., "corpus": ...}.
+    @property
+    def secrets_persisted(self) -> bool:
+        """True when console secrets survive process restarts (D-098)."""
+        return bool(self._path.name) and self._box.available
 
-        ``secrets`` are the session secrets (console-entered in this process,
-        or adopted from a legacy plaintext file during migration) — they are
-        never read back from disk. A legacy file that still contains
-        plaintext secrets is rewritten without them immediately; the values
-        keep working for the current process only.
+    def load(self) -> dict[str, Any]:
+        """Return {"settings", "secrets", "corpus", "secrets_unreadable"}.
+
+        ``secrets`` are decrypted from the encrypted section of the file
+        (plus any values adopted from a legacy plaintext file). A file whose
+        ciphertext no longer matches the master key is NEVER modified: the
+        affected fields are reported in ``secrets_unreadable`` and the
+        environment values apply instead.
         """
+        empty: dict[str, Any] = {
+            "settings": {},
+            "secrets": dict(self._runtime_secrets),
+            "corpus": {},
+            "secrets_unreadable": [],
+        }
         # Empty path (persistence disabled) or a directory: no stored state.
         if not self._path.name or not self._path.is_file():
-            return {"settings": {}, "secrets": dict(self._runtime_secrets), "corpus": {}}
+            return empty
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             logger.warning("admin settings file unreadable; ignoring")
-            return {"settings": {}, "secrets": dict(self._runtime_secrets), "corpus": {}}
+            return empty
         settings = {
             key: value
             for key, value in (raw.get("settings") or {}).items()
             if key in EDITABLE_FIELDS
         }
+        corpus = raw.get("corpus") if isinstance(raw.get("corpus"), dict) else {}
+        stored = self._decrypt_stored(raw.get("secrets_encrypted"))
         legacy_secrets = {
             key: value
             for key, value in (raw.get("secrets") or {}).items()
             if key in SECRET_FIELDS and value
         }
-        corpus = raw.get("corpus") if isinstance(raw.get("corpus"), dict) else {}
         if legacy_secrets:
-            # Migration (no-plaintext-at-rest): adopt the legacy secrets for
-            # this process and scrub them from the file on disk right away.
+            # Migration (no-plaintext-at-rest): adopt the legacy secrets and
+            # rewrite the file with them ENCRYPTED (scrubbing the plaintext).
+            # When encryption is unavailable the file is left untouched —
+            # destroying the only copy would be worse than leaving plaintext.
             self._runtime_secrets.update(legacy_secrets)
-            self._write(settings, corpus)
-            logger.info(
-                "removed plaintext secrets from %s; adopted for this process only "
-                "(a restart falls back to the environment values)",
+            if self._box.available:
+                self._write(settings, corpus)
+                logger.info(
+                    "migrated plaintext secrets from %s to encrypted storage",
+                    self._path,
+                )
+            else:
+                logger.warning(
+                    "legacy plaintext secrets found in %s but secret persistence is "
+                    "disabled; adopted for this process only, file left unchanged",
+                    self._path,
+                )
+        self._runtime_secrets.update(stored)
+        return {
+            "settings": settings,
+            "secrets": dict(self._runtime_secrets),
+            "corpus": corpus,
+            "secrets_unreadable": list(self.secrets_unreadable),
+        }
+
+    def _decrypt_stored(self, encrypted: Any) -> dict[str, str]:
+        """Decrypt the file's ``secrets_encrypted`` section.
+
+        Undecryptable entries are collected in ``secrets_unreadable`` (the
+        stored ciphertext is preserved for a future key restore) and skipped.
+        """
+        self.secrets_unreadable = []
+        if not isinstance(encrypted, dict) or not encrypted:
+            return {}
+        decrypted: dict[str, str] = {}
+        for key, entry in encrypted.items():
+            if key not in SECRET_FIELDS or not isinstance(entry, dict):
+                continue
+            token = str(entry.get("data") or "")
+            if not token:
+                continue
+            try:
+                decrypted[key] = self._box.decrypt(token)
+            except InvalidToken:
+                self.secrets_unreadable.append(key)
+            except RuntimeError:  # box unavailable
+                break
+        if self.secrets_unreadable:
+            logger.error(
+                "stored secret(s) %s in %s cannot be decrypted with the current "
+                "master key; the stored data is preserved, the environment "
+                "values apply instead. Restore the previous NYAYA_SECRET_KEY / "
+                "secret.key to recover them.",
+                ", ".join(sorted(self.secrets_unreadable)),
                 self._path,
             )
-        return {"settings": settings, "secrets": dict(self._runtime_secrets), "corpus": corpus}
+        return decrypted
 
     def save(
         self,
@@ -138,11 +213,11 @@ class AdminSettingsStore:
         secrets: dict[str, Any],
         corpus: dict[str, Any] | None = None,
     ) -> None:
-        """Persist whitelisted non-secret settings (+ corpus manifest) atomically.
+        """Persist whitelisted non-secret settings (+ corpus manifest) and
+        the console secrets as Fernet ciphertext, atomically.
 
-        Secrets are session-only: they replace the in-memory store and are
-        never written to disk. A store with an empty path skips the disk
-        write (persistence disabled); changes then apply in-memory only.
+        A store with an empty path skips the disk write (persistence
+        disabled); changes then apply in-memory only.
         """
         self._runtime_secrets = {
             key: value for key, value in secrets.items() if key in SECRET_FIELDS and value
@@ -153,13 +228,61 @@ class AdminSettingsStore:
         self._write(clean_settings, corpus or {})
 
     def _write(self, settings: dict[str, Any], corpus: dict[str, Any]) -> None:
-        """Atomic file write — the payload never contains secrets."""
-        payload = {"settings": settings, "secrets": {}, "corpus": corpus}
+        """Atomic file write — secrets appear only as ciphertext, never plaintext."""
+        encrypted: dict[str, dict[str, Any]] = {}
+        if self._box.available:
+            for key, value in sorted(self._runtime_secrets.items()):
+                if value:
+                    encrypted[key] = {"v": 1, "data": self._box.encrypt(value)}
+            # Fail-safe (D-098): entries the current key cannot decrypt are
+            # carried over VERBATIM — dropping them would destroy the only
+            # copy. Re-entering the key (encrypted with the current key)
+            # replaces them; restoring the old key recovers them.
+            if self.secrets_unreadable:
+                existing = self._existing_ciphertext()
+                for key in self.secrets_unreadable:
+                    if key not in encrypted and key in existing:
+                        encrypted[key] = existing[key]
+        else:
+            # Fail-safe (D-098): with no usable master key we cannot
+            # re-encrypt, so whatever ciphertext is already on disk is
+            # carried over VERBATIM — a save must never overwrite (and thus
+            # destroy) stored secrets the operator can still recover by
+            # restoring the key. Newly entered keys stay memory-only.
+            encrypted = self._existing_ciphertext()
+            if self._runtime_secrets:
+                logger.warning(
+                    "secret persistence is disabled (%s); console secrets apply to "
+                    "this process only and will be lost on restart",
+                    self._box.disabled_reason or "no master key",
+                )
+        payload = {
+            "settings": settings,
+            "secrets": {},  # legacy plaintext section: always empty now
+            "secrets_encrypted": encrypted,
+            "corpus": corpus,
+        }
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         os.chmod(tmp, 0o600)
         os.replace(tmp, self._path)
+
+    def _existing_ciphertext(self) -> dict[str, dict[str, Any]]:
+        """Return the file's current ``secrets_encrypted`` section as-is.
+
+        Used only on the persistence-disabled path so a settings save
+        preserves stored ciphertext it cannot rewrite. Unreadable/absent
+        file → empty dict (nothing to preserve).
+        """
+        if not self._path.is_file():
+            return {}
+        try:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        existing = raw.get("secrets_encrypted")
+        return existing if isinstance(existing, dict) else {}
 
     def apply_overrides(self, base: Settings) -> Settings:
         """Merge persisted values over the environment-provided settings.

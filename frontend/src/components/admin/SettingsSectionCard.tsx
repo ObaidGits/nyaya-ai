@@ -25,6 +25,8 @@ interface Props {
   valueSources: Record<string, string>
   /** Keys with a pending explicit removal. */
   secretCleared: Record<string, boolean>
+  /** Secret fields whose stored ciphertext can't be decrypted server-side. */
+  secretsUnreadable?: string[]
   providers: LlmProviderInfo[]
   onValueChange: (key: string, value: string | number | boolean) => void
   onSecretChange: (key: string, value: string) => void
@@ -126,6 +128,7 @@ export function SettingsSectionCard({
   secretSources,
   valueSources,
   secretCleared,
+  secretsUnreadable,
   providers,
   onValueChange,
   onSecretChange,
@@ -388,6 +391,7 @@ export function SettingsSectionCard({
                   secretSet={secretSet[field.key] ?? false}
                   source={secretSources[field.key] ?? ''}
                   cleared={Boolean(secretCleared[field.key])}
+                  unreadable={secretsUnreadable?.includes(field.key)}
                   onChange={(v) => onSecretChange(field.key, v)}
                   onClear={() => onSecretClear(field.key)}
                 />

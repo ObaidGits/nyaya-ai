@@ -12,12 +12,24 @@ interface Props {
   source?: string
   /** Pending explicit removal (applied on Save). */
   cleared?: boolean
+  /** Stored key can't be decrypted server-side (master key missing/rotated).
+   * The stored data is preserved; the env value applies instead. */
+  unreadable?: boolean
   onChange: (value: string) => void
   /** Toggle the pending removal (also discards any typed draft). */
   onClear?: () => void
 }
 
-export function SecretField({ field, value, secretSet, source, cleared, onChange, onClear }: Props) {
+export function SecretField({
+  field,
+  value,
+  secretSet,
+  source,
+  cleared,
+  unreadable,
+  onChange,
+  onClear,
+}: Props) {
   const [reveal, setReveal] = useState(false)
   const removable = Boolean(onClear) && secretSet && !cleared
   return (
@@ -82,9 +94,20 @@ export function SecretField({ field, value, secretSet, source, cleared, onChange
           bootstrap default — saving a key here overrides it (the saved key wins).
         </p>
       )}
-      {!cleared && source !== 'env' && secretSet && !value && (
+      {!cleared && unreadable && (
+        <p
+          role="alert"
+          className="mt-1 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+        >
+          The saved key cannot be decrypted (the server's encryption key is missing or has
+          changed). The stored data was preserved and the environment value (if any) is in
+          use. Restore NYAYA_SECRET_KEY or the previous secret.key, or re-enter the key and
+          save.
+        </p>
+      )}
+      {!cleared && !unreadable && source !== 'env' && secretSet && !value && (
         <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">
-          A key is saved in the admin console and used by the server.
+          A key is saved in the admin console (stored encrypted) and used by the server.
         </p>
       )}
     </div>

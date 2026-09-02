@@ -12,3 +12,4 @@ redis==5.3.1
 arq==0.28.0
 httpx==0.28.1
 pypdf==6.16.2
+cryptography==50.0.1

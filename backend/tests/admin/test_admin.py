@@ -1094,11 +1094,13 @@ class TestSecretLifecycle:
 
 
 class TestNoPlaintextSecretPersistence:
-    """Security contract: the persisted admin.json NEVER contains a secret.
+    """Security contract: the persisted admin.json NEVER contains a PLAINTEXT
+    secret.
 
-    Console-entered keys live in memory for the running process only; the
-    on-disk file is secret-free by construction, and a legacy file with a
-    plaintext key is migrated (scrubbed) on first load.
+    Console-entered keys persist as Fernet ciphertext (D-098) so they survive
+    restarts; the on-disk file never carries the raw key value, and a legacy
+    file with a plaintext key is migrated (adopted + scrubbed) on first load.
+    Full lifecycle coverage: tests/admin/test_secret_persistence.py.
     """
 
     def test_saved_key_never_reaches_disk(self, client: TestClient, tmp_path: Path) -> None:
@@ -1178,10 +1180,13 @@ class TestNoPlaintextSecretPersistence:
         assert stored["secrets"] == {}
         assert stored["settings"]["llm_provider"] == "groq"
         assert stored["corpus"]["sha256"] == "deadbeef"
-        # A fresh process (new store) sees no secrets at all.
+        # D-098: a fresh process (new store) RECOVERS the migrated key —
+        # encrypted at rest, stable master key, no restart loss.
         from app.admin.store import AdminSettingsStore
 
-        assert AdminSettingsStore(str(path)).load()["secrets"] == {}
+        reloaded = AdminSettingsStore(str(path)).load()
+        assert reloaded["secrets"]["llm_api_key"] == "sk-legacy-plaintext"
+        assert reloaded["secrets_unreadable"] == []
 
     def test_masked_secret_response_shape(self, client: TestClient) -> None:
         """The API only ever reports set/empty + the source — never a value,
@@ -1196,7 +1201,9 @@ class TestNoPlaintextSecretPersistence:
         assert set(body["secrets"]) == {"llm_api_key", "speech_stt_api_key", "speech_tts_api_key"}
         assert body["secrets"]["llm_api_key"] == "set"
         assert body["secret_sources"]["llm_api_key"] == "console"
-        assert body["secrets_persisted"] is False
+        # D-098: the key persists (encrypted) AND is never echoed.
+        assert body["secrets_persisted"] is True
+        assert body["secrets_unreadable"] == []
         assert "sk-shape-check" not in str(body)
 
 
@@ -1215,10 +1222,10 @@ class TestPersistencePrecedence:
             values = client.get("/api/v1/admin/settings").json()["values"]
             assert values["rate_limit_speech_per_minute"] == 3
 
-    def test_console_secret_is_session_only(self, tmp_path: Path) -> None:
-        """Console-saved keys are held in memory ONLY (never on disk). They
-        win over env for the running process (D-090), but a restart reverts
-        to the environment value because the persisted file is secret-free."""
+    def test_console_secret_survives_restart_encrypted(self, tmp_path: Path) -> None:
+        """D-098: console-saved keys are persisted ENCRYPTED (never
+        plaintext) and survive a restart — the original bug this decision
+        fixed. The console key still wins over the env value (D-090)."""
         with TestClient(create_app(settings=make_settings(tmp_path))) as client:
             login(client)
             client.put(
@@ -1227,10 +1234,11 @@ class TestPersistencePrecedence:
                 headers=MUTATING,
             )
             assert client.app.state.settings.llm_api_key.get_secret_value() == "from-console"
+            # Never plaintext on disk — but present as ciphertext.
             assert "from-console" not in (tmp_path / "admin.json").read_text()
-        # Restart with an env-provided secret: the env key is effective again
-        # (documented restart behaviour — env is the bootstrap AND the
-        # fallback; console keys do not survive a restart).
+        # Restart with an env-provided secret: the PERSISTED console key is
+        # still the effective one (D-090 precedence is now stable across
+        # restarts, which is the whole point of D-098).
         env_settings = Settings(
             _env_file=None,
             admin_username=ADMIN["username"],
@@ -1240,7 +1248,7 @@ class TestPersistencePrecedence:
         )
         app = create_app(settings=env_settings)
         assert app.state.settings.llm_api_key is not None
-        assert app.state.settings.llm_api_key.get_secret_value() == "sk-from-env"
+        assert app.state.settings.llm_api_key.get_secret_value() == "from-console"
 
     def test_persisted_non_secret_settings_survive_restart(self, tmp_path: Path) -> None:
         """Only SECRETS are session-only: provider/model stay persisted and
@@ -1289,9 +1297,11 @@ class TestPersistencePrecedence:
         from app.admin.store import AdminSettingsStore
 
         store = AdminSettingsStore("")
-        assert store.load() == {"settings": {}, "secrets": {}, "corpus": {}}
+        empty = {"settings": {}, "secrets": {}, "corpus": {}}
+        assert store.load() == {**empty, "secrets_unreadable": []}
+        assert not store.secrets_persisted
         store.save(settings={"rate_limit_speech_per_minute": 3}, secrets={})
-        assert store.load() == {"settings": {}, "secrets": {}, "corpus": {}}
+        assert store.load() == {**empty, "secrets_unreadable": []}
 
 
 class TestResourceStatus:

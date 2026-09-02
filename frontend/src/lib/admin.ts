@@ -35,6 +35,13 @@ export interface AdminSettingsView {
   secret_sources: Record<string, string>
   /** Where each editable setting's effective value comes from: "env" | "console". */
   value_sources: Record<string, string>
+  /** True when console-entered secrets are persisted encrypted at rest and
+   * survive restarts / container recreation (D-098). */
+  secrets_persisted?: boolean
+  /** Secret fields whose stored ciphertext could not be decrypted (master key
+   * missing/rotated). The stored data is preserved server-side; the env value
+   * applies instead. */
+  secrets_unreadable?: string[]
   persisted: string[]
   llm_providers: LlmProviderInfo[]
 }

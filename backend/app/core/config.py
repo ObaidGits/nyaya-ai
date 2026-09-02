@@ -202,10 +202,18 @@ class Settings(BaseSettings):
     # Secret used to sign admin session cookies; derived from the password
     # when unset (documented fallback — set it explicitly in production).
     admin_session_secret: SecretStr | None = None
-    # Where the persisted admin configuration lives (JSON, 0600, always
-    # SECRET-FREE: console-entered API keys are memory-only). Empty disables
-    # persistence (settings changes are process-local only).
+    # Where the persisted admin configuration lives (JSON, 0600). Console-
+    # entered API keys are stored inside it as Fernet CIPHERTEXT (D-098) —
+    # never plaintext. Empty disables persistence (settings changes are
+    # process-local only).
     admin_settings_path: str = ""
+    # Master key for the encrypted console secrets. When unset, a key is
+    # generated ONCE and stored as secret.key next to admin_settings_path
+    # (same persistent volume) — stable across container recreation. Set it
+    # explicitly (urlsafe-base64 32 bytes) to manage rotation yourself; a
+    # changed key makes stored secrets undecryptable (they are preserved,
+    # never deleted, and the environment values apply instead).
+    secrets_master_key: SecretStr | None = None
 
     # --- Chat history (memory configuration; DECISIONS.md D-080) ------------
     # Conversation memory is client-side (localStorage) and sent per request;

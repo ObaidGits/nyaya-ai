@@ -52,11 +52,11 @@ AdminMutatingDep = Annotated[None, Depends(_admin_required_mutating)]
 def _secret_sources(request: Request, persisted: dict[str, Any]) -> dict[str, str]:
     """Where each secret's effective value comes from: "console" | "env" | "".
 
-    A secret saved through the console wins for the RUNNING process (D-090)
-    — the console is the authoritative place to rotate provider keys — but
-    it is held in memory only and does not survive a restart; the
-    environment value (the bootstrap default) applies again after one, and
-    when a console secret is explicitly removed.
+    A secret saved through the console wins over the environment value
+    (D-090) and is persisted ENCRYPTED at rest (D-098) — it survives
+    restarts and container recreation. When a stored secret cannot be
+    decrypted with the current master key, the stored data is preserved and
+    the environment value (the bootstrap default) applies instead.
     """
     env_settings: Settings = getattr(request.app.state, "env_settings", request.app.state.settings)
     sources: dict[str, str] = {}
@@ -78,8 +78,10 @@ def _settings_view(
     ``value_sources`` states, per editable field, whether the effective value
     comes from the persisted console configuration ("console") or the
     environment ("env") — the console wins (D-090), so a stale env value can
-    never masquerade as the runtime config. ``secrets_persisted`` documents
-    that console-entered keys are session-only (never written to disk).
+    never masquerade as the runtime config. ``secrets_persisted`` states
+    whether console keys are stored encrypted at rest (D-098);
+    ``secrets_unreadable`` lists stored keys that cannot be decrypted with
+    the current master key (data preserved, environment values in effect).
     """
     persisted = store.load()
     values: dict[str, Any] = {}
@@ -94,7 +96,8 @@ def _settings_view(
         },
         "secrets": secrets,  # "set" | "" — never the value
         "secret_sources": _secret_sources(request, persisted),
-        "secrets_persisted": False,  # console keys are memory-only
+        "secrets_persisted": store.secrets_persisted,
+        "secrets_unreadable": persisted.get("secrets_unreadable", []),
         "persisted": sorted(persisted["settings"]),
         "llm_providers": request_llm_providers(),
     }
@@ -228,10 +231,9 @@ class UpdateSettingsRequest(BaseModel):
 
     Empty secret strings mean "unchanged" (the UI never echoes values back);
     ``clear_secrets`` is the explicit removal path. Submitted secrets are
-    held in memory for the running process only — they are never persisted
-    and do not survive a restart (set them in the environment for that).
-    ``force`` skips the provider verification gate for deliberate offline
-    saves.
+    persisted as Fernet ciphertext inside the admin settings file (D-098)
+    and survive restarts/container recreation. ``force`` skips the provider
+    verification gate for deliberate offline saves.
     """
 
     values: dict[str, Any] = Field(default_factory=dict)
