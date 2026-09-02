@@ -252,3 +252,43 @@ async def test_first_attempt_provider_failure_propagates() -> None:
     provider = ScriptedProvider([_provider_down_error(), GOOD_ANSWER])
     with pytest.raises(AppError):
         await GenerationService(provider).answer("question", make_evidence())
+
+
+async def test_regeneration_refusal_preserves_valid_answer() -> None:
+    """Live repro (1-in-25 intermittent refusal on "What is the punishment
+    for murder?"): attempt 1 produces a partially valid answer, the guard
+    removes the fabricated sentence and regenerates, and the regeneration
+    returns the exact specification refusal string. The preserved valid
+    answer must be returned — the user saw a refusal for a question the
+    evidence fully grounds."""
+    provider = ScriptedProvider([MIXED_ANSWER, REFUSAL_RESPONSE])
+    outcome = await GenerationService(provider).answer(
+        "What is murder?", make_evidence(query="what is murder?")
+    )
+    assert not outcome.refused
+    assert outcome.answer == "Murder is punishable with death [TS s.103]."
+    assert len(outcome.citations.valid_citations) == 1
+    assert len(provider.requests) == 2
+
+
+async def test_first_attempt_refusal_still_refuses() -> None:
+    """A refusal on the FIRST attempt (nothing valid preserved) stays a
+    refusal: the preservation path must only rescue guarded answers."""
+    provider = ScriptedProvider([REFUSAL_RESPONSE])
+    outcome = await GenerationService(provider).answer(
+        "question", make_evidence(query="theft")
+    )
+    assert outcome.refused
+    assert outcome.answer == REFUSAL_RESPONSE
+
+
+async def test_regeneration_refusal_without_valid_prefix_refuses() -> None:
+    """Attempt 1 is entirely ungrounded (guard strips everything), the
+    regeneration refuses: the honest outcome is the refusal, never a
+    preserved empty answer."""
+    provider = ScriptedProvider(
+        ["Theft is punishable with imprisonment [TS s.999].", REFUSAL_RESPONSE]
+    )
+    outcome = await GenerationService(provider).answer("question", make_evidence())
+    assert outcome.refused
+    assert outcome.answer == REFUSAL_RESPONSE

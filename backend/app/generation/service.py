@@ -158,6 +158,10 @@ class GenerationService:
         completion_tokens: int | None = None
         saw_text = False
         contaminated = False
+        # Latest fully-validated answer (non-empty, cited, not refused):
+        # a later regeneration that refuses must not discard it.
+        answer_prev: str = ""
+        check_prev: CitationCheck | None = None
         for attempt in range(self._max_attempts):
             try:
                 result = await self._provider.generate(request)
@@ -212,8 +216,33 @@ class GenerationService:
                 text, evidence.results, document_hits=evidence.document_hits
             )
             if _is_refusal_text(answer):
-                # The model itself refused: normalize to the code-level
-                # refusal so refused=true and REFUSALS stay truthful.
+                # The model itself refused. Normalize to the code-level
+                # refusal — UNLESS a regeneration is refusing after an
+                # earlier attempt already produced a valid, cited answer:
+                # the guard stripped sentences on attempt 1, the regen
+                # prompt asked the model to continue, and a literal model
+                # refusal at that point (observed live: the exact
+                # specification string) must not discard the preserved
+                # answer the user would otherwise have received. Preserve
+                # only a fully valid answer (non-empty, cited, not
+                # refused); otherwise the refusal is honest.
+                if (
+                    answer_prev.strip()
+                    and check_prev is not None
+                    and (check_prev.valid_citations or check_prev.cited_document_ids)
+                ):
+                    logger.warning(
+                        "regeneration refused; preserving earlier validated answer",
+                        extra={
+                            "event": "generation_regenerated_refusal_answer_preserved",
+                            "attempt": attempt + 1,
+                        },
+                    )
+                    answer = answer_prev
+                    check = check_prev
+                    break
+                # A first-attempt refusal, or a regen refusal with nothing
+                # valid preserved: refused=true and REFUSALS stay truthful.
                 logger.info(
                     "model emitted refusal text; normalizing",
                     extra={"event": "generation_refusal", "reason": "model_emitted"},
@@ -229,6 +258,9 @@ class GenerationService:
                 )
             if not check.removed_sentences:
                 break
+            # Record the current sanitized (partially valid) answer as the
+            # preservation candidate before regenerating.
+            answer_prev, check_prev = answer, check
             logger.info(
                 "citation guard removed sentences; regenerating",
                 extra={
