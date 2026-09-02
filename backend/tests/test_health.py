@@ -194,7 +194,7 @@ class _FakeActiveProvider:
     def __init__(self, health: "ProviderHealth") -> None:
         self._health = health
 
-    async def probe(self) -> "ProviderHealth":
+    async def probe(self, *, verify_chat: bool = False) -> "ProviderHealth":
         return self._health
 
 
@@ -283,7 +283,7 @@ def test_llm_health_cache_and_invalidation(app: FastAPI) -> None:
     calls: list[int] = []
 
     class _CountingProvider(_FakeActiveProvider):
-        async def probe(self) -> ProviderHealth:
+        async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
             calls.append(1)
             return await super().probe()
 

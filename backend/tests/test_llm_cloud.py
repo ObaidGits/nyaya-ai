@@ -509,6 +509,249 @@ class TestProbe:
         assert health.state is ProviderHealthState.NOT_CONFIGURED
 
 
+class TestChatVerification:
+    """Chat-capability round-trip (D-096): a model that is listed and
+    authenticated but cannot answer (the live prompt-guard classifier
+    incident) must fail with the exact reason — and the cheap polled probe
+    must never pay for a generation."""
+
+    @staticmethod
+    def _grok(models_ok: bool = True) -> OpenAICompatibleProvider:
+        return OpenAICompatibleProvider(
+            provider="grok", base_url="https://api.x.ai/v1", model="grok-4.6", api_key="k"
+        )
+
+    @staticmethod
+    def _models_handler(extra: Any = None) -> Any:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/v1/models":
+                return httpx.Response(200, json={"data": [{"id": "grok-4.6"}]})
+            if extra is not None:
+                return extra(request)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "OK"}}]},
+            )
+
+        return handler
+
+    @pytest.mark.asyncio
+    async def test_cheap_probe_never_generates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The polled probe (verify_chat=False) lists models only — no
+        completion is billed to a status poll."""
+        posts: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            posts.append(request.url.path)
+            return httpx.Response(200, json={"data": [{"id": "grok-4.6"}]})
+
+        _mock(monkeypatch, handler)
+        health = await self._grok().probe()
+        assert health.state is ProviderHealthState.HEALTHY
+        assert health.chat_verified is None
+        assert posts == ["/v1/models"]
+
+    @pytest.mark.asyncio
+    async def test_verified_chat_is_healthy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def assert_prompt(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            assert body["model"] == "grok-4.6"
+            assert body["stream"] is False
+            return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+        _mock(monkeypatch, self._models_handler(assert_prompt))
+        health = await self._grok().probe(verify_chat=True)
+        assert health.state is ProviderHealthState.HEALTHY
+        assert health.chat_verified is True
+        assert "chat verified" in health.detail
+
+    @pytest.mark.asyncio
+    async def test_classifier_model_rejected_with_exact_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """D-096 live incident: the prompt-guard classifier is listed by
+        /models but answers HTTP 400 to chat completions. The probe must say
+        exactly that, as INVALID_CONFIGURATION."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            # Groq's path is /openai/v1/models — match the suffix, not the
+            # exact path.
+            if request.url.path.endswith("/models"):
+                return httpx.Response(
+                    200, json={"data": [{"id": "meta-llama/llama-prompt-guard-2-86m"}]}
+                )
+            return httpx.Response(400)
+
+        _mock(monkeypatch, handler)
+        provider = OpenAICompatibleProvider(
+            provider="groq",
+            base_url="https://api.groq.com/openai/v1",
+            model="meta-llama/llama-prompt-guard-2-86m",
+            api_key="k",
+        )
+        health = await provider.probe(verify_chat=True)
+        assert health.state is ProviderHealthState.INVALID_CONFIGURATION
+        assert health.chat_verified is False
+        assert "not chat-capable" in health.detail
+        assert "meta-llama/llama-prompt-guard-2-86m" in health.detail
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_chat_is_degraded_not_broken(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        handler = self._models_handler(lambda request: httpx.Response(429))
+        _mock(monkeypatch, handler)
+        health = await self._grok().probe(verify_chat=True)
+        assert health.state is ProviderHealthState.DEGRADED
+        assert health.chat_verified is None
+        assert "429" in health.detail
+
+    @pytest.mark.asyncio
+    async def test_chat_404_is_invalid_configuration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        handler = self._models_handler(lambda request: httpx.Response(404))
+        _mock(monkeypatch, handler)
+        health = await self._grok().probe(verify_chat=True)
+        assert health.state is ProviderHealthState.INVALID_CONFIGURATION
+        assert health.chat_verified is False
+        assert "404" in health.detail
+
+    @pytest.mark.asyncio
+    async def test_chat_401_is_invalid_configuration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        handler = self._models_handler(lambda request: httpx.Response(401))
+        _mock(monkeypatch, handler)
+        health = await self._grok().probe(verify_chat=True)
+        assert health.state is ProviderHealthState.INVALID_CONFIGURATION
+        assert health.chat_verified is False
+
+    @pytest.mark.asyncio
+    async def test_empty_chat_response_is_degraded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        handler = self._models_handler(
+            lambda request: httpx.Response(200, json={"choices": [{"message": {"content": ""}}]})
+        )
+        _mock(monkeypatch, handler)
+        health = await self._grok().probe(verify_chat=True)
+        assert health.state is ProviderHealthState.DEGRADED
+        assert health.chat_verified is False
+
+    @pytest.mark.asyncio
+    async def test_chat_network_error_is_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/v1/models":
+                return httpx.Response(200, json={"data": [{"id": "grok-4.6"}]})
+            raise httpx.ConnectError("no route")
+
+        _mock(monkeypatch, handler)
+        health = await self._grok().probe(verify_chat=True)
+        assert health.state is ProviderHealthState.UNAVAILABLE
+        assert health.chat_verified is False
+
+    @pytest.mark.asyncio
+    async def test_gemini_verified_chat_is_healthy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/v1beta/models":
+                return httpx.Response(
+                    200, json={"models": [{"name": "models/gemini-2.0-flash"}]}
+                )
+            assert request.url.path == "/v1beta/models/gemini-2.0-flash:generateContent"
+            return httpx.Response(
+                200, json={"candidates": [{"content": {"parts": [{"text": "OK"}]}}]}
+            )
+
+        _mock(monkeypatch, handler)
+        provider = GeminiProvider(api_key="k", model="gemini-2.0-flash")
+        health = await provider.probe(verify_chat=True)
+        assert health.state is ProviderHealthState.HEALTHY
+        assert health.chat_verified is True
+
+    @pytest.mark.asyncio
+    async def test_gemini_chat_400_is_invalid_configuration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/v1beta/models":
+                return httpx.Response(
+                    200, json={"models": [{"name": "models/gemini-2.0-flash"}]}
+                )
+            return httpx.Response(400)
+
+        _mock(monkeypatch, handler)
+        provider = GeminiProvider(api_key="k", model="gemini-2.0-flash")
+        health = await provider.probe(verify_chat=True)
+        assert health.state is ProviderHealthState.INVALID_CONFIGURATION
+        assert health.chat_verified is False
+
+    @pytest.mark.asyncio
+    async def test_ollama_verified_chat_is_healthy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import app.llm.ollama as ollama_module
+        from app.llm.ollama import OllamaProvider
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/tags":
+                return httpx.Response(200, json={"models": [{"name": "qwen2.5:7b"}]})
+            assert request.url.path == "/api/chat"
+            return httpx.Response(200, json={"message": {"content": "OK"}})
+
+        monkeypatch.setattr(ollama_module, "httpx", _HttpxShim(handler))
+        provider = OllamaProvider(base_url="http://ollama:11434", model="qwen2.5:7b")
+        health = await provider.probe(verify_chat=True)
+        assert health.state is ProviderHealthState.HEALTHY
+        assert health.chat_verified is True
+        assert "chat verified" in health.detail
+
+    @pytest.mark.asyncio
+    async def test_ollama_cheap_probe_never_generates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import app.llm.ollama as ollama_module
+        from app.llm.ollama import OllamaProvider
+
+        posts: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            posts.append(request.url.path)
+            return httpx.Response(200, json={"models": [{"name": "qwen2.5:7b"}]})
+
+        monkeypatch.setattr(ollama_module, "httpx", _HttpxShim(handler))
+        provider = OllamaProvider(base_url="http://ollama:11434", model="qwen2.5:7b")
+        health = await provider.probe()
+        assert health.state is ProviderHealthState.HEALTHY
+        assert health.chat_verified is None
+        assert posts == ["/api/tags"]
+
+    @pytest.mark.asyncio
+    async def test_ollama_chat_400_is_invalid_configuration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import app.llm.ollama as ollama_module
+        from app.llm.ollama import OllamaProvider
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/tags":
+                return httpx.Response(200, json={"models": [{"name": "qwen2.5:7b"}]})
+            return httpx.Response(400)
+
+        monkeypatch.setattr(ollama_module, "httpx", _HttpxShim(handler))
+        provider = OllamaProvider(base_url="http://ollama:11434", model="qwen2.5:7b")
+        health = await provider.probe(verify_chat=True)
+        assert health.state is ProviderHealthState.INVALID_CONFIGURATION
+        assert health.chat_verified is False
+        assert "not chat-capable" in health.detail
+
+
 class TestProviderDefaults:
     """Every built-in provider has its documented official endpoint (D-090);
     URLs verified against the providers' current API docs."""

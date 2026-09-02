@@ -327,7 +327,10 @@ async def update_settings(
             candidate_provider = registry.create(candidate.llm_provider, candidate)
         except UnknownProviderError as exc:
             raise AppError(str(exc), status_code=422, code="LLM_VERIFICATION_FAILED") from exc
-        health = await candidate_provider.probe()
+        # verify_chat=True (D-096): the candidate must not only list its
+        # model — it must actually answer a chat request. A classifier/guard
+        # model passes the listing and then fails every user question.
+        health = await candidate_provider.probe(verify_chat=True)
         if health.state is not ProviderHealthState.HEALTHY:
             raise AppError(
                 f"Not saved — the new LLM configuration did not verify: {health.detail} "
@@ -525,9 +528,11 @@ async def test_llm(
 ) -> TestResult:
     """Test the draft config from the form (or the saved one when no body).
 
-    Uses the provider's classified probe: reachability, authentication AND
-    model availability — a reachable API with a misspelled model or rejected
-    key is reported as a failure with the specific reason.
+    Uses the provider's classified probe with a chat round-trip (D-096):
+    reachability, authentication, model availability AND chat capability —
+    a reachable API with a misspelled model, a rejected key or a
+    non-chat-capable model (e.g. a classifier) is reported as a failure
+    with the specific reason.
     """
     start = time.monotonic()
     settings = _draft_settings(request, draft)
@@ -537,14 +542,15 @@ async def test_llm(
     except UnknownProviderError as exc:
         return TestResult(success=False, message=str(exc))
     try:
-        health = await provider.probe()
+        health = await provider.probe(verify_chat=True)
         latency = int((time.monotonic() - start) * 1000)
         if health.state is ProviderHealthState.HEALTHY:
-            return TestResult(
-                success=True,
-                latency_ms=latency,
-                message=f"{health.provider} / {health.model}: reachable and model available.",
+            message = (
+                f"{health.provider} / {health.model}: {health.detail}."
+                if health.chat_verified
+                else f"{health.provider} / {health.model}: reachable and model available."
             )
+            return TestResult(success=True, latency_ms=latency, message=message)
         reason = health.detail or health.state.value
         return TestResult(
             success=False,
@@ -754,24 +760,42 @@ async def _check_qdrant(settings: Settings) -> dict[str, str]:
 
 
 async def _llm_status(request: Request) -> dict[str, Any]:
-    """Classified health of the ACTIVE provider via its own probe."""
+    """Classified health of the ACTIVE provider via its own probe.
+
+    Includes the chat round-trip (D-096): the admin panel fetches this once
+    per open, so the status row shows true usability ("chat verified" or the
+    exact reason the model cannot answer), not just reachability.
+    """
     from app.api.deps import get_llm_provider
 
     try:
         provider = get_llm_provider(request)
     except AppError as exc:
-        return {"status": "not_configured", "provider": None, "model": None, "detail": exc.message}
+        return {
+            "status": "not_configured",
+            "provider": None,
+            "model": None,
+            "detail": exc.message,
+            "chat_verified": None,
+        }
     try:
-        health = await provider.probe()
+        health = await provider.probe(verify_chat=True)
     except Exception:
         meta = provider.metadata()
-        return {"status": "error", "provider": meta.provider, "model": meta.model, "detail": ""}
+        return {
+            "status": "error",
+            "provider": meta.provider,
+            "model": meta.model,
+            "detail": "",
+            "chat_verified": None,
+        }
     return {
         "status": "ok" if health.state is ProviderHealthState.HEALTHY else "error",
         "state": health.state.value,
         "provider": health.provider,
         "model": health.model,
         "detail": health.detail,
+        "chat_verified": health.chat_verified,
     }
 
 

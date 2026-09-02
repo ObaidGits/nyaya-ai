@@ -91,6 +91,9 @@ class LlmHealthResponse(BaseModel):
     provider: str | None = None
     model: str | None = None
     detail: str = ""
+    #: True/False after an explicit chat round-trip (D-096); None = not
+    #: tested by this polled probe (chat is verified at configuration time).
+    chat_verified: bool | None = None
     config_source: Literal["admin_console", "environment"] = "environment"
 
 
@@ -150,6 +153,7 @@ async def llm_health(request: Request) -> LlmHealthResponse:
                 provider=health.provider,
                 model=health.model,
                 detail=health.detail,
+                chat_verified=health.chat_verified,
                 config_source=config_source,
             )
     request.app.state.llm_health_cache = (now, result)

@@ -3440,3 +3440,42 @@ changes.
 act-name sentences keep their citations; "समीक्षा" (contains "मी") is not
 self-referential; existing identity tests (first-person pronoun) still
 strip decorative citations.
+
+## D-096 — LLM probes verify chat capability, not just model listing
+
+**Problem (found live, 2026-09-01):** the user configured Groq with
+`meta-llama/llama-prompt-guard-2-86m` — a prompt-injection classifier, not
+a chat model. Every configuration surface reported it healthy: the
+provider's `/models` listing returned it, so the save-time gate, the
+"Test connection" button and the status panel all said "reachable and
+model available". The first real question then failed with HTTP 400.
+Reachability was verified; usability never was.
+
+**Decision:** provider probes gain an opt-in chat round-trip
+(`probe(verify_chat=True)`): after the model-list check passes, one tiny
+generation ("Reply with the single word OK.", output capped at 8 tokens)
+classifies exact usability — 200 with text → HEALTHY "chat verified";
+400 → INVALID_CONFIGURATION "model rejected a chat request — offered but
+not chat-capable (e.g. a classifier, guard or embedding model)"; 401/403 →
+key rejected; 404 → model not found; 429 → DEGRADED (rate-limited, not
+broken); timeout/network → UNAVAILABLE. `ProviderHealth` gains
+`chat_verified: bool | None` (None = not tested by this probe).
+
+The round-trip runs where correctness matters and cost is bounded: the
+save-time test-before-activate gate (D-090), the admin "Test connection"
+button, and the admin status panel (fetched once per panel open). The
+polled probes stay cheap by design: `/health/llm` (brain indicator,
+15 s cache, UI polls every 30 s) and the readiness check keep the
+model-list-only probe, so a status poll never bills a completion or eats
+free-tier rate limits. Ollama's round-trip doubles as a model warm-up
+(first load can take tens of seconds, hence a 90 s timeout).
+
+**Tests:** `tests/test_llm_cloud.py` — cheap probe never generates; chat
+verified healthy (payload pinned); classifier model rejected with the
+exact reason (the live incident, verbatim model id); 429 → DEGRADED; 404/
+401 → INVALID_CONFIGURATION; empty response → DEGRADED; network error →
+UNAVAILABLE; Gemini generateContent success and 400; Ollama success, cheap
+probe, and 400. `tests/admin/test_admin.py` — save gate passes
+`verify_chat=True` and rejects a classifier model with "not chat-capable"
+in the error; Test button reports chat-verified success and the classifier
+failure.

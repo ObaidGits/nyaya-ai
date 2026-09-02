@@ -332,10 +332,16 @@ class OpenAICompatibleProvider(LLMProvider):
         except httpx.HTTPError:
             return False
 
-    async def probe(self) -> ProviderHealth:
+    async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
         """Classified health (brain status contract): distinguishes missing
         configuration, rejected credentials, an unreachable endpoint and a
-        model the provider does not offer."""
+        model the provider does not offer.
+
+        ``verify_chat=True`` (D-096) follows a passing model-list check with
+        one tiny chat completion: a model that is listed and authenticated
+        yet cannot answer — a prompt-guard classifier, an embedding model —
+        must fail at configuration time, not at the first user question.
+        """
         if not self._api_key:
             return ProviderHealth(
                 state=ProviderHealthState.NOT_CONFIGURED,
@@ -399,11 +405,110 @@ class OpenAICompatibleProvider(LLMProvider):
                     "model list."
                 ),
             )
+        if not verify_chat:
+            return ProviderHealth(
+                state=ProviderHealthState.HEALTHY,
+                provider=self._provider,
+                model=self._model,
+                detail="reachable and model available" if offered is not None else "reachable",
+            )
+        return await self._verify_chat()
+
+    #: Minimal usability round-trip (D-096). One user turn, capped output.
+    _CHAT_VERIFY_PROMPT = "Reply with the single word OK."
+
+    async def _verify_chat(self) -> ProviderHealth:
+        """One tiny completion; classifies exactly why a model cannot answer."""
+        payload = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": self._CHAT_VERIFY_PROMPT}],
+            "max_tokens": 8,
+            "stream": False,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(
+                    f"{self._base_url}/chat/completions",
+                    headers=self._headers(),
+                    json=payload,
+                )
+        except httpx.HTTPError:
+            return ProviderHealth(
+                state=ProviderHealthState.UNAVAILABLE,
+                provider=self._provider,
+                model=self._model,
+                detail="The provider endpoint is unreachable during chat verification "
+                "(network error or timeout).",
+                chat_verified=False,
+            )
+        status = response.status_code
+        if status == 200:
+            try:
+                text = str(response.json()["choices"][0]["message"]["content"] or "")
+            except (ValueError, KeyError, IndexError, TypeError):
+                text = ""
+            if text.strip():
+                return ProviderHealth(
+                    state=ProviderHealthState.HEALTHY,
+                    provider=self._provider,
+                    model=self._model,
+                    detail="chat verified — the model answered a test prompt",
+                    chat_verified=True,
+                )
+            return ProviderHealth(
+                state=ProviderHealthState.DEGRADED,
+                provider=self._provider,
+                model=self._model,
+                detail="The model returned an empty response to a test chat request.",
+                chat_verified=False,
+            )
+        if status == 400:
+            # The live incident behind D-096: a prompt-guard classifier model
+            # passes the /models listing but answers 400 to chat completions.
+            return ProviderHealth(
+                state=ProviderHealthState.INVALID_CONFIGURATION,
+                provider=self._provider,
+                model=self._model,
+                detail=(
+                    f"Model '{self._model}' rejected a chat request (HTTP 400) — it is "
+                    "offered but not chat-capable (for example a classifier, guard or "
+                    "embedding model). Choose a chat/completions model."
+                ),
+                chat_verified=False,
+            )
+        if status in (401, 403):
+            return ProviderHealth(
+                state=ProviderHealthState.INVALID_CONFIGURATION,
+                provider=self._provider,
+                model=self._model,
+                detail=f"The provider rejected the API key during chat verification "
+                f"(HTTP {status}).",
+                chat_verified=False,
+            )
+        if status == 404:
+            return ProviderHealth(
+                state=ProviderHealthState.INVALID_CONFIGURATION,
+                provider=self._provider,
+                model=self._model,
+                detail=f"Model '{self._model}' was not found for a chat request (HTTP 404).",
+                chat_verified=False,
+            )
+        if status == 429:
+            # Rate limited ≠ broken: the model is probably usable; retry.
+            return ProviderHealth(
+                state=ProviderHealthState.DEGRADED,
+                provider=self._provider,
+                model=self._model,
+                detail="The provider is rate-limiting requests (HTTP 429) — reachable, "
+                "but chat could not be verified; retry the test shortly.",
+                chat_verified=None,
+            )
         return ProviderHealth(
-            state=ProviderHealthState.HEALTHY,
+            state=ProviderHealthState.UNAVAILABLE,
             provider=self._provider,
             model=self._model,
-            detail="reachable and model available" if offered is not None else "reachable",
+            detail=f"The provider returned HTTP {status} during chat verification.",
+            chat_verified=False,
         )
 
 

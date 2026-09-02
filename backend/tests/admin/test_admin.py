@@ -583,7 +583,7 @@ class TestLlmConnectionTest:
                 created["name"] = name
                 created["settings"] = settings
 
-            async def probe(self) -> ProviderHealth:
+            async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
                 return ProviderHealth(
                     state=ProviderHealthState.HEALTHY,
                     provider="gemini",
@@ -638,7 +638,7 @@ class TestLlmConnectionTest:
             def __init__(self, name: str, settings: Settings) -> None:
                 captured["settings"] = settings
 
-            async def probe(self) -> ProviderHealth:
+            async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
                 return ProviderHealth(
                     state=ProviderHealthState.HEALTHY,
                     provider="gemini",
@@ -685,7 +685,7 @@ class TestLlmConnectionTest:
             def __init__(self, name: str, settings: Settings) -> None:
                 pass
 
-            async def probe(self) -> ProviderHealth:
+            async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
                 return ProviderHealth(
                     state=ProviderHealthState.DEGRADED,
                     provider="gemini",
@@ -729,7 +729,7 @@ class TestLlmConnectionTest:
             def __init__(self, name: str, settings: Settings) -> None:
                 pass
 
-            async def probe(self) -> ProviderHealth:
+            async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
                 return ProviderHealth(
                     state=ProviderHealthState.UNAVAILABLE,
                     provider="gemini",
@@ -759,6 +759,99 @@ class TestLlmConnectionTest:
         assert body["success"] is False
         assert "unreachable" in body["message"]
 
+    def test_connection_test_verifies_chat_capability(self, client: TestClient) -> None:
+        """D-096: the test button performs a real generation round-trip, and
+        a listed-but-not-chat-capable model (classifier) fails with the
+        exact reason — the live prompt-guard incident."""
+        from app.llm.base import ProviderHealth, ProviderHealthState
+
+        seen: dict[str, bool] = {}
+
+        class FakeProvider:
+            def __init__(self, name: str, settings: Settings) -> None:
+                pass
+
+            async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
+                seen["verify_chat"] = verify_chat
+                return ProviderHealth(
+                    state=ProviderHealthState.INVALID_CONFIGURATION,
+                    provider="groq",
+                    model="meta-llama/llama-prompt-guard-2-86m",
+                    detail=(
+                        "Model 'meta-llama/llama-prompt-guard-2-86m' rejected a chat "
+                        "request (HTTP 400) — it is offered but not chat-capable."
+                    ),
+                    chat_verified=False,
+                )
+
+            def metadata(self) -> Any:
+                from app.llm.base import ProviderMetadata
+
+                return ProviderMetadata(
+                    provider="groq", model="meta-llama/llama-prompt-guard-2-86m"
+                )
+
+        class FakeRegistry:
+            def create(self, name: str, settings: Settings) -> FakeProvider:
+                return FakeProvider(name, settings)
+
+            def available(self) -> list[str]:
+                return ["ollama", "groq"]
+
+        client.app.state.llm_registry = FakeRegistry()  # type: ignore[assignment]
+        login(client)
+        response = client.post(
+            "/api/v1/admin/test/llm",
+            json={"provider": "groq", "model": "meta-llama/llama-prompt-guard-2-86m"},
+            headers=MUTATING,
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert seen["verify_chat"] is True  # a real generation was attempted
+        assert body["success"] is False
+        assert "not chat-capable" in body["message"]
+        assert "meta-llama/llama-prompt-guard-2-86m" in body["message"]
+
+    def test_chat_verified_success_message(self, client: TestClient) -> None:
+        """A passing chat round-trip is reported as usability, not just
+        reachability."""
+        from app.llm.base import ProviderHealth, ProviderHealthState
+
+        class FakeProvider:
+            def __init__(self, name: str, settings: Settings) -> None:
+                pass
+
+            async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
+                return ProviderHealth(
+                    state=ProviderHealthState.HEALTHY,
+                    provider="groq",
+                    model="openai/gpt-oss-120b",
+                    detail="chat verified — the model answered a test prompt",
+                    chat_verified=True,
+                )
+
+            def metadata(self) -> Any:
+                from app.llm.base import ProviderMetadata
+
+                return ProviderMetadata(provider="groq", model="openai/gpt-oss-120b")
+
+        class FakeRegistry:
+            def create(self, name: str, settings: Settings) -> FakeProvider:
+                return FakeProvider(name, settings)
+
+            def available(self) -> list[str]:
+                return ["ollama", "groq"]
+
+        client.app.state.llm_registry = FakeRegistry()  # type: ignore[assignment]
+        login(client)
+        response = client.post(
+            "/api/v1/admin/test/llm", json={"provider": "groq"}, headers=MUTATING
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert "chat verified" in body["message"]
+
 
 class TestSaveVerification:
     """Test-before-activate (D-090): a provider config that does not verify
@@ -772,7 +865,7 @@ class TestSaveVerification:
             def __init__(self, name: str, settings: Settings) -> None:
                 pass
 
-            async def probe(self) -> ProviderHealth:
+            async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
                 return ProviderHealth(
                     state=state, provider="grok", model="grok-4.6", detail="probe result"
                 )
@@ -854,6 +947,49 @@ class TestSaveVerification:
         )
         assert response.status_code == 200
         assert client.app.state.settings.llm_provider == "grok"
+
+    def test_save_gate_verifies_chat_capability(self, client: TestClient) -> None:
+        """D-096: the save-time probe must include the chat round-trip — a
+        model that lists fine but cannot answer (classifier) is rejected."""
+        from app.llm.base import ProviderHealth, ProviderHealthState
+
+        seen: dict[str, bool] = {}
+
+        class FakeProvider:
+            def __init__(self, name: str, settings: Settings) -> None:
+                pass
+
+            async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
+                seen["verify_chat"] = verify_chat
+                return ProviderHealth(
+                    state=ProviderHealthState.INVALID_CONFIGURATION,
+                    provider="grok",
+                    model="grok-guard-2",
+                    detail="Model 'grok-guard-2' rejected a chat request (HTTP 400) — "
+                    "it is offered but not chat-capable.",
+                    chat_verified=False,
+                )
+
+        class FakeRegistry:
+            def create(self, name: str, settings: Settings) -> FakeProvider:
+                return FakeProvider(name, settings)
+
+            def available(self) -> list[str]:
+                return ["ollama", "grok"]
+
+        client.app.state.llm_registry = FakeRegistry()  # type: ignore[assignment]
+        login(client)
+        response = client.put(
+            "/api/v1/admin/settings",
+            json={"values": {"llm_provider": "grok", "llm_model": "grok-guard-2"}},
+            headers=MUTATING,
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "LLM_VERIFICATION_FAILED"
+        assert seen["verify_chat"] is True  # chat round-trip was part of the gate
+        assert "not chat-capable" in response.json()["error"]["message"]
+        # Nothing was applied.
+        assert client.app.state.settings.llm_provider != "grok"
 
     def test_non_llm_changes_skip_verification(self, client: TestClient) -> None:
         """Rate-limit or retrieval tweaks must not probe any provider."""

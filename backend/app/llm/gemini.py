@@ -268,8 +268,13 @@ class GeminiProvider(LLMProvider):
         except httpx.HTTPError:
             return False
 
-    async def probe(self) -> ProviderHealth:
-        """Classified health (brain status contract)."""
+    async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
+        """Classified health (brain status contract).
+
+        ``verify_chat=True`` (D-096) follows the model-list check with one
+        tiny ``generateContent`` call, so a model that cannot answer fails
+        at configuration time.
+        """
         if not self._api_key:
             return ProviderHealth(
                 state=ProviderHealthState.NOT_CONFIGURED,
@@ -326,11 +331,99 @@ class GeminiProvider(LLMProvider):
                 model=self._model,
                 detail=f"Google is reachable, but model '{self._model}' is not offered.",
             )
+        if not verify_chat:
+            return ProviderHealth(
+                state=ProviderHealthState.HEALTHY,
+                provider="gemini",
+                model=self._model,
+                detail="reachable and model available" if models is not None else "reachable",
+            )
+        return await self._verify_chat()
+
+    _CHAT_VERIFY_PROMPT = "Reply with the single word OK."
+
+    async def _verify_chat(self) -> ProviderHealth:
+        """One tiny ``generateContent`` call (D-096)."""
+        payload = {
+            "contents": [{"parts": [{"text": self._CHAT_VERIFY_PROMPT}]}],
+            "generationConfig": {"maxOutputTokens": 8},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(
+                    f"{self._base_url}/models/{self._model}:generateContent",
+                    params={"key": self._api_key},
+                    json=payload,
+                )
+        except httpx.HTTPError:
+            return ProviderHealth(
+                state=ProviderHealthState.UNAVAILABLE,
+                provider="gemini",
+                model=self._model,
+                detail="The Gemini endpoint is unreachable during chat verification "
+                "(network error or timeout).",
+                chat_verified=False,
+            )
+        status = response.status_code
+        if status == 200:
+            try:
+                text = str(
+                    response.json()["candidates"][0]["content"]["parts"][0]["text"] or ""
+                )
+            except (ValueError, KeyError, IndexError, TypeError):
+                text = ""
+            if text.strip():
+                return ProviderHealth(
+                    state=ProviderHealthState.HEALTHY,
+                    provider="gemini",
+                    model=self._model,
+                    detail="chat verified — the model answered a test prompt",
+                    chat_verified=True,
+                )
+            return ProviderHealth(
+                state=ProviderHealthState.DEGRADED,
+                provider="gemini",
+                model=self._model,
+                detail="The model returned an empty response to a test chat request.",
+                chat_verified=False,
+            )
+        if status == 400:
+            # Google answers 400 both for a bad key and a bad request; the
+            # key was already accepted by the model list, so this points at
+            # the model or request shape.
+            return ProviderHealth(
+                state=ProviderHealthState.INVALID_CONFIGURATION,
+                provider="gemini",
+                model=self._model,
+                detail=(
+                    f"Google rejected a chat request for model '{self._model}' "
+                    "(HTTP 400) — the model may not be a generative chat model."
+                ),
+                chat_verified=False,
+            )
+        if status == 404:
+            return ProviderHealth(
+                state=ProviderHealthState.INVALID_CONFIGURATION,
+                provider="gemini",
+                model=self._model,
+                detail=f"Model '{self._model}' was not found for a chat request (HTTP 404).",
+                chat_verified=False,
+            )
+        if status == 429:
+            return ProviderHealth(
+                state=ProviderHealthState.DEGRADED,
+                provider="gemini",
+                model=self._model,
+                detail="Google is rate-limiting requests (HTTP 429) — reachable, "
+                "but chat could not be verified; retry the test shortly.",
+                chat_verified=None,
+            )
         return ProviderHealth(
-            state=ProviderHealthState.HEALTHY,
+            state=ProviderHealthState.UNAVAILABLE,
             provider="gemini",
             model=self._model,
-            detail="reachable and model available" if models is not None else "reachable",
+            detail=f"Google returned HTTP {status} during chat verification.",
+            chat_verified=False,
         )
 
 

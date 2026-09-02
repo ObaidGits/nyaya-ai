@@ -78,6 +78,9 @@ export interface SystemStatus {
     provider?: string
     model?: string | null
     state?: string
+    // D-096: null = not tested by this fetch; true/false after an explicit
+    // chat round-trip.
+    chat_verified?: boolean | null
   }
   stt: DependencyStatus
   tts: DependencyStatus

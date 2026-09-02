@@ -98,6 +98,13 @@ export function StatusPanel() {
               ? status.llm.state.replace(/_/g, ' ')
               : null,
             `${String(status.llm.provider ?? '?')} / ${String(status.llm.model ?? '?')}`,
+            // D-096: usability, not just reachability — the probe asked the
+            // model to answer a test prompt.
+            status.llm.state === 'healthy' && status.llm.chat_verified === true
+              ? 'chat verified'
+              : status.llm.state === 'healthy' && status.llm.chat_verified === false
+                ? 'not chat-capable'
+                : null,
           ]
             .filter(Boolean)
             .join(' · ')}

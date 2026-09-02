@@ -180,9 +180,14 @@ class OllamaProvider(LLMProvider):
         except httpx.HTTPError:
             return False
 
-    async def probe(self) -> ProviderHealth:
+    async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
         """Classified health (brain status contract): the model must actually
-        be pulled, not merely the server reachable."""
+        be pulled, not merely the server reachable.
+
+        ``verify_chat=True`` (D-096) follows the pulled check with one tiny
+        ``/api/chat`` generation, so a model that cannot answer fails at
+        configuration time. The call also warms the model into memory.
+        """
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(f"{self.base_url}/api/tags")
@@ -212,17 +217,90 @@ class OllamaProvider(LLMProvider):
         names = {str(tag.get("name", "")) for tag in tags}
         names |= {str(tag.get("model", "")) for tag in tags}
         if self.model in names or any(name.startswith(f"{self.model}:") for name in names):
-            return ProviderHealth(
-                state=ProviderHealthState.HEALTHY,
-                provider="ollama",
-                model=self.model,
-                detail="reachable and model available",
-            )
+            if not verify_chat:
+                return ProviderHealth(
+                    state=ProviderHealthState.HEALTHY,
+                    provider="ollama",
+                    model=self.model,
+                    detail="reachable and model available",
+                )
+            return await self._verify_chat()
         return ProviderHealth(
             state=ProviderHealthState.DEGRADED,
             provider="ollama",
             model=self.model,
             detail=f"Ollama is reachable, but model '{self.model}' is not pulled.",
+        )
+
+    _CHAT_VERIFY_PROMPT = "Reply with the single word OK."
+
+    async def _verify_chat(self) -> ProviderHealth:
+        """One tiny ``/api/chat`` completion (D-096). The first call may have
+        to load the model into memory, hence the generous timeout."""
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": self._CHAT_VERIFY_PROMPT}],
+            "stream": False,
+            "options": {"num_predict": 8},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                response = await client.post(f"{self.base_url}/api/chat", json=payload)
+        except httpx.HTTPError:
+            return ProviderHealth(
+                state=ProviderHealthState.UNAVAILABLE,
+                provider="ollama",
+                model=self.model,
+                detail="The Ollama server is unreachable during chat verification "
+                "(network error or timeout).",
+                chat_verified=False,
+            )
+        if response.status_code == 200:
+            try:
+                text = str(response.json().get("message", {}).get("content") or "")
+            except ValueError:
+                text = ""
+            if text.strip():
+                return ProviderHealth(
+                    state=ProviderHealthState.HEALTHY,
+                    provider="ollama",
+                    model=self.model,
+                    detail="chat verified — the model answered a test prompt",
+                    chat_verified=True,
+                )
+            return ProviderHealth(
+                state=ProviderHealthState.DEGRADED,
+                provider="ollama",
+                model=self.model,
+                detail="The model returned an empty response to a test chat request.",
+                chat_verified=False,
+            )
+        if response.status_code == 404:
+            return ProviderHealth(
+                state=ProviderHealthState.DEGRADED,
+                provider="ollama",
+                model=self.model,
+                detail=f"Model '{self.model}' was not found for a chat request (HTTP 404).",
+                chat_verified=False,
+            )
+        if response.status_code == 400:
+            return ProviderHealth(
+                state=ProviderHealthState.INVALID_CONFIGURATION,
+                provider="ollama",
+                model=self.model,
+                detail=(
+                    f"Model '{self.model}' rejected a chat request (HTTP 400) — it is "
+                    "pulled but not chat-capable. Choose a chat model."
+                ),
+                chat_verified=False,
+            )
+        return ProviderHealth(
+            state=ProviderHealthState.UNAVAILABLE,
+            provider="ollama",
+            model=self.model,
+            detail=f"The Ollama server returned HTTP {response.status_code} during chat "
+            "verification.",
+            chat_verified=False,
         )
 
 

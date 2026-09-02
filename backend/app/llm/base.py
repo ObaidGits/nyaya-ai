@@ -102,6 +102,12 @@ class ProviderHealth(BaseModel):
     provider: str
     model: str | None = None
     detail: str = ""
+    #: Chat-capability verification (D-096): ``True``/``False`` after an
+    #: explicit generation round-trip; ``None`` = not tested by this probe
+    #: (the cheap polled probe). A model can be listed and authenticated yet
+    #: unable to answer (e.g. a prompt-guard classifier) — only a real
+    #: completion proves usability.
+    chat_verified: bool | None = None
 
 
 class ChatMessage(BaseModel):
@@ -159,13 +165,17 @@ class LLMProvider(ABC):
     async def health_check(self) -> bool:
         """Return ``True`` when the provider is reachable and usable."""
 
-    async def probe(self) -> ProviderHealth:
+    async def probe(self, *, verify_chat: bool = False) -> ProviderHealth:
         """Classified health for the brain status contract.
 
         The default wraps :meth:`health_check` (bool) so simple providers and
         test doubles keep working; concrete providers override it with a
         state-classifying probe (auth rejected vs unreachable vs model
         missing) so the UI never guesses.
+
+        ``verify_chat=True`` additionally performs one tiny generation
+        round-trip so a model that is listed but cannot answer (D-096) is
+        caught at configuration time instead of at the first user question.
         """
         healthy = await self.health_check()
         meta = self.metadata()
