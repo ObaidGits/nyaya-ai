@@ -521,11 +521,13 @@ dependency checks landed).
 
 ## Known bugs
 
-None known-open at final-audit time (all 643 backend + 93 frontend tests
-pass, stack rebuilt clean and stress-tested live; a fresh clone from
-GitHub was bootstrapped and exercised end-to-end — DECISIONS.md D-084).
+None known-open at final-audit time (backend test suite 915 passed,
+frontend 119 passed, stack rebuilt clean and stress-tested live).
 Historical defects found and fixed during development are listed in
-`docs/DECISIONS.md`.
+`docs/DECISIONS.md`; the 2026-09-03 production debugging pass (PDF RAG
+routing/retrieval/prompt stack, BNS regen-refusal intermittency,
+citation drawer matching, Gemini key exposure in logs) is documented in
+`docs/DEBUG_REPORT_2026-09-03.md`.
 
 ## Repository layout
 
