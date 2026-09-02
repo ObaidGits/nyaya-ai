@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import get_llm_provider
+from app.api.v1.documents import _SAFE_SESSION_RE, SessionMissingError
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.core.rate_limit import CHAT_SCOPE, enforce_rate_limit
@@ -381,6 +382,14 @@ async def chat(
     x_session_id: Annotated[str | None, Header(alias="X-Session-Id")] = None,
 ) -> StreamingResponse:
     """Stream a grounded, citation-validated answer (D-005/D-006, D-049)."""
+    # A missing session id is allowed (anonymous, statute-only turns), but a
+    # malformed one is rejected outright: ownership must never resolve to an
+    # attacker-chosen identity that the document endpoints would refuse.
+    if x_session_id is not None and not _SAFE_SESSION_RE.fullmatch(x_session_id):
+        raise SessionMissingError(
+            "The X-Session-Id header must match ^[A-Za-z0-9_-]{8,128}$.",
+            code="SESSION_REQUIRED",
+        )
     settings = getattr(raw_request.app.state, "settings", None)
     limiter = getattr(raw_request.app.state, "rate_limiter", None)
     if limiter is not None and settings is not None:

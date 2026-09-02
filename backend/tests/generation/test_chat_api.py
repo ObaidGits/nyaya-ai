@@ -309,3 +309,32 @@ def test_done_event_includes_document_citations() -> None:
     assert response.status_code == 200
     done = _parse_sse(response.text)[-1][1]
     assert f"[Document {doc_id}]" in list(done["citations"])
+
+
+def test_chat_rejects_malformed_session_header(chat_client: TestClient) -> None:
+    """Red-team: a malformed X-Session-Id must be refused, not silently used."""
+    response = chat_client.post(
+        "/api/v1/chat",
+        json={"message": "What is the punishment for murder?"},
+        headers={"X-Session-Id": "!!"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "SESSION_REQUIRED"
+
+
+def test_chat_accepts_valid_and_missing_session_header(chat_client: TestClient) -> None:
+    """Anonymous turns stay allowed; a well-formed session id is accepted."""
+    assert (
+        chat_client.post(
+            "/api/v1/chat",
+            json={"message": "What is the punishment for murder?"},
+            headers={"X-Session-Id": "session-1234"},
+        ).status_code
+        == 200
+    )
+    assert (
+        chat_client.post(
+            "/api/v1/chat", json={"message": "What is the punishment for murder?"}
+        ).status_code
+        == 200
+    )
