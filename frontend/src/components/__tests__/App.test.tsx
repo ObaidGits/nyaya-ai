@@ -46,7 +46,11 @@ describe('App shell', () => {
     await user.type(renameInput, 'My theft question{Enter}')
     expect(screen.getByText('My theft question')).toBeTruthy()
 
+    // Delete is a two-step action: the first click only arms the button.
     await user.click(screen.getByRole('button', { name: 'Delete My theft question' }))
+    expect(screen.getByText('My theft question')).toBeTruthy()
+    // The second click on the armed button confirms the deletion.
+    await user.click(screen.getByRole('button', { name: 'Confirm delete My theft question' }))
     await waitFor(() => expect(screen.getByText('No conversations yet.')).toBeTruthy())
   })
 

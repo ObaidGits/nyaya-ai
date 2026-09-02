@@ -6,6 +6,7 @@
 
 import { useEffect, useRef } from 'react'
 import type { Citation } from '../lib/citations'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 import { BookOpenIcon, FileTextIcon, XIcon } from './icons'
 
 interface SourceDrawerProps {
@@ -15,6 +16,7 @@ interface SourceDrawerProps {
 
 export function SourceDrawer({ citation, onClose }: SourceDrawerProps) {
   const closeRef = useRef<HTMLButtonElement>(null)
+  const trapRef = useFocusTrap<HTMLElement>(Boolean(citation))
 
   useEffect(() => {
     if (citation) closeRef.current?.focus()
@@ -41,6 +43,7 @@ export function SourceDrawer({ citation, onClose }: SourceDrawerProps) {
         aria-hidden="true"
       />
       <aside
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Source for ${label}`}

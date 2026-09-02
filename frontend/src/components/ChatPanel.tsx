@@ -46,9 +46,20 @@ export function ChatPanel({
   const [streaming, setStreaming] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Stick-to-bottom: autoscroll follows the stream only while the user is at
+  // (or near) the bottom. Scrolling up to reread pauses it — the answer keeps
+  // streaming without yanking the viewport back down on every token.
+  const stickToBottomRef = useRef(true)
   const documents = useDocuments(sessionId)
 
+  const onScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  }
+
   useEffect(() => {
+    if (!stickToBottomRef.current) return
     scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight })
   }, [conversation.messages.length, streamingMessage?.content])
 
@@ -177,6 +188,7 @@ export function ChatPanel({
         <div className="flex min-h-0 flex-col">
           <div
             ref={scrollRef}
+            onScroll={onScroll}
             className="scroll-thin flex-1 overflow-y-auto"
             role="log"
             aria-label="Conversation messages"
@@ -212,7 +224,9 @@ export function ChatPanel({
             )}
 
             {messages.length > 0 && (
-              <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-6">
+              // max-w-2xl (minus the avatar column) keeps the reading measure
+              // near 65-80 characters per line instead of stretching full width.
+              <div className="mx-auto w-full max-w-2xl space-y-6 px-4 py-6">
                 {messages.map((message) => (
                   <MessageItem
                     key={message.id}
@@ -245,7 +259,7 @@ export function ChatPanel({
               void send(input)
             }}
           >
-            <div className="mx-auto w-full max-w-3xl">
+            <div className="mx-auto w-full max-w-2xl">
               <div className="flex items-end gap-2 rounded-2xl border border-ink-300 bg-white p-1.5 shadow-sm transition-colors focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500/20 dark:border-ink-700 dark:bg-ink-900">
                 <label htmlFor="chat-input" className="sr-only">
                   Ask a legal question

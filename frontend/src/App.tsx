@@ -170,16 +170,20 @@ function MainApp() {
               key={value}
               type="button"
               role="tab"
+              id={`tab-${value}`}
               aria-selected={panel === value}
+              aria-controls="main"
               onClick={() => setPanel(value)}
-              className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
+              className={`flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-medium transition-colors sm:px-3 ${
                 panel === value
                   ? 'bg-white text-ink-900 shadow-sm dark:bg-ink-800 dark:text-ink-100'
                   : 'text-ink-600 hover:text-ink-900 dark:text-ink-300 dark:hover:text-ink-100'
               }`}
             >
               <Icon className="size-4 shrink-0" />
-              {label}
+              {/* Label hides below sm (360-390px headers stay uncrowded) but
+                  remains the accessible name for the tab role. */}
+              <span className="hidden sm:inline">{label}</span>
             </button>
           ))}
         </div>
@@ -232,7 +236,12 @@ function MainApp() {
           </div>
         </div>
 
-        <main id="main" className="min-h-0 min-w-0 flex-1" role="tabpanel">
+        <main
+          id="main"
+          className="min-h-0 min-w-0 flex-1"
+          role="tabpanel"
+          aria-labelledby={`tab-${panel}`}
+        >
           {panel === 'chat' ? (
             active ? (
               // The key forces a full remount when the conversation or the

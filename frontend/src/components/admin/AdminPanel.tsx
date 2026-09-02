@@ -4,7 +4,7 @@
  * Reached only via the #settings hash — never linked from the main nav.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   adminLogout,
   fetchSession,
@@ -40,6 +40,14 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
   const [clearedSecrets, setClearedSecrets] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null)
+  // The save banner renders above the (long) settings list; when the admin
+  // saved from a scrolled position, pull it into view so the outcome is seen.
+  const saveResultRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    // Optional call: jsdom (tests) does not implement scrollIntoView.
+    if (saveResult) saveResultRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [saveResult])
 
   const loadSettings = useCallback(async () => {
     const next = await fetchSettings()
@@ -236,6 +244,7 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
       <main className="mx-auto flex max-w-3xl flex-col gap-5 p-4 sm:p-6">
         {saveResult && (
           <div
+            ref={saveResultRef}
             role={saveResult.kind === 'success' ? 'status' : 'alert'}
             aria-label="Save result"
             className={`flex flex-wrap items-start justify-between gap-3 rounded-xl border p-4 text-sm ${

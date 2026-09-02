@@ -23,11 +23,21 @@ export function Sidebar({
 }: SidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (editingId) editInputRef.current?.focus()
   }, [editingId])
+
+  // Deleting a conversation destroys its history permanently, so the trash
+  // button arms first ("Delete?") and only a second click confirms. The arm
+  // state self-clears so a stray click can never linger as a loaded gun.
+  useEffect(() => {
+    if (!confirmDeleteId) return
+    const timer = window.setTimeout(() => setConfirmDeleteId(null), 4000)
+    return () => window.clearTimeout(timer)
+  }, [confirmDeleteId])
 
   const commitRename = (id: string) => {
     const title = draftTitle.trim()
@@ -107,9 +117,24 @@ export function Sidebar({
                   </button>
                   <button
                     type="button"
-                    onClick={() => onDelete(conversation.id)}
-                    aria-label={`Delete ${conversation.title}`}
-                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ink-500 opacity-0 transition-opacity hover:bg-red-100 hover:text-red-700 focus-visible:opacity-100 group-hover:opacity-100 dark:hover:bg-red-950/60 dark:hover:text-red-300"
+                    onClick={() => {
+                      if (confirmDeleteId === conversation.id) {
+                        onDelete(conversation.id)
+                        setConfirmDeleteId(null)
+                      } else {
+                        setConfirmDeleteId(conversation.id)
+                      }
+                    }}
+                    aria-label={
+                      confirmDeleteId === conversation.id
+                        ? `Confirm delete ${conversation.title}`
+                        : `Delete ${conversation.title}`
+                    }
+                    className={`inline-flex size-7 shrink-0 items-center justify-center rounded-md transition-opacity focus-visible:opacity-100 group-hover:opacity-100 ${
+                      confirmDeleteId === conversation.id
+                        ? 'bg-red-600 text-white opacity-100 dark:bg-red-500'
+                        : 'text-ink-500 opacity-0 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-950/60 dark:hover:text-red-300'
+                    }`}
                   >
                     <TrashIcon className="size-3.5" />
                   </button>

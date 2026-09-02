@@ -5,7 +5,7 @@ import { Markdown } from './Markdown'
 import { ListenButton } from './ListenButton'
 import { matchCitations, type Citation } from '../lib/citations'
 import type { ChatMessage } from '../lib/conversations'
-import { BookOpenIcon, CheckIcon, CopyIcon, FileTextIcon, RefreshIcon, ScaleIcon } from './icons'
+import { BookOpenIcon, CheckIcon, CopyIcon, FileTextIcon, RefreshIcon, ScaleIcon, AlertIcon } from './icons'
 
 interface MessageItemProps {
   message: ChatMessage
@@ -90,9 +90,10 @@ export function MessageItem({
             </div>
 
             {message.refused && (
-              <p className="mt-2 text-xs text-ink-500">
+              <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-amber-300/80 bg-amber-50/70 px-2.5 py-1.5 text-xs text-amber-800 dark:border-amber-700/80 dark:bg-amber-950/40 dark:text-amber-300">
+                <AlertIcon className="mt-0.5 size-3.5 shrink-0" />
                 The assistant refused to answer because the retrieved source material was
-                insufficient.
+                insufficient. Nothing was invented.
               </p>
             )}
 

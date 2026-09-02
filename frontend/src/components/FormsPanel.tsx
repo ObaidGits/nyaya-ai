@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, FORMS_ZIP_URL, formDownloadUrl, listForms, searchForms } from '../lib/api'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 import type { FormListItem } from '../types'
 import {
   AlertIcon,
@@ -28,6 +29,7 @@ export function FormsPanel() {
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<{ form: FormListItem; url: string } | null>(null)
   const searchTimer = useRef<number | null>(null)
+  const previewTrapRef = useFocusTrap<HTMLDivElement>(Boolean(preview))
 
   useEffect(() => {
     let cancelled = false
@@ -244,6 +246,7 @@ export function FormsPanel() {
         <div className="fixed inset-0 z-40 flex animate-fade-in items-center justify-center p-4">
           <div className="absolute inset-0 bg-ink-950/50" onClick={closePreview} aria-hidden="true" />
           <div
+            ref={previewTrapRef}
             role="dialog"
             aria-modal="true"
             aria-label={`Preview of Form ${preview.form.form_number}`}
