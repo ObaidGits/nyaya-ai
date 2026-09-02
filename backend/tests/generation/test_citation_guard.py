@@ -9,6 +9,7 @@ from app.generation.citation_guard import (
     extract_citations,
     validate_citations,
 )
+from app.documents.models import DocumentHit
 from app.ingestion.models import Chunk
 from app.retrieval.models import ScoredChunk
 from tests.generation.fixtures import GOOD_ANSWER, MIXED_ANSWER, UNCITED_ANSWER, make_evidence
@@ -499,3 +500,46 @@ def test_invented_page_is_rejected() -> None:
     sanitized, check = validate_citations(answer, [], document_hits=hits)
     assert sanitized == ""
     assert check.invalid_document_citations
+
+
+def test_bullet_list_of_label_only_citations_is_kept() -> None:
+    """A bulleted list of citation-only items is a list answer, not
+    decorative citations. Live regression: "Which of my documents mention
+    Mr. Arjun Sen?" produced a grounded intro + citation bullets; the
+    bullet block had no terminal punctuation, split into one
+    content-free "sentence", every citation was stripped as decorative,
+    and the fully-grounded answer was refused for having no citations."""
+    hits = [
+        _hex_hit(),
+        DocumentHit(
+            document_id="caf5697ce6f9489cbe3c468e8af813b8",
+            page_start=2,
+            page_end=2,
+            text="The parties are Widget Corp and Gadget Ltd.",
+            score=0.8,
+            chunk_id="caf5697ce6f9489cbe3c468e8af813b8-p0002-000",
+        ),
+    ]
+    answer = (
+        "Based on the provided evidence, the agreement is mentioned in the "
+        "following uploaded documents:\n\n"
+        "* [Document caf5697ce6f9489cbe3c468e8af813b8 p.1]\n"
+        "* [Document caf5697ce6f9489cbe3c468e8af813b8 p.2]"
+    )
+    sanitized, check = validate_citations(answer, [], document_hits=hits)
+    assert "p.1" in sanitized and "p.2" in sanitized
+    assert check.cited_document_ids == ["caf5697ce6f9489cbe3c468e8af813b8"]
+    assert not check.irrelevant_citations
+
+
+def test_numbered_list_of_label_only_citations_is_kept() -> None:
+    """Numbered citation list items behave like bullets."""
+    hits = [_hex_hit()]
+    answer = (
+        "The agreement appears in:\n\n1. [Document caf5697ce6f9489cbe3c468e8af813b8 p.1]\n"
+        "2. [Document caf5697ce6f9489cbe3c468e8af813b8 p.1]"
+    )
+    sanitized, check = validate_citations(answer, [], document_hits=hits)
+    assert "p.1" in sanitized
+    assert check.cited_document_ids
+    assert not check.irrelevant_citations

@@ -463,6 +463,14 @@ def _has_section_number(text: str, section: str) -> bool:
     return re.search(rf"(?<!\d){re.escape(section)}(?!\d)", _ascii_digits(text)) is not None
 
 
+#: List-item prefix: a markdown bullet or numbered item. A citation-only
+#: list item ("* [Document ... p.1]") must be its own fragment to merge
+#: into the sentence it cites; without this split a whole bulleted citation
+#: list forms one punctuation-less "sentence" with no content tokens and
+#: every citation is stripped as decorative.
+_LIST_ITEM_RE = re.compile(r"^\s*(?:[*+\-•]|\d{1,3}[.)])\s+")
+
+
 def _split_sentences(text: str) -> list[str]:
     """Split into sentences, keeping terminal punctuation and trailing whitespace.
 
@@ -471,15 +479,47 @@ def _split_sentences(text: str) -> list[str]:
     languages). Without the danda, a multi-sentence Indic answer is one
     giant "sentence" and a single invalid citation or unsupported prose
     claim would remove the entire answer (D-077 regression).
+
+    A list item starts a new fragment even without terminal punctuation on
+    the preceding line: models emit citation lists as bullets
+    ("... mentioned in the following documents:\\n* [Document d p.1]\\n* ..."),
+    and the bullet lines carry no sentence-final punctuation. Splitting
+    them lets each label-only bullet merge into the claim sentence it
+    cites (see ``_merge_label_fragments``) instead of collapsing into a
+    single punctuation-less "sentence" whose citations all look
+    decorative and get stripped (live regression: a fully grounded
+    multi-document answer was reduced to "documents: * * *" and then
+    refused for having no valid citations).
     """
-    parts = re.split(r"(?<=[.!?।॥])\s+", text)
-    return [p for p in parts if p.strip()]
+    parts = re.split(
+        r"(?<=[.!?।॥])(?<!\d[.)])\s+|(?=\n\s*(?:[*+\-•]|\d{1,3}[.)])\s)",
+        text,
+    )
+    parts = [p if p.strip() else p for p in parts]
+    # Re-attach a list marker that was separated from its item: the
+    # lookahead above must split BETWEEN items ("\n2. ..."), not detach a
+    # marker from the item it starts ("1. [Document ...]" at the start of
+    # a paragraph after a blank line). A detached bare marker ("1.", "*")
+    # carries no claim; gluing it back restores the intended fragment.
+    repaired: list[str] = []
+    for part in parts:
+        stripped = part.strip()
+        if (
+            repaired
+            and re.fullmatch(r"(?:[*+\-•]|\d{1,3}[.)])", stripped)
+        ):
+            repaired[-1] = repaired[-1].rstrip() + " " + stripped + " "
+            continue
+        repaired.append(part)
+    return [p for p in repaired if p.strip()]
 
 
 #: A fragment that is nothing but citation labels, e.g. "[BNS s.103]" or
 #: "[{d31f9c...} p.1]" — small models frequently place the citation AFTER
-#: the sentence-final period instead of inside the sentence.
-_LABEL_ONLY_RE = re.compile(r"^(\[[^\]]*\]\s*)+$")
+#: the sentence-final period instead of inside the sentence. An optional
+#: list marker ("* [Document d p.1]", "2. [BNS s.103]") is tolerated: the
+#: marker carries no claim content, so the fragment is still label-only.
+_LABEL_ONLY_RE = re.compile(r"^(?:[*+\-•]|\d{1,3}[.)])?\s*(?:\[[^\]]*\]\s*)+$")
 
 
 def _merge_label_fragments(sentences: list[str]) -> list[str]:
@@ -500,8 +540,20 @@ def _merge_label_fragments(sentences: list[str]) -> list[str]:
     return merged
 
 
-def _sentence_stream(text: str) -> list[tuple[str, bool]]:
-    """Split into ``(sentence, starts_paragraph)`` pairs, in order.
+#: Citation labels that arrived via a label-only fragment (a citation
+#: attached to no words of its own — a trailing "[{id} p.1]" or a
+#: bulleted list of citations). They already passed existence and
+#: page-range validation; the per-chunk token-overlap relevance check is
+#: waived for them (collected by ``_sentence_stream``): a list answer's
+#: bullet citations identify documents, and the claim they ground lives
+#: in the merged sentence, not in the bullet's own (empty) text.
+
+
+def _sentence_stream(
+    text: str,
+) -> tuple[list[tuple[str, bool]], set[str]]:
+    """Split into ``(sentence, starts_paragraph)`` pairs, plus the set of
+    citation labels that arrived via label-only fragments.
 
     Paragraphs are blocks separated by a blank line; the flag marks the
     first sentence of each paragraph. Sibling-citation grounding must never
@@ -514,13 +566,15 @@ def _sentence_stream(text: str) -> list[tuple[str, bool]]:
         for position, sentence in enumerate(_split_sentences(paragraph)):
             entries.append((sentence, position == 0))
     merged: list[tuple[str, bool]] = []
+    label_only_labels: set[str] = set()
     for sentence, starts_paragraph in entries:
         if merged and _LABEL_ONLY_RE.match(sentence.strip()):
             previous, previous_starts = merged[-1]
             merged[-1] = (previous.rstrip() + " " + sentence.strip() + " ", previous_starts)
+            label_only_labels.update(re.findall(r"\[[^\]]*\]", sentence))
             continue
         merged.append((sentence, starts_paragraph))
-    return merged
+    return merged, label_only_labels
 
 
 def _self_referential(sentence: str) -> bool:
@@ -726,7 +780,7 @@ def validate_citations(
     check = CitationCheck()
 
     kept: list[str] = []
-    sentences = _sentence_stream(_normalize_brackets(answer))
+    sentences, label_only_labels = _sentence_stream(_normalize_brackets(answer))
     for position, (sentence, _starts_paragraph) in enumerate(sentences):
         act_name = _ACT_NAME_RE.search(sentence)
         if act_name and _ACT_NAME_ALIASES[act_name.group(0).lower()] not in index.acts:
@@ -803,6 +857,20 @@ def validate_citations(
 
         relevant_statute = [c for c in statute_citations if index.statute_tokens(c) & content]
         relevant_document = [d for d in document_citations if index.document_tokens(d) & content]
+        # Label-only citations (from a trailing fragment or a citation list
+        # bullet merged into this sentence) already passed existence and
+        # page-range validation. Their claim is the merged sentence itself —
+        # a list answer's bullet citations identify documents — so the
+        # per-chunk token-overlap check is waived for them, exactly like
+        # the cross-script waiver above. A bullet citation naming a
+        # document NOT in the evidence still fails existence and is
+        # removed with its sentence.
+        relevant_statute += [
+            c for c in statute_citations if c not in relevant_statute and c.label in label_only_labels
+        ]
+        relevant_document += [
+            d for d in document_citations if d not in relevant_document and d.label in label_only_labels
+        ]
         bridged = False
         if not relevant_statute and not relevant_document and indic_sentence:
             # Multilingual bridge (D-077): token overlap is impossible
