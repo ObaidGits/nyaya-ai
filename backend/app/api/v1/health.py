@@ -80,6 +80,10 @@ class LlmHealthResponse(BaseModel):
     never be misread as the runtime config. Contains no secrets.
     """
 
+    # Health endpoint state and details. Provider/model are operational
+    # details (dev tool): SHOW_PROVIDER_DETAILS (default: on in local, off
+    # in production via Settings.environment) controls whether they are
+    # disclosed to anonymous callers.
     state: Literal[
         "not_configured",
         "invalid_configuration",
@@ -127,6 +131,16 @@ async def llm_health(request: Request) -> LlmHealthResponse:
     from app.llm.base import ProviderHealth
 
     config_source = _llm_config_source(request)
+    # SHOW_PROVIDER_DETAILS gates provider/model disclosure on this dev
+    # endpoint; default mirrors the environment (local: visible, production:
+    # hidden) so production does not name its LLM vendor/model to anonymous
+    # callers. Set SHOW_PROVIDER_DETAILS=true|false to override either way.
+    import os
+
+    show_details = os.environ.get("SHOW_PROVIDER_DETAILS", "").strip().lower()
+    if not show_details:
+        show_details = "false" if request.app.state.settings.is_production else "true"
+    show_details = show_details in ("1", "true", "yes")
     try:
         provider = get_llm_provider(request)
     except Exception:
@@ -142,16 +156,16 @@ async def llm_health(request: Request) -> LlmHealthResponse:
             meta = provider.metadata()
             result = LlmHealthResponse(
                 state="error",
-                provider=meta.provider,
-                model=meta.model,
+                provider=meta.provider if show_details else None,
+                model=meta.model if show_details else None,
                 detail="The provider health probe failed unexpectedly.",
                 config_source=config_source,
             )
         else:
             result = LlmHealthResponse(
                 state=health.state.value,
-                provider=health.provider,
-                model=health.model,
+                provider=health.provider if show_details else None,
+                model=health.model if show_details else None,
                 detail=health.detail,
                 chat_verified=health.chat_verified,
                 config_source=config_source,

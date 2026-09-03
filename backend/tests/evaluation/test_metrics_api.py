@@ -98,7 +98,10 @@ def test_request_counter_records_route_and_status() -> None:
     client.get("/api/v1/nonexistent")
     body = client.get("/api/v1/metrics").text
     assert 'nyaya_requests_total{method="GET",route="/api/v1/health",status="200"}' in body
-    assert 'nyaya_requests_total{method="GET",route="/api/v1/nonexistent",status="404"}' in body
+    # H7: unmatched (404) paths collapse to ONE fixed label — never the raw
+    # client-controlled path, which would create a series per junk URL.
+    assert 'nyaya_requests_total{method="GET",route="unmatched",status="404"}' in body
+    assert "/api/v1/nonexistent" not in body
 
 
 def test_refusal_counter_increments_on_refusal() -> None:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import urllib.parse
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -59,6 +60,9 @@ class GeminiProvider(LLMProvider):
     ) -> None:
         self._api_key = api_key
         self._model = model
+        # The model name goes into the URL path segment: percent-encode it
+        # so '/', '?' or traversal-looking names cannot alter the URL shape.
+        self._model_segment = urllib.parse.quote(model, safe="")
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_seconds
         self._temperature = temperature
@@ -87,7 +91,7 @@ class GeminiProvider(LLMProvider):
 
     async def generate(self, request: GenerationRequest) -> GenerationResult:
         self._require_config()
-        url = f"{self._base_url}/models/{self._model}:generateContent"
+        url = f"{self._base_url}/models/{self._model_segment}:generateContent"
         # Bounded retry for transient failures only: HTTP 429 (Google's rate
         # limit, up to RATE_LIMIT_MAX_RETRIES retries) and 5xx (Google serves
         # 503 when overloaded, one retry). Each HTTP attempt gets the full
@@ -159,7 +163,7 @@ class GeminiProvider(LLMProvider):
 
     async def _stream_chunks(self, request: GenerationRequest) -> AsyncIterator[str]:
         self._require_config()
-        url = f"{self._base_url}/models/{self._model}:streamGenerateContent"
+        url = f"{self._base_url}/models/{self._model_segment}:streamGenerateContent"
         # Same bounded retry as generate(); a retry is only possible BEFORE
         # the first token is yielded — once the consumer has received
         # anything, the SSE stream is committed and replaying the request
@@ -353,7 +357,7 @@ class GeminiProvider(LLMProvider):
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 response = await client.post(
-                    f"{self._base_url}/models/{self._model}:generateContent",
+                    f"{self._base_url}/models/{self._model_segment}:generateContent",
                     headers={"x-goog-api-key": self._api_key},
                     json=payload,
                 )

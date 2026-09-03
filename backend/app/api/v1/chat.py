@@ -72,7 +72,7 @@ class ChatTurn(BaseModel):
     """
 
     role: MessageRole
-    content: str
+    content: str = Field(min_length=0, max_length=8000)
 
     @field_validator("role")
     @classmethod
@@ -80,6 +80,12 @@ class ChatTurn(BaseModel):
         if value == MessageRole.SYSTEM:
             raise ValueError("system role is not allowed in chat history")
         return value
+
+
+#: Hard ceiling on accepted turns, independent of the (admin-tunable, <= 50)
+#: chat_history_max_turns slice used for generation: the request itself must
+#: stay bounded so a single body cannot carry unbounded untrusted text.
+HISTORY_MAX_TURNS = 40
 
 
 class ChatRequest(BaseModel):
@@ -92,7 +98,7 @@ class ChatRequest(BaseModel):
     """
 
     message: str = Field(min_length=1, max_length=4000)
-    history: list[ChatTurn] = Field(default_factory=list, max_length=50)
+    history: list[ChatTurn] = Field(default_factory=list, max_length=HISTORY_MAX_TURNS)
     language: str = Field(default="auto")
 
     @field_validator("language")
@@ -118,6 +124,9 @@ class ChatResponseMeta(BaseModel):
     # so spoken output always follows the answer language, never the UI
     # preference guess.
     language: str = "en"
+    # Code-authored refusal reason sentence, already part of the streamed
+    # refusal text; None on grounded answers and plain refusals.
+    refusal_reason: str | None = None
 
 
 def _sse(event: str, data: object) -> str:
@@ -180,7 +189,9 @@ async def _run_chat(
                 else None
             )
             if reply is None:
-                reply = reply_for_category(category)
+                # English replies: message-aware variant pick (greeting
+                # variety) — deterministic per message, never random.
+                reply = reply_for_category(category, request.message)
             logger.info(
                 "conversational short-circuit",
                 extra={"event": "conversation_short_circuit", "language": answer_language.value},
@@ -262,6 +273,7 @@ async def _run_chat(
                     outcome.citations.cited_document_ids,
                 ),
                 language=answer_language.value,
+                refusal_reason=outcome.refusal_reason,
             ).model_dump(),
         )
     except AppError as exc:
@@ -393,14 +405,29 @@ async def chat(
     settings = getattr(raw_request.app.state, "settings", None)
     limiter = getattr(raw_request.app.state, "rate_limiter", None)
     if limiter is not None and settings is not None:
+        # H5: the PRIMARY budget is keyed by CLIENT IP, not the client-
+        # controlled X-Session-Id — sessions are anonymous and freely
+        # rotatable, so a session key is trivially bypassed. With uvicorn
+        # --proxy-headers (Dockerfile) this is the real user IP behind nginx.
         client_host = raw_request.client.host if raw_request.client else "anonymous"
         enforce_rate_limit(
             limiter,
             scope=CHAT_SCOPE,
-            key=x_session_id or client_host,
+            key=client_host,
             limit=settings.rate_limit_chat_per_minute,
             window_seconds=60.0,
         )
+        # Secondary per-session budget: a NAT-shared IP (office/college) gets
+        # the per-IP budget, while a single session still cannot hammer the
+        # LLM even when many IPs sit behind one session id.
+        if x_session_id is not None:
+            enforce_rate_limit(
+                limiter,
+                scope=f"{CHAT_SCOPE}_session",
+                key=x_session_id,
+                limit=settings.rate_limit_chat_per_minute,
+                window_seconds=60.0,
+            )
     return StreamingResponse(
         _run_chat(
             request,

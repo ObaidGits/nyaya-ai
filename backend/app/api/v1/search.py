@@ -15,11 +15,30 @@ from pydantic import BaseModel, Field
 
 from app.api.v1.documents import get_session_id
 from app.core.errors import AppError
+from app.core.rate_limit import SEARCH_SCOPE, enforce_rate_limit
 from app.documents.retrieval import DocumentRetrievalService
 from app.retrieval.models import MetadataFilter, RetrievalRoute, RetrievedEvidence
 from app.retrieval.service import RetrievalService
 
 router = APIRouter(prefix="/search", tags=["search"])
+
+
+def _enforce_search_budget(request: Request) -> None:
+    """Raw retrieval shares the chat budget tier: /search exercises the same
+    embedding + retrieval machinery as chat (the LLM cost is skipped), so it
+    gets the same per-IP window and is keyed by client IP like chat (H5)."""
+    settings = getattr(request.app.state, "settings", None)
+    limiter = getattr(request.app.state, "rate_limiter", None)
+    if limiter is None or settings is None:
+        return
+    client_host = request.client.host if request.client else "anonymous"
+    enforce_rate_limit(
+        limiter,
+        scope=SEARCH_SCOPE,
+        key=client_host,
+        limit=settings.rate_limit_chat_per_minute,
+        window_seconds=60.0,
+    )
 
 
 class SearchRequest(BaseModel):
@@ -193,6 +212,7 @@ def _execute_search(
 @router.post("")
 async def search(
     request: SearchRequest,
+    raw_request: Request,
     session_id: Annotated[str, Depends(get_session_id)],
     statute: Annotated[RetrievalService | None, Depends(get_statute_retrieval)],
     documents: Annotated[DocumentRetrievalService | None, Depends(get_document_retrieval)],
@@ -203,6 +223,7 @@ async def search(
     restrict statute retrieval (A3-008/A3-009/A3-010); they never widen
     it — unknown values return empty results.
     """
+    _enforce_search_budget(raw_request)
     flt = _build_filter(
         chapter=request.chapter,
         section_number=request.section_number,
@@ -221,6 +242,7 @@ async def search(
 
 @router.get("")
 async def search_get(
+    raw_request: Request,
     session_id: Annotated[str, Depends(get_session_id)],
     statute: Annotated[RetrievalService | None, Depends(get_statute_retrieval)],
     documents: Annotated[DocumentRetrievalService | None, Depends(get_document_retrieval)],
@@ -234,6 +256,7 @@ async def search_get(
     """GET variant of POST /api/v1/search: raw retrieval with optional
     metadata filters as query parameters (D-019/D-020, A3-008..A3-010).
     """
+    _enforce_search_budget(raw_request)
     flt = _build_filter(chapter, section_number, act, act_short)
     return _execute_search(
         query=q,

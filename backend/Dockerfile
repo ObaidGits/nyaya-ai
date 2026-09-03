@@ -66,4 +66,12 @@ EXPOSE 8000
 
 # Default: API server. The worker service overrides the command with
 # `arq app.workers.arq_worker.WorkerSettings`.
-CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers: the API sits behind the frontend nginx container, which
+# sets X-Forwarded-For, so client.host is the REAL user IP — that IP is the
+# chat/admin-login rate-limit key (bypassable otherwise, since a session id
+# is client-controlled). --forwarded-allow-ips is restricted to Docker's
+# default bridge pool (172.16.0.0/12, compose networks live there): '*'
+# would let ANY direct caller spoof X-Forwarded-For, and the API port is
+# loopback-only in compose but that gate must not be load-bearing here.
+CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", \
+    "--proxy-headers", "--forwarded-allow-ips", "172.16.0.0/12"]

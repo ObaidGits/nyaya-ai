@@ -16,9 +16,14 @@ from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
 
 from app.api.v1.documents import get_session_id
+from app.core.rate_limit import FEEDBACK_SCOPE, enforce_rate_limit
 from app.domain.models import FeedbackVote
 
 router = APIRouter(tags=["feedback"])
+
+#: Loose budget: feedback is telemetry, but it must still be bounded so an
+#: anonymous client cannot append unbounded rows per minute.
+FEEDBACK_MAX_PER_MINUTE = 30
 
 
 class FeedbackRequest(BaseModel):
@@ -72,9 +77,20 @@ def get_feedback_store(request: Request) -> FeedbackStore:
 )
 async def submit_feedback(
     payload: FeedbackRequest,
+    raw_request: Request,
     session_id: Annotated[str, Depends(get_session_id)],
     store: Annotated[FeedbackStore, Depends(get_feedback_store)],
 ) -> FeedbackResponse:
     """Persist a thumbs up/down vote with an optional comment (D-026/D-027)."""
+    limiter = getattr(raw_request.app.state, "rate_limiter", None)
+    if limiter is not None:
+        client_host = raw_request.client.host if raw_request.client else "anonymous"
+        enforce_rate_limit(
+            limiter,
+            scope=FEEDBACK_SCOPE,
+            key=client_host,
+            limit=FEEDBACK_MAX_PER_MINUTE,
+            window_seconds=60.0,
+        )
     store.record(session_id, payload.vote, payload.comment)
     return FeedbackResponse(status="recorded", vote=payload.vote)

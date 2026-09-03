@@ -72,10 +72,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     setup_logging(settings)
     seed_default_series()
 
+    # Docs exposure: OpenAPI/Docs/ReDoc leak the full route surface and
+    # schemas. They stay enabled for local development but are disabled in
+    # production (Settings.environment) — no separate flag machinery.
     app = FastAPI(
         title="Nyaya API",
         description=DESCRIPTION,
         version=APP_VERSION,
+        openapi_url=None if settings.is_production else "/openapi.json",
+        docs_url=None if settings.is_production else "/docs",
+        redoc_url=None if settings.is_production else "/redoc",
     )
 
     # Admin configuration store (D-080/D-098): persisted admin settings
@@ -195,7 +201,6 @@ class MetricsMiddleware:
             return
 
         method = str(scope.get("method", ""))
-        route = str(scope.get("path", ""))
         started = time.perf_counter()
         status = 500
 
@@ -208,8 +213,48 @@ class MetricsMiddleware:
         try:
             await self.app(scope, receive, send_with_metrics)
         finally:
+            # H7: label by the matched ROUTE TEMPLATE (e.g.
+            # "/api/v1/documents/{document_id}/status"), never the raw
+            # path — raw paths are client-controlled and would create one
+            # series per junk URL (unbounded label cardinality). Read AFTER
+            # the inner app ran: FastAPI sets scope["route"] during routing.
+            # Router prefixes live in include contexts, not on the matched
+            # route, so resolve the full template through the app's route
+            # tree. Unmatched requests (404) get one fixed "unmatched" label.
+            route = "unmatched"
+            matched = scope.get("route")
+            if matched is not None:
+                app_obj = scope.get("app")
+                labels = getattr(getattr(app_obj, "state", None), "_route_label_map", None)
+                if labels is None and app_obj is not None:
+                    labels = _build_route_label_map(app_obj)
+                    app_obj.state._route_label_map = labels
+                if labels:
+                    route = labels.get(id(matched)) or getattr(matched, "path", None) or "unmatched"
             REQUESTS.inc(method=method, route=route, status=str(status))
             REQUEST_LATENCY.observe(time.perf_counter() - started, method=method, route=route)
+
+
+def _build_route_label_map(app: FastAPI) -> dict[int, str]:
+    """Map route object ids to their full path templates (prefix included)."""
+
+    labels: dict[int, str] = {}
+
+    def walk(routes: list, prefix: str) -> None:
+        for route in routes:
+            kind = type(route).__name__
+            if kind == "_IncludedRouter":  # FastAPI >= 0.116 lazy include
+                context = getattr(route, "include_context", None)
+                nested = getattr(context, "included_router", None) if context else None
+                inner = list(getattr(nested, "routes", None) or [])
+                walk(inner, prefix + str(getattr(context, "prefix", "") or ""))
+            elif hasattr(route, "routes"):  # Mount-like
+                walk(list(route.routes), prefix + str(getattr(route, "path", "") or ""))
+            elif getattr(route, "path", None):
+                labels[id(route)] = f"{prefix}{route.path}"
+
+    walk(list(app.routes), "")
+    return labels
 
 
 def _build_embedder(settings: Settings) -> EmbeddingProvider:
@@ -357,7 +402,9 @@ def _build_documents(
             client = redis_module.Redis.from_url(settings.redis_url, decode_responses=True)
             client.ping()
             store = RedisDocumentStore(client)
-            index = RedisDocumentIndex(client)
+            index = RedisDocumentIndex(
+                client, ttl_seconds=settings.document_session_ttl_seconds
+            )
             workspace = DocumentWorkspace(store, index, embedder)
             runner = ArqJobRunner(settings.redis_url)
         except Exception:

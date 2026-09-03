@@ -22,8 +22,15 @@ from app.admin.corpus import CorpusReplacementError, build_replacement, verify_a
 from app.admin.store import EDITABLE_FIELDS, SECRET_FIELDS, AdminSettingsStore, mask_secret
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.core.rate_limit import ADMIN_LOGIN_SCOPE, enforce_rate_limit
 from app.llm.base import ProviderHealthState
 from app.llm.registry import ProviderRegistry, UnknownProviderError
+
+#: Brute-force budget for the credential check itself (M13): 5 attempts per
+#: client IP per minute. Applied BEFORE any credential comparison so both
+#: valid and invalid guesses are throttled.
+ADMIN_LOGIN_MAX_ATTEMPTS = 5
+ADMIN_LOGIN_WINDOW_SECONDS = 60.0
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +200,19 @@ async def login(body: LoginRequest, request: Request, response: Response) -> dic
             "The admin console is disabled. Set ADMIN_USERNAME and ADMIN_PASSWORD.",
             status_code=503,
             code="ADMIN_DISABLED",
+        )
+    # Throttle credential guessing per client IP (M13). The limiter is the
+    # shared in-process one; a restart clears it, which is acceptable for a
+    # single-process deployment.
+    limiter = getattr(request.app.state, "rate_limiter", None)
+    client_host = request.client.host if request.client else "anonymous"
+    if limiter is not None:
+        enforce_rate_limit(
+            limiter,
+            scope=ADMIN_LOGIN_SCOPE,
+            key=client_host,
+            limit=ADMIN_LOGIN_MAX_ATTEMPTS,
+            window_seconds=ADMIN_LOGIN_WINDOW_SECONDS,
         )
     if not auth.verify_credentials(settings, body.username, body.password):
         raise AppError("Invalid admin credentials.", status_code=401, code="ADMIN_UNAUTHORIZED")
