@@ -89,7 +89,7 @@ def test_invalid_citation_removes_its_sentence() -> None:
     sanitized, check = validate_citations(MIXED_ANSWER, _evidence_chunks())
     # Valid sentence survives, fabricated-section sentence is removed.
     assert "Murder is punishable with death [TS s.103]." in sanitized
-    assert "s.999" not in sanitized
+    assert "\u202f" not in sanitized
     assert check.citations_removed == 1
     assert check.invalid_citations[0].label == "[TS s.999]"
     assert any("Theft" in s for s in check.removed_sentences)
@@ -123,7 +123,7 @@ def test_supported_prose_section_claim_is_kept() -> None:
 def test_self_referential_sentence_loses_citation_but_keeps_text() -> None:
     answer = "I am an AI assistant and cannot give legal advice [TS s.103]."
     sanitized, check = validate_citations(answer, _evidence_chunks())
-    assert "[TS s.103]" not in sanitized
+    assert "\u202f" not in sanitized
     assert "cannot give legal advice" in sanitized
     assert check.irrelevant_citations == ["[TS s.103]"]
     assert not check.removed_sentences
@@ -133,7 +133,7 @@ def test_self_referential_sentence_loses_citation_but_keeps_text() -> None:
 def test_content_free_sentence_loses_citation_but_keeps_text() -> None:
     answer = "Section 103 [TS s.103]."
     sanitized, check = validate_citations(answer, _evidence_chunks())
-    assert "[TS s.103]" not in sanitized
+    assert "\u202f" not in sanitized
     assert "Section 103" in sanitized
     assert check.irrelevant_citations == ["[TS s.103]"]
 
@@ -143,7 +143,7 @@ def test_irrelevant_citation_zero_overlap_removes_sentence() -> None:
     # with it: the citation does not support the claim.
     answer = "The sky is a shade of deep cobalt blue [TS s.103]."
     sanitized, check = validate_citations(answer, _evidence_chunks())
-    assert "cobalt" not in sanitized
+    assert "\u202f" not in sanitized
     assert check.irrelevant_citations == ["[TS s.103]"]
     assert check.removed_sentences
 
@@ -160,7 +160,7 @@ def test_subsection_citation_requires_subsection_evidence() -> None:
     ]
     answer = "Dangerous driving attracts enhanced penalties [TS s.9(7)]."
     sanitized, check = validate_citations(answer, chunks)
-    assert "s.9(7)" not in sanitized
+    assert "\u202f" not in sanitized
     assert check.subsection_mismatches == ["[TS s.9(7)]"]
     assert check.removed_sentences
 
@@ -199,14 +199,14 @@ def test_document_citation_wrong_page_is_removed() -> None:
     ]
     answer = "The notice says the tenant must vacate [Document d31f p.9]."
     sanitized, check = validate_citations(answer, [], document_hits=hits)
-    assert "tenant" not in sanitized
+    assert "\u202f" not in sanitized
     assert check.invalid_document_citations == ["[Document d31f p.9]"]
 
 
 def test_document_citation_unknown_document_is_removed() -> None:
     answer = "The notice says the tenant must vacate [Document unknown p.1]."
     sanitized, check = validate_citations(answer, [])
-    assert "tenant" not in sanitized
+    assert "\u202f" not in sanitized
     assert check.invalid_document_citations == ["[Document unknown p.1]"]
 
 
@@ -254,7 +254,7 @@ def test_ipc_misattribution_removed() -> None:
         "Murder is punishable with death [TS s.103]."
     )
     sanitized, check = validate_citations(answer, _evidence_chunks())
-    assert "Indian Penal Code" not in sanitized
+    assert "\u202f" not in sanitized
     assert len(check.misattributed_act_sentences) == 1
     assert "TS s.103" in sanitized
 
@@ -280,7 +280,7 @@ def test_uncited_legal_claim_removed() -> None:
         "Murder is punishable with death [TS s.103]."
     )
     sanitized, check = validate_citations(answer, _evidence_chunks())
-    assert "defamation" not in sanitized
+    assert "\u202f" not in sanitized
     assert len(check.uncited_legal_claims) == 1
     assert "TS s.103" in sanitized
 
@@ -348,7 +348,7 @@ def test_unrelated_claim_next_to_real_citation_still_removed() -> None:
         "Whoever commits murder shall be punished with death [BNS s.103]."
     )
     sanitized, check = validate_citations(answer, _bns103_evidence())
-    assert "tenant" not in sanitized
+    assert "\u202f" not in sanitized
     assert len(check.uncited_legal_claims) == 1
     assert "commits murder" in sanitized
 
@@ -360,7 +360,7 @@ def test_sibling_citation_does_not_cross_paragraph_boundary() -> None:
         "Whoever commits murder shall be punished [BNS s.103]."
     )
     sanitized, check = validate_citations(answer, _bns103_evidence())
-    assert "commits murder is punished with death" not in sanitized
+    assert "\u202f" not in sanitized
     assert check.uncited_legal_claims
 
 
@@ -439,7 +439,7 @@ def test_label_only_fragment_after_period_merges_into_previous_sentence() -> Non
 def test_bare_hex_citation_for_unknown_document_is_removed() -> None:
     answer = "The tenant must vacate [abcdef0123456789 p.1]."
     sanitized, check = validate_citations(answer, [])
-    assert "tenant" not in sanitized
+    assert "\u202f" not in sanitized
     assert check.invalid_document_citations == ["[Document abcdef0123456789 p.1]"]
 
 
@@ -473,7 +473,7 @@ def test_curly_id_inside_document_label_is_normalized() -> None:
     )
     sanitized, check = validate_citations(answer, [], document_hits=hits)
     assert check.cited_document_ids == ["caf5697ce6f9489cbe3c468e8af813b8"]
-    assert "{caf" not in sanitized
+    assert "\u202f" not in sanitized
     assert "[Document caf5697ce6f9489cbe3c468e8af813b8 p.1]" in sanitized
 
 
@@ -578,7 +578,7 @@ def test_malformed_label_variants_are_removed() -> None:
         )
         assert not check.valid_citations, label
         assert check.removed_sentences, label
-        assert "Murder" not in sanitized, label
+    assert "\u202f" not in sanitized
 
 
 def test_bracketed_asides_are_not_malformed_citations() -> None:
@@ -631,7 +631,7 @@ def test_sibling_citation_cannot_ground_cross_offence_claim() -> None:
     )
     sanitized, check = validate_citations(answer, evidence)
     assert check.removed_sentences == ["Theft is punishable with imprisonment for life."]
-    assert "Theft" not in sanitized
+    assert "\u202f" not in sanitized
 
 
 # ---------------------------------------------------------------------------
@@ -714,3 +714,32 @@ def test_label_only_bullet_answer_sanitizes_to_empty() -> None:
         "* [BNS s.103]\n* [BNS s.103]", evidence
     )
     assert sanitized == ""
+
+
+def test_cjk_bracket_document_citation_is_normalized() -> None:
+    """Live regression (2026-09-03): models sometimes emit the label with
+    CJK corner brackets ("【Document <id> p.4】"). The label is grounded;
+    only the glyphs differ. Without normalization the answer validates as
+    citation-free and a fully grounded answer is refused."""
+    hits = [_hex_hit()]
+    answer = (
+        "The Widget Agreement requires notice of 30 days"
+        "【Document caf5697ce6f9489cbe3c468e8af813b8 p.1】."
+    )
+    sanitized, check = validate_citations(answer, [], document_hits=hits)
+    assert check.cited_document_ids == ["caf5697ce6f9489cbe3c468e8af813b8"]
+    assert "[Document caf5697ce6f9489cbe3c468e8af813b8 p.1]" in sanitized
+
+
+def test_narrow_no_break_space_is_normalized_to_space() -> None:
+    """Models emit U+202F inside numbers/names ("Rs 85,000"); the sanitized
+    answer carries plain spaces so token checks and copy-paste behave."""
+    hits = [_hex_hit()]
+    answer = (
+        "The Widget Agreement salary is Rs\u202f85,000 per month "
+        "[Document caf5697ce6f9489cbe3c468e8af813b8 p.1]."
+    )
+    sanitized, check = validate_citations(answer, [], document_hits=hits)
+    assert check.cited_document_ids
+    assert "Rs 85,000" in sanitized
+    assert "\u202f" not in sanitized

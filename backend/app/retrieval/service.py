@@ -202,17 +202,23 @@ class RetrievalService:
         *,
         route: RetrievalRoute | None = None,
         session_id: str | None = None,
+        document_context: list[str] | None = None,
     ) -> RetrievedEvidence:
         """Run the retrieval pipeline for a query.
 
         ``route`` overrides intent-based routing when the caller (API
         layer) already knows the route. ``session_id`` scopes document
         retrieval (§21); without it document routes fail closed.
+        ``document_context`` carries the documents cited in the recent
+        conversation so follow-up references ("that document", "the other
+        document") resolve deterministically.
         """
         from app.observability.metrics import RETRIEVAL_LATENCY
 
         with RETRIEVAL_LATENCY.observe_duration(route="total"):
-            return self._retrieve(query, flt, route=route, session_id=session_id)
+            return self._retrieve(
+                query, flt, route=route, session_id=session_id, document_context=document_context
+            )
 
     def _retrieve(
         self,
@@ -220,17 +226,20 @@ class RetrievalService:
         flt: MetadataFilter | None,
         route: RetrievalRoute | None,
         session_id: str | None,
+        document_context: list[str] | None = None,
     ) -> RetrievedEvidence:
         resolved_route = route or classify_route(query)
         intent = detect_section_intent(query)
         reasons: list[str] = []
 
         if resolved_route == RetrievalRoute.DOCUMENT:
-            return self._document_evidence(query, resolved_route, intent, session_id, reasons)
+            return self._document_evidence(
+                query, resolved_route, intent, session_id, reasons, document_context
+            )
 
         if resolved_route == RetrievalRoute.COMBINED:
             document_evidence = self._document_evidence(
-                query, resolved_route, intent, session_id, reasons
+                query, resolved_route, intent, session_id, reasons, document_context
             )
             statute_evidence = self._statute_evidence(query, resolved_route, intent, flt, reasons)
             statute_evidence.document_hits = document_evidence.document_hits
@@ -270,7 +279,7 @@ class RetrievalService:
             and self._document_retrieval is not None
         ):
             document_evidence = self._document_evidence(
-                query, resolved_route, intent, session_id, reasons
+                query, resolved_route, intent, session_id, reasons, document_context
             )
             if document_evidence.sufficient:
                 if not evidence.sufficient:
@@ -300,6 +309,7 @@ class RetrievalService:
         intent: SectionIntent | None,
         session_id: str | None,
         reasons: list[str],
+        document_context: list[str] | None = None,
     ) -> RetrievedEvidence:
         """Session-scoped user-document retrieval (§21, §34).
 
@@ -328,9 +338,18 @@ class RetrievalService:
                 confidence=0.0,
                 reasons=reasons,
             )
-        evidence = self._document_retrieval.retrieve(session_id, query)
+        evidence = self._document_retrieval.retrieve(
+            session_id, query, context_document_ids=document_context
+        )
+        reasons.extend(evidence.reasons)
         confidence = evidence.hits[0].score if evidence.hits else 0.0
-        sufficient = bool(evidence.hits) and confidence >= self._document_confidence_threshold
+        sufficient = bool(evidence.hits) and (
+            # An explicitly referenced document ("the first document") is
+            # grounded by identity: a weak content match must not refuse a
+            # question the user asked ABOUT that document.
+            evidence.reference_anchored
+            or confidence >= self._document_confidence_threshold
+        )
         retrieved = RetrievedEvidence(
             query=query,
             route=route,

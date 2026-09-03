@@ -445,7 +445,7 @@ def _build_documents(
         allowed_types={t.strip() for t in settings.allowed_upload_types.split(",") if t.strip()},
         max_size_bytes=settings.max_upload_size_mb * 1024 * 1024,
     )
-    retrieval = DocumentRetrievalService(index, embedder)
+    retrieval = DocumentRetrievalService(index, embedder, store=store)
     return service, retrieval
 
 

@@ -95,6 +95,21 @@ def _refusal_reason_sentence(evidence: RetrievedEvidence) -> str | None:
                 f"The BNS corpus does not cover {statute}; this assistant answers from "
                 "the Bharatiya Nyaya Sanhita and your uploaded documents only."
             )
+    # Specific reference-resolution outcomes BEFORE the generic no-session
+    # fallback: an ambiguous reference with documents uploaded must produce
+    # the clarification, never "no documents are uploaded".
+    for reason in reasons:
+        if "document reference is ambiguous" in reason:
+            return (
+                "Several documents are uploaded in this session; please say which "
+                "one you mean, for example by its filename."
+            )
+    for reason in reasons:
+        if "document reference does not match any uploaded document" in reason:
+            return (
+                "That reference does not match any of the documents uploaded in "
+                "this session."
+            )
     for reason in reasons:
         if any(marker in reason for marker in _NO_SESSION_REASONS):
             return "No documents are uploaded in this session. Upload a document and ask again."

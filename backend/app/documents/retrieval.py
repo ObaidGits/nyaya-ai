@@ -20,6 +20,14 @@ import re
 
 from app.documents.ingestion import DocumentIndex
 from app.documents.models import DocumentEvidence, DocumentHit
+from app.documents.references import (
+    DocumentReferenceResolution,
+    position_label,
+    reference_free_query,
+    resolve_document_references,
+)
+from app.documents.store import DocumentStore
+from app.domain.models import JobStatus
 from app.ingestion.embeddings import EmbeddingProvider
 from app.retrieval.dense import embed_query
 
@@ -44,62 +52,144 @@ class DocumentRetrievalService:
         index: DocumentIndex,
         embedder: EmbeddingProvider,
         *,
+        store: DocumentStore | None = None,
         top_k: int = 8,
         lexical_top_k: int = 10,
     ) -> None:
         self._index = index
         self._embedder = embedder
+        self._store = store
         self._top_k = top_k
         self._lexical_top_k = lexical_top_k
 
-    def retrieve(self, session_id: str, query: str) -> DocumentEvidence:
-        """Search the session's documents only (isolation boundary, §21)."""
-        query_vector = embed_query(self._embedder, query)
-        dense_scored = self._index.search(session_id, query_vector, top_k=self._top_k)
-        # Lexical pass over the same session-scoped texts: the index owns the
-        # isolation (§21), so candidates are fetched through it, not globally.
-        dense_scores = dict(dense_scored)
-        # Lexical pass over the same session-scoped texts: the index owns the
-        # isolation (§21), so candidates are fetched through it, not globally.
-        # One batched fetch (single HGETALL on the Redis backend) instead of
-        # N sequential per-chunk round trips; every session chunk is
-        # considered, or exact-match chunks outside the dense top-k can never
-        # surface (observed live: the suit's title-page chunk named both
-        # parties and was never retrieved).
-        texts = self._index.texts(session_id)
-        lexical_ranked = self._lexical_rank(query, texts)
-        fused = self._rrf_fuse(dense_scored, lexical_ranked)
-        hits: list[DocumentHit] = []
-        for chunk_id, _fused_score in fused:
-            text = texts.get(chunk_id)
-            if text is None:
-                continue  # foreign or purged chunk: isolation holds
-            document_id, page_start, page_end = _parse_chunk_id(chunk_id)
-            # Confidence stays on the DENSE cosine scale: the sufficiency
-            # gate threshold (document_confidence_threshold) is calibrated
-            # to cosine similarity, not RRF magnitude. RRF orders the
-            # ranking; the top hit's cosine decides sufficiency. A
-            # lexical-only hit (no dense score) reports its lexical score
-            # — bounded [0,1] like cosine and typically below the gate,
-            # which is honest: pure lexical overlap without semantic
-            # similarity is weak evidence.
-            score = dense_scores.get(chunk_id)
-            if score is None:
-                score = dict(lexical_ranked).get(chunk_id, 0.0)
-            hits.append(
-                DocumentHit(
-                    chunk_id=chunk_id,
-                    document_id=document_id,
-                    text=text,
-                    page_start=page_start,
-                    page_end=page_end,
-                    source_uri=(
-                        f"document:{document_id}#page={page_start}" if page_start else None
-                    ),
-                    score=score,
-                )
+    def retrieve(
+        self,
+        session_id: str,
+        query: str,
+        *,
+        context_document_ids: list[str] | None = None,
+    ) -> DocumentEvidence:
+        """Search the session's documents only (isolation boundary, §21).
+
+        Document-reference resolution (2026-09 task): "the first document",
+        "the latest PDF", a filename mention, "the other document" (via
+        conversation context) scope the search to the referenced documents
+        deterministically; a genuinely ambiguous reference surfaces as a
+        reason instead of a guessed hit. A query referencing several
+        documents retrieves a balanced budget from EACH so comparisons are
+        grounded in all sides.
+        """
+        documents = self._session_documents(session_id)
+        if self._store is None:
+            # No store wired (tests, minimal deployments): reference
+            # resolution is unavailable, not "no documents" — search all.
+            resolution = DocumentReferenceResolution(document_ids=None)
+        else:
+            resolution = resolve_document_references(
+                query, documents, context_document_ids=context_document_ids
             )
-        return DocumentEvidence(hits=hits)
+        reasons: list[str] = list(resolution.notes)
+        if resolution.ambiguous:
+            from app.documents.references import AMBIGUOUS_REASON
+
+            reasons.append(AMBIGUOUS_REASON)
+            return DocumentEvidence(hits=[], reasons=reasons)
+        if resolution.unresolved_reason:
+            reasons.append(resolution.unresolved_reason)
+            return DocumentEvidence(hits=[], reasons=reasons)
+        if documents and resolution.document_ids is not None:
+            missing = [
+                d for d in resolution.document_ids if d not in {doc for doc, _ in documents}
+            ]
+            if missing:
+                reasons.append(resolution.unresolved_reason or "referenced document missing")
+                return DocumentEvidence(hits=[], reasons=reasons)
+
+        filter_ids = resolution.document_ids
+        # Reference words carry no content signal: match on what remains.
+        match_query = (
+            reference_free_query(query, documents) if filter_ids is not None else query
+        )
+        groups = [filter_ids] if filter_ids else [None]
+        # Each referenced document gets the FULL budget: a comparison of two
+        # documents must see both sides' key clauses, not one crowded out.
+        per_doc = self._top_k
+
+        all_texts = self._index.texts(session_id)
+        by_id = dict(documents)
+        hits: list[DocumentHit] = []
+        for group in groups:
+            texts = (
+                {cid: t for cid, t in all_texts.items() if cid.split("-p")[0] in set(group)}
+                if group
+                else all_texts
+            )
+            if not texts:
+                continue
+            query_vector = embed_query(self._embedder, match_query)
+            dense_scored = self._index.search(
+                session_id, query_vector, top_k=per_doc, document_ids=group
+            )
+            lexical_ranked = self._lexical_rank(match_query, texts)[: self._lexical_top_k]
+            fused = self._rrf_fuse(dense_scored, lexical_ranked)
+            dense_scores = dict(dense_scored)
+            lexical_scores = dict(lexical_ranked)
+            group_chunk_ids: list[str] = []
+            for chunk_id, _fused_score in fused:
+                text = texts.get(chunk_id)
+                if text is None:
+                    continue  # foreign or purged chunk: isolation holds
+                group_chunk_ids.append(chunk_id)
+            if not group_chunk_ids and group is not None:
+                # Identity fallback: the user explicitly named these
+                # documents; with no content match at all ("summarize the
+                # latest document"), the document's own pages in order ARE
+                # the evidence — retrieval must not refuse.
+                group_chunk_ids = sorted(texts)[:per_doc]
+            for chunk_id in group_chunk_ids:
+                text = texts[chunk_id]
+                document_id, page_start, page_end = _parse_chunk_id(chunk_id)
+                # Confidence stays on the DENSE cosine scale (see class
+                # docstring); a lexical-only or identity-fallback hit
+                # reports its lexical score (or 0.0).
+                score = dense_scores.get(chunk_id)
+                if score is None:
+                    score = lexical_scores.get(chunk_id, 0.0)
+                hits.append(
+                    DocumentHit(
+                        chunk_id=chunk_id,
+                        document_id=document_id,
+                        text=text,
+                        page_start=page_start,
+                        page_end=page_end,
+                        source_uri=(
+                            f"document:{document_id}#page={page_start}" if page_start else None
+                        ),
+                        score=score,
+                        filename=by_id.get(document_id),
+                        position=(
+                            by_id.get(document_id)
+                            and [d for d, _ in documents].index(document_id) + 1
+                        ),
+                    )
+                )
+        hits.sort(key=lambda h: -h.score)
+        return DocumentEvidence(
+            hits=hits,
+            reasons=reasons,
+            reference_anchored=filter_ids is not None,
+        )
+
+    def _session_documents(self, session_id: str) -> list[tuple[str, str]]:
+        """Upload-ordered (document_id, filename) of the session's READY
+        documents; empty when no store is wired (resolution disabled)."""
+        if self._store is None:
+            return []
+        return [
+            (d.document_id, d.filename)
+            for d in self._store.list_for_session(session_id)
+            if d.status == JobStatus.READY
+        ]
 
     def _lexical_rank(self, query: str, texts: dict[str, str]) -> list[tuple[str, float]]:
         """BM25-style token-overlap ranking over the session's chunk texts."""

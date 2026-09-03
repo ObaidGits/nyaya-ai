@@ -127,6 +127,7 @@ def test_chat_refuses_when_retrieval_insufficient() -> None:
             *,
             route: object = None,
             session_id: str | None = None,
+            document_context: list[str] | None = None,
         ) -> object:
             return make_evidence(sufficient=False, confidence=0.0, chunks=[], query=query)
 
@@ -271,7 +272,7 @@ def test_done_event_includes_document_citations() -> None:
     )
 
     class _DocRetrieval:
-        def retrieve(self, session_id: str, query: str):  # pragma: no cover - shape
+        def retrieve(self, session_id: str, query: str, *, context_document_ids=None):  # pragma: no cover - shape
             from app.documents.models import DocumentEvidence
 
             return DocumentEvidence(

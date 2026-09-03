@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from typing import Annotated
 
@@ -237,7 +238,12 @@ async def _run_chat(
                 -(settings.chat_history_max_turns if settings is not None else 20) :
             ]
         ]
-        evidence: RetrievedEvidence = await _retrieve(retrieval, retrieval_query, session_id)
+        evidence: RetrievedEvidence = await _retrieve(
+            retrieval,
+            retrieval_query,
+            session_id,
+            document_context=_document_context_from_history(request.history),
+        )
         service = GenerationService(provider)
         outcome: GenerationOutcome = await service.answer(
             request.message,
@@ -326,16 +332,39 @@ def _record_usage(outcome: GenerationOutcome, settings: Settings | None) -> None
 
 
 async def _retrieve(
-    retrieval: RetrievalService, message: str, session_id: str | None
+    retrieval: RetrievalService,
+    message: str,
+    session_id: str | None,
+    document_context: list[str] | None = None,
 ) -> RetrievedEvidence:
     """Retrieve evidence in a thread-friendly seam (sync service under async).
 
     ``session_id`` scopes document retrieval (§21); statute questions are
     unaffected. Without a session id document routes fail closed.
+    ``document_context`` carries the documents cited in recent assistant
+    turns so follow-up references ("that document", "the other document")
+    resolve deterministically — the citation labels are code-controlled,
+    so parsing them is structured state, not model-text guessing.
     """
     import asyncio
 
-    return await asyncio.to_thread(retrieval.retrieve, message, session_id=session_id)
+    return await asyncio.to_thread(
+        retrieval.retrieve, message, session_id=session_id, document_context=document_context
+    )
+
+
+_DOCUMENT_CITATION_RE = re.compile(r"\[Document ([0-9a-f]{8,})")
+
+
+def _document_context_from_history(history: list[ChatTurn]) -> list[str] | None:
+    """Document ids cited by the most recent assistant turn, if any."""
+    for turn in reversed(history):
+        if turn.role == MessageRole.ASSISTANT:
+            ids = _DOCUMENT_CITATION_RE.findall(turn.content)
+            if ids:
+                return list(dict.fromkeys(ids))[:4]
+            return None
+    return None
 
 
 def _tokenize(text: str) -> list[str]:

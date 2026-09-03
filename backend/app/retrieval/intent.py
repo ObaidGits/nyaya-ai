@@ -71,7 +71,11 @@ _DOCUMENT_WEAK_NOUN_RE = (
     r"|files?|pdfs?|deeds?|wills?)"
 )
 _DOCUMENT_NOUN_RE = rf"(?:{_DOCUMENT_STRONG_NOUN_RE}|{_DOCUMENT_WEAK_NOUN_RE})"
-_DOCUMENT_DEICTIC_RE = r"(?:my|our|this|that|these|those|his|her|their|uploaded|attached)"
+_DOCUMENT_DEICTIC_RE = (
+    r"(?:my|our|this|that|these|those|his|her|their|uploaded|attached|which|first|second"
+    r"|third|fourth|fifth|1st|2nd|3rd|4th|5th|last|latest|newest|final|previous|prior"
+    r"|earlier|other|another|both)"
+)
 
 # A document hint is a deictic determiner + document noun ("my notice",
 # "the uploaded FIR") — or "the" + a strong artifact noun ("the

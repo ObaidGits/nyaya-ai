@@ -95,6 +95,7 @@ class _NoEvidenceService:
         *,
         route: object = None,
         session_id: str | None = None,
+        document_context: list[str] | None = None,
     ) -> object:
         return make_evidence(sufficient=False, confidence=0.0, chunks=[], query=query)
 

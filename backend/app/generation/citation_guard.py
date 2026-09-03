@@ -415,8 +415,24 @@ def _normalize_brackets(text: str) -> str:
     "[{Document <id> p.1}]" / "[{<id>} p.1]" → "[Document <id> p.1]". The
     canonical citation contract contains no braces, so this rewrite can
     never alter a well-formed label; it only recovers a mangled one.
+
+    Bracket VARIANTS are normalized too (live audit 2026-09-03): models
+    occasionally emit the citation label with CJK corner brackets
+    ("【Document <id> p.4】"), fullwidth brackets ("［...］") or half-width
+    corner brackets ("｢...｣"). The label inside is perfectly grounded; only
+    the bracket glyphs differ. Without normalization the label matches no
+    citation regex, the answer validates as citation-free, and a fully
+    grounded answer is refused.
     """
-    return text.replace("[{", "[").replace("}]", "]").replace("[ ", "[").replace(" ]", "]")
+    for opener, closer in (("【", "】"), ("［", "］"), ("｢", "｣"), ("⁅", "⁆")):
+        if opener in text:
+            text = text.replace(opener, "[").replace(closer, "]")
+    return (
+        text.replace("[{", "[")
+        .replace("}]", "]")
+        .replace("[ ", "[")
+        .replace(" ]", "]")
+    )
 
 
 def extract_citations(text: str) -> list[Citation]:
@@ -1023,6 +1039,10 @@ def validate_citations(
 
     sanitized = CITATION_RE.sub(_canonical_label, sanitized)
     sanitized = re.sub(r"\s{2,}", " ", sanitized)
+    # Narrow no-break / no-break spaces (models emit them inside numbers and
+    # names, "Rs 85,000") render fine but break plain-text token checks and
+    # copy-paste; they are display-equivalent to a plain space.
+    sanitized = sanitized.replace(" ", " ").replace("\xa0", " ")
     # Normalize bare document citations ("[{id} p.1]") to the canonical
     # "[Document <id> p.N]" contract form so every downstream consumer
     # (frontend chips, eval) sees one shape.

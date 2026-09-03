@@ -285,6 +285,7 @@ def test_unsupported_legal_question_refuses() -> None:
             *,
             route: object = None,
             session_id: str | None = None,
+            document_context: list[str] | None = None,
         ) -> object:
             return make_evidence(sufficient=False, confidence=0.0, chunks=[], query=query)
 
@@ -512,6 +513,7 @@ class _ReasonService:
         *,
         route: object = None,
         session_id: str | None = None,
+        document_context: list[str] | None = None,
     ) -> object:
         from app.retrieval.models import RetrievedEvidence, RetrievalRoute
 

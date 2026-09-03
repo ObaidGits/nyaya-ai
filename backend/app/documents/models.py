@@ -82,12 +82,25 @@ class DocumentHit(BaseModel):
     page_end: int | None = None
     source_uri: str | None = None
     score: float = 0.0
+    # Identity context (2026-09 document task): the owning file's name and
+    # 1-based upload position, so the model can attribute content to "the
+    # rental agreement (second uploaded document)" instead of an opaque id.
+    filename: str | None = None
+    position: int | None = None
 
 
 class DocumentEvidence(BaseModel):
     """Retrieved evidence from one session's documents (§34)."""
 
     hits: list[DocumentHit] = Field(default_factory=list)
+    # Resolution diagnostics from the reference resolver (ambiguity,
+    # no-match): the retrieval layer turns these into refusal reasons.
+    reasons: list[str] = Field(default_factory=list)
+    # The query explicitly NAMED these documents ("the first document",
+    # "the latest PDF"): identity itself grounds the evidence, so a weak
+    # content match must not refuse a question the user asked about a
+    # document they uploaded.
+    reference_anchored: bool = False
 
     @property
     def sufficient(self) -> bool:
