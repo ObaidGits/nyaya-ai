@@ -21,6 +21,7 @@ never a blank assistant message.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from app.core.errors import AppError
@@ -47,10 +48,66 @@ REFUSAL_RESPONSE = "I don't know based on the available source material."
 
 _ENGLISH = LanguageCode.EN
 
+# Contextual refusal reasons (A4-011/A4-012 UX remediation). The pre-LLM
+# confidence-gate refusal used to be a single fixed line regardless of WHY
+# retrieval failed — a foreign-statute question, an empty session, and a
+# low-confidence match all read identically. The retrieval layer already
+# explains itself in ``RetrievedEvidence.reasons`` (code-authored English
+# constants, never user text); the mappings below turn the strongest
+# failure reason into ONE user-facing sentence. Every sentence is a
+# code-authored constant — the only interpolated value is the statute name
+# the retrieval gate itself isolated from the query with its own Title-case
+# regex, so no raw internals or user prose leak into the answer.
+#
+# Ordering is precedence: foreign statute > session/upload > confidence >
+# no match. English-only by design; the refusal prefix itself stays
+# multilingual (REFUSAL_RESPONSES, D-077).
+_STATUTE_REASON_RE = re.compile(r"query names statute '([^']+)' which is not the indexed corpus")
+_NO_SESSION_REASONS = (
+    "document route requested without a session id",
+    "no session document chunks matched",
+)
+
+
+def _refusal_reason_sentence(evidence: RetrievedEvidence) -> str | None:
+    """User-facing reason sentence for an insufficient-evidence refusal.
+
+    Maps the strongest retrieval failure reason to a code-authored English
+    sentence, or None when no reason applies (the refusal line stays
+    unchanged). ``evidence.reasons`` entries are constants produced by the
+    retrieval layer; this function never passes them through verbatim.
+    """
+    reasons = evidence.reasons or []
+    for reason in reasons:
+        match = _STATUTE_REASON_RE.search(reason)
+        if match is not None:
+            statute = match.group(1).strip()
+            return (
+                f"The BNS corpus does not cover {statute}; this assistant answers from "
+                "the Bharatiya Nyaya Sanhita and your uploaded documents only."
+            )
+    for reason in reasons:
+        if any(marker in reason for marker in _NO_SESSION_REASONS):
+            return "No documents are uploaded in this session. Upload a document and ask again."
+    for reason in reasons:
+        if "below threshold" in reason:
+            return "The retrieved material does not confidently match this question."
+    for reason in reasons:
+        if "no chunks matched" in reason or "not present in the indexed corpus" in reason:
+            return "No material in the indexed corpus matches this question."
+    return None
+
 
 def _refusal_for(language: LanguageCode | None) -> str:
     """Code-controlled refusal in the answer language (never model-made)."""
     return REFUSAL_RESPONSES[language or _ENGLISH]
+
+
+def _refusal_with_reason(refusal_text: str, reason: str | None) -> str:
+    """Refusal line plus the reason sentence — both code-authored."""
+    if reason is None:
+        return refusal_text
+    return f"{refusal_text} {reason}"
 
 
 class EmptyGenerationError(AppError):
@@ -71,6 +128,11 @@ class GenerationOutcome:
     model: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    #: Code-authored user-facing reason sentence appended to the refusal
+    #: answer ("The BNS corpus does not cover ..."). None on grounded
+    #: answers and on refusals with no identifiable cause (the bare
+    #: specification line rides alone).
+    refusal_reason: str | None = None
 
 
 def _is_refusal_text(answer: str) -> bool:
@@ -119,16 +181,22 @@ class GenerationService:
         """
         refusal_text = _refusal_for(answer_language)
         if not evidence.sufficient or (not evidence.results and not evidence.document_hits):
+            reason = _refusal_reason_sentence(evidence)
             logger.info(
                 "refusing: insufficient evidence",
                 extra={
                     "event": "generation_refusal",
                     "reason": "insufficient_evidence",
+                    "retrieval_reasons": list(evidence.reasons[:5]),
                     "confidence": round(evidence.confidence, 4),
                 },
             )
             REFUSALS.inc()
-            return GenerationOutcome(answer=refusal_text, refused=True)
+            return GenerationOutcome(
+                answer=_refusal_with_reason(refusal_text, reason),
+                refused=True,
+                refusal_reason=reason,
+            )
 
         instruction = (
             answer_instruction(answer_language)

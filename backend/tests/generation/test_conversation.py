@@ -37,7 +37,7 @@ from tests.retrieval.fixtures import FakeDenseRetriever, make_corpus
 def test_greetings_match(message: str) -> None:
     reply = conversational_reply(message)
     assert reply is not None
-    assert reply.startswith("Hello! I'm Nyaya.")
+    assert "I'm Nyaya" in reply
 
 
 @pytest.mark.parametrize("message", ["thanks", "Thanks!", "thank you", "Thank you."])
@@ -232,7 +232,7 @@ def test_casual_message_works_when_model_is_down() -> None:
     with TestClient(_app(FailingProvider())) as test_client:
         events = _post(test_client, "hi")
     assert not [d for n, d in events if n == "error"]
-    assert _tokens(events).startswith("Hello! I'm Nyaya.")
+    assert "I'm Nyaya" in _tokens(events)
 
 
 def test_legal_section_question_still_takes_rag_path(
@@ -264,9 +264,12 @@ def test_document_question_still_takes_rag_path(
 def test_ambiguous_message_still_refuses(client: TestClient) -> None:
     """'hi there' is NOT whitelisted (extra word) and finds no evidence in
     the synthetic corpus (zero BM25 overlap), so the code-level confidence
-    gate refuses — the conservative outcome the routing requires."""
+    gate refuses — the conservative outcome the routing requires. The
+    refusal may now carry a code-authored reason sentence; the line itself
+    is unchanged and never a conversational reply."""
     events = _post(client, "hi there")
-    assert _tokens(events) == "I don't know based on the available source material."
+    assert _tokens(events).startswith("I don't know based on the available source material.")
+    assert "I'm Nyaya" not in _tokens(events)
     assert events[-1][1]["refused"] is True
 
 
@@ -299,10 +302,12 @@ def test_lexical_overlap_question_takes_grounded_rag_path(
     """The jaywalking question shares tokens ('punishment') with the tiny
     synthetic corpus, so BM25 retrieves the murder section and the pipeline
     answers grounded — never conversationally. Lexical-overlap retrieval
-    quality is a corpus-size artifact (D-077), not a routing issue."""
-    events = _post(client, "What is the punishment for jaywalking in Ohio?")
+    quality is a corpus-size artifact (D-077), not a routing issue.
+    (A foreign-jurisdiction phrasing — "jaywalking in Ohio" — now fails
+    closed at the retrieval gate with the corpus-boundary reason instead.)"""
+    events = _post(client, "What is the punishment for jaywalking?")
     tokens = _tokens(events)
-    assert tokens.startswith("Hello! I'm Nyaya.") is False
+    assert "I'm Nyaya" not in tokens  # never a conversational reply
     assert len(provider.requests) == 1  # the grounded pipeline ran
     assert "[TS s.103]" in list(events[-1][1]["citations"])
 
@@ -400,7 +405,7 @@ def test_injection_payloads_take_grounded_path(
     refusal. The property under test is the ROUTING: smalltalk never
     answers an injection payload, and no ungrounded content is emitted."""
     events = _post(client, message)
-    assert _tokens(events).startswith("Hello! I'm Nyaya.") is False
+    assert "I'm Nyaya" not in _tokens(events)  # never a conversational reply
     assert events[-1][0] == "done"
     done = events[-1][1]
     if provider.requests:
@@ -423,3 +428,232 @@ def test_greeting_plus_identity_is_intercepted() -> None:
 
 def test_greeting_plus_legal_question_still_falls_through() -> None:
     assert conversational_category("Hello, what is the punishment for murder?") is None
+
+
+# --------------------------------------------------------------------------
+# Greeting variety (time-of-day buckets, deterministic per-message variants)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "message, expected",
+    [
+        ("Good Morning", "greeting_morning"),
+        ("good morning!", "greeting_morning"),
+        ("Suprabhat", "greeting_morning"),
+        ("Good Afternoon", "greeting_afternoon"),
+        ("Good Evening", "greeting_evening"),
+        ("Shubh Sandhya", "greeting_evening"),
+        ("Namaste", "greeting"),
+        ("Namaskar", "greeting"),
+        ("hello", "greeting"),
+        ("hi", "greeting"),
+    ],
+)
+def test_time_of_day_greetings_get_own_buckets(message: str, expected: str) -> None:
+    assert conversational_category(message) == expected
+
+
+def test_morning_and_evening_replies_differ() -> None:
+    """'Good Morning' and 'Good Evening' never share a reply: the reply
+    mirrors the time of day the user greeted with."""
+    from app.generation.conversation import _MORNING_REPLIES, _EVENING_REPLIES
+
+    assert set(_MORNING_REPLIES).isdisjoint(_EVENING_REPLIES)
+    morning = conversational_reply("Good Morning")
+    evening = conversational_reply("Good Evening")
+    assert morning is not None and morning.startswith("Good morning")
+    assert evening is not None and evening.startswith("Good evening")
+    assert morning != evening
+
+
+def test_greeting_variants_are_deterministic_per_message() -> None:
+    """Same message, same reply — the pick is a hash of the message, so
+    replies are replayable and tests stay stable."""
+    assert conversational_reply("hello") == conversational_reply("Hello.")
+
+
+def test_multiple_greeting_variants_produce_at_least_three_distinct_replies() -> None:
+    replies = {conversational_reply(m) for m in ("hi", "hello", "hey", "namaste", "namaskar")}
+    assert None not in replies
+    assert len(replies) >= 3
+
+
+def test_multilingual_greeting_categories_still_short_circuit() -> None:
+    """The new greeting buckets are matched by conversational_category and
+    multilingual_reply still works for the base categories (D-077)."""
+    assert conversational_category("namaste") is not None
+
+
+# --------------------------------------------------------------------------
+# Contextual refusal reasons (retrieval reasons → user-facing sentence)
+# --------------------------------------------------------------------------
+
+
+def _refusal_events(client: TestClient, evidence_service: object, message: str):
+    app = _app(ScriptedProvider([GOOD_ANSWER]))
+    app.state.retrieval_service = evidence_service
+    with TestClient(app) as test_client:
+        events = _post(test_client, message)
+    return events
+
+
+class _ReasonService:
+    """Retrieval stub returning insufficient evidence with a fixed reasons list."""
+
+    def __init__(self, reasons: list[str]) -> None:
+        self._reasons = reasons
+
+    def retrieve(
+        self,
+        query: str,
+        flt: object = None,
+        *,
+        route: object = None,
+        session_id: str | None = None,
+    ) -> object:
+        from app.retrieval.models import RetrievedEvidence, RetrievalRoute
+
+        return RetrievedEvidence(
+            query=query,
+            route=RetrievalRoute.STATUTE,
+            results=[],
+            sufficient=False,
+            confidence=0.0,
+            reasons=list(self._reasons),
+        )
+
+
+def test_refusal_with_foreign_statute_reason() -> None:
+    events = _refusal_events(
+        None,
+        _ReasonService(["query names statute 'New York Penal Code' which is not the indexed corpus"]),
+        "What is the punishment of murder in New York?",
+    )
+    tokens = _tokens(events)
+    assert tokens.startswith("I don't know based on the available source material.")
+    assert "does not cover New York Penal Code" in tokens
+    assert "Bharatiya Nyaya Sanhita" in tokens
+    done = events[-1][1]
+    assert done["refused"] is True
+    assert done["refusal_reason"] is not None
+    assert "does not cover" in done["refusal_reason"]
+
+
+def test_refusal_with_no_session_reason_tells_user_to_upload() -> None:
+    events = _refusal_events(
+        None,
+        _ReasonService(["document route requested without a session id"]),
+        "What does my document say?",
+    )
+    tokens = _tokens(events)
+    assert "Upload a document" in tokens
+    assert events[-1][1]["refusal_reason"] == (
+        "No documents are uploaded in this session. Upload a document and ask again."
+    )
+
+
+def test_refusal_with_low_confidence_reason() -> None:
+    events = _refusal_events(
+        None,
+        _ReasonService(["retrieval confidence 0.040 below threshold 0.100"]),
+        "What is the punishment for jaywalking?",
+    )
+    tokens = _tokens(events)
+    assert "does not confidently match" in tokens
+
+
+def test_refusal_with_no_match_reason() -> None:
+    events = _refusal_events(
+        None,
+        _ReasonService(["no chunks matched the query in the indexed corpus"]),
+        "What is the quantum physics statute?",
+    )
+    tokens = _tokens(events)
+    assert "No material in the indexed corpus matches" in tokens
+
+
+def test_refusal_default_reason_keeps_specification_line() -> None:
+    """Evidence with no recognizable reason → the original refusal line,
+    byte-identical, no extra sentence."""
+    events = _refusal_events(
+        None,
+        _ReasonService([]),
+        "What does the quantum physics statute say?",
+    )
+    assert _tokens(events) == "I don't know based on the available source material."
+    assert events[-1][1]["refusal_reason"] is None
+
+
+def test_reason_sentences_are_english_code_constants() -> None:
+    """The reason mapping never echoes raw retrieval reason internals: the
+    sentence is always one of the fixed templates, and the only
+    interpolated value is the statute name the retrieval gate itself
+    isolated with its Title-case regex (letters and spaces only — no
+    punctuation, no prose) from the query. A reason with unrecognizable
+    content yields no sentence at all."""
+    from app.generation.service import _refusal_reason_sentence
+    from app.retrieval.models import RetrievedEvidence, RetrievalRoute
+
+    def _evidence(reasons: list[str]) -> RetrievedEvidence:
+        return RetrievedEvidence(
+            query="q",
+            route=RetrievalRoute.STATUTE,
+            results=[],
+            sufficient=False,
+            confidence=0.0,
+            reasons=reasons,
+        )
+
+    odd = _refusal_reason_sentence(_evidence(["weird internal detail"]))
+    assert odd is None
+    foreign = _refusal_reason_sentence(
+        _evidence(["query names statute 'Hindu Marriage Act' which is not the indexed corpus"])
+    )
+    assert foreign == (
+        "The BNS corpus does not cover Hindu Marriage Act; this assistant answers from "
+        "the Bharatiya Nyaya Sanhita and your uploaded documents only."
+    )
+
+
+def test_new_york_foreign_statute_gate_note() -> None:
+    """Documented handoff: the foreign-statute gate matches Title-case
+    statute names. 'New York' alone (two capitalized words, no Act/Code/
+    Constitution suffix) is NOT caught by _STATUTE_TITLE_RE — retrieval
+    agent owns that gate's case/suffix sensitivity. What IS verified here
+    is the plumbing: whenever the gate emits its reason, the refusal
+    explains the corpus boundary."""
+    from app.retrieval.service import RetrievalService as _RS
+
+    service = _RS(
+        ChunkStore(make_corpus()),
+        FakeDenseRetriever({}),
+        Bm25SparseIndex(make_corpus()),
+        confidence_threshold=0.1,
+        relevance_floor=None,
+    )
+    evidence = service.retrieve("What does the Hindu Marriage Act say?")
+    assert any("not the indexed corpus" in r for r in evidence.reasons)
+    # Jurisdiction gate (retrieval fix): a foreign place with no statute
+    # noun now fails closed too, so the contextual refusal can say the
+    # BNS corpus does not cover New York law.
+    evidence_ny = service.retrieve("What is the punishment of murder in New York?")
+    assert any("not the indexed corpus" in r for r in evidence_ny.reasons)
+
+
+# --------------------------------------------------------------------------
+# API: greeting variety through the endpoint
+# --------------------------------------------------------------------------
+
+
+def test_different_greetings_through_api_yield_distinct_replies(
+    client: TestClient,
+) -> None:
+    """Five greeting variants across buckets produce >= 3 distinct replies
+    end-to-end, with no retrieval or LLM call."""
+    replies = {
+        _tokens(_post(client, m))
+        for m in ("Good Morning", "Good Evening", "hello", "namaste", "Suprabhat")
+    }
+    assert len(replies) >= 3
+

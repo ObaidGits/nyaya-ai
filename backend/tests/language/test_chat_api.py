@@ -303,7 +303,10 @@ def test_hindi_document_question_is_isolated_to_the_session(document_app: FastAP
         )
     events = _parse_sse(other)
     tokens = _tokens(events)
-    assert tokens.strip() == REFUSAL_RESPONSES[LanguageCode.HI]
+    # Contextual refusal reason (2026-09-03 feature) appends the
+    # code-authored English reason to the Hindi refusal line.
+    assert tokens.strip().startswith(REFUSAL_RESPONSES[LanguageCode.HI])
+    assert "No documents are uploaded in this session" in tokens.strip()
     assert events[-1][1]["refused"] is True
     sources = next(data for name, data in events if name == "sources")["sources"]
     assert sources == []
