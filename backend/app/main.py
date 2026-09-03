@@ -352,6 +352,10 @@ def build_retrieval_service(
             settings, store.chunks, _build_embedder(settings), cache_path
         )
         logger.info("dense retrieval backend selected", extra={"backend": dense_backend})
+        # The relevance gate's floor/saturation are calibrated for the BGE
+        # cosine scale; the hashing embedder scores on a different scale
+        # (an on-target hit ~0.3), so its gate is disabled, not retuned.
+        hashing_backend = settings.embedding_backend == "hashing"
         return RetrievalService(
             store,
             dense,
@@ -360,6 +364,17 @@ def build_retrieval_service(
             sparse_top_k=settings.sparse_top_k,
             confidence_threshold=settings.retrieval_confidence_threshold,
             document_confidence_threshold=settings.document_retrieval_confidence_threshold,
+            final_top_k=settings.retrieval_final_top_k,
+            document_fallback_confidence=settings.retrieval_document_fallback_confidence,
+            relevance_floor=None if hashing_backend else settings.retrieval_relevance_floor,
+            relevance_saturation=(
+                None if hashing_backend else settings.retrieval_relevance_saturation
+            ),
+            foreign_jurisdictions=[
+                place.strip()
+                for place in settings.retrieval_foreign_jurisdictions.split(",")
+                if place.strip()
+            ],
             document_retrieval=document_retrieval,
         )
     except Exception:

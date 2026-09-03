@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from app.retrieval.dense import DenseRetriever
@@ -61,42 +62,46 @@ logger = logging.getLogger(__name__)
 RELEVANCE_FLOOR = 0.48
 RELEVANCE_SATURATION = 0.60
 
-# Statute-title mentions ("Hindu Marriage Act", "US Constitution", "Fourth
-# Amendment"): used to detect questions about a statute other than the
-# indexed corpus. Title case is required so ordinary uses of the words
-# ("the act of cruelty") never match. The comparison itself is against the
-# corpus act metadata (SRC-013: no hardcoded statute assumptions).
-_STATUTE_TITLE_RE = re.compile(
-    r"\b((?:[A-Z][a-z]+|US|USA|UK|IPC)\s+(?:[A-Z][a-z]+\s+){0,3}"
-    r"(?:Act|Code|Constitution|Amendment))\b"
-)
+# Out-of-scope detection (SRC-013: corpus-derived, no hardcoded statute
+# lists). A query "names a statute" when a statute keyword ("act", "code",
+# "constitution", "amendment", "law") is surrounded by an adjacent run of
+# name-like words — e.g. "Hindu Marriage Act", "Code of Civil Procedure",
+# "Rajasthan Rent Control Act" — that shares NO content word with the
+# indexed acts' names or short codes. The gate therefore generalizes to
+# ANY un-indexed statute without enumerating them, and in-scope mentions
+# ("the Bharatiya Nyaya Sanhita Act", "the Test Sanhita Act", "under this
+# act") never match because they overlap the corpus act vocabulary or
+# carry no adjacent name words at all.
+_STATUTE_KEYWORDS = ("act", "code", "constitution", "amendment", "law")
+# Words allowed INSIDE a name run ("Code of Civil Procedure") but never
+# able to start or extend one on their own.
+_NAME_INTERIOR_WORDS = {"of", "and"}
+# A word that can appear inside the corpus's own nationality reference
+# ("Indian law") without itself counting as statute-name content: the
+# indexed statutes are Indian law, so a bare nationality mention is in
+# scope, while "Indian Penal Code" still has the content word "penal"
+# and is correctly out of scope.
+_CORPUS_NATIONALITY_WORDS = {"india", "indian"}
+# Words that break an adjacent name run: ordinary query vocabulary. A run
+# must be a contiguous name-like span hugging the keyword, so "the act of
+# murder" (no adjacent name words) and "punishment for murder under this
+# act" (run broken by "this") are never treated as statute names.
+_NAME_BREAK_WORDS = {
+    "the", "a", "an", "this", "that", "these", "those", "said", "it", "its",
+    "what", "which", "who", "whom", "whose", "how", "when", "where", "why",
+    "does", "do", "did", "is", "are", "was", "were", "can", "could", "would",
+    "should", "shall", "may", "might", "must", "will", "in", "on", "at", "to",
+    "for", "from", "by", "with", "under", "over", "about", "against", "into",
+    "my", "your", "our", "their", "his", "her", "say", "says", "tell", "ask",
+    "explain", "describe", "me", "please", "section", "sections",
+}
+_NAME_RUN_WINDOW = 4  # max words of name on either side of the keyword
 
-# Well-known non-corpus statutes and foreign jurisdictions, matched
-# case-insensitively. A Title-case-only pattern lets lowercase mentions
-# through ("what does the hindu marriage act say") and misses names whose
-# connective words are lowercase ("Code of Civil Procedure"); full-name
-# word-anchored matching avoids the generic act/code false positives that
-# forced Title case in the first place. Jurisdictions cover the
-# place-scoped question ("punishment for murder in New York") where no
-# statute is named at all: BNS is Indian law, so a foreign jurisdiction
-# means the corpus cannot ground the question.
-_FOREIGN_STATUTE_NAMES = (
-    "hindu marriage act",
-    "special marriage act",
-    "hindu succession act",
-    "dowry prohibition act",
-    "domestic violence act",
-    "indian contract act",
-    "indian penal code",
-    "code of civil procedure",
-    "code of criminal procedure",
-    "indian evidence act",
-    "consumer protection act",
-    "information technology act",
-    "transfer of property act",
-    "muslim personal law",
-)
-_FOREIGN_JURISDICTIONS = (
+# Foreign jurisdictions ("punishment for murder in New York") need a seed
+# list: the corpus metadata cannot say where a place is, so no corpus-
+# derived signal exists for geography. The list is deployment config
+# (Settings.retrieval_foreign_jurisdictions), not a code-time truth.
+_DEFAULT_FOREIGN_JURISDICTIONS = (
     "new york", "california", "texas", "florida", "illinois", "ohio",
     "washington dc", "chicago", "los angeles", "boston", "seattle",
     "united states", "united kingdom", "england", "scotland", "wales",
@@ -104,14 +109,27 @@ _FOREIGN_JURISDICTIONS = (
     "china", "japan", "singapore", "dubai", "united arab emirates",
     "germany", "france", "netherlands", "russia", "malaysia", "usa", "uk",
 )
-_FOREIGN_NAME_RE = re.compile(
-    r"\b(?:" + "|".join(re.escape(name) for name in _FOREIGN_STATUTE_NAMES) + r")\b",
-    re.IGNORECASE,
-)
-_FOREIGN_JURISDICTION_RE = re.compile(
-    r"\b(?:" + "|".join(re.escape(place) for place in _FOREIGN_JURISDICTIONS) + r")\b",
-    re.IGNORECASE,
-)
+
+
+def _name_run(tokens: list[str], index: int, *, backwards: bool) -> list[str]:
+    """Contiguous name-like words hugging the statute keyword at ``index``.
+
+    Reading order. Stops at ordinary query vocabulary (``_NAME_BREAK_WORDS``)
+    and at non-alphabetic tokens (numbers, parentheses), so only a genuine
+    name span ("Hindu Marriage", "of Civil Procedure") is collected.
+    """
+    run: list[str] = []
+    step = -1 if backwards else 1
+    pos = index + step
+    while len(run) < _NAME_RUN_WINDOW and 0 <= pos < len(tokens):
+        token = tokens[pos].strip("\"'.,;:!?)(")
+        if not token.isalpha() or token.lower() in _NAME_BREAK_WORDS:
+            break
+        run.append(token)
+        pos += step
+    if backwards:
+        run.reverse()
+    return run
 
 
 class RetrievalService:
@@ -146,6 +164,9 @@ class RetrievalService:
         # and fall back to the RRF-overlap confidence signal alone.
         relevance_floor: float | None = RELEVANCE_FLOOR,
         relevance_saturation: float | None = RELEVANCE_SATURATION,
+        # Foreign-jurisdiction seed list (deployment config; None keeps
+        # the built-in default). See _DEFAULT_FOREIGN_JURISDICTIONS.
+        foreign_jurisdictions: Sequence[str] | None = None,
     ) -> None:
         self._store = store
         self._dense = dense
@@ -160,6 +181,19 @@ class RetrievalService:
         self._document_retrieval = document_retrieval
         self._relevance_floor = relevance_floor
         self._relevance_saturation = relevance_saturation
+        jurisdictions = tuple(
+            place.strip().lower()
+            for place in (foreign_jurisdictions or _DEFAULT_FOREIGN_JURISDICTIONS)
+            if place.strip()
+        )
+        self._foreign_jurisdiction_re = (
+            re.compile(
+                r"\b(?:" + "|".join(re.escape(place) for place in jurisdictions) + r")\b",
+                re.IGNORECASE,
+            )
+            if jurisdictions
+            else None
+        )
 
     def retrieve(
         self,
@@ -320,34 +354,81 @@ class RetrievalService:
     def _foreign_statute(self, query: str) -> str | None:
         """Name of a statute the query asks about that is not the corpus.
 
-        Compares Title-case statute mentions and well-known foreign statute
-        / jurisdiction names against the indexed acts' names (from chunk
-        metadata, SRC-013). A mention that shares a content word with the
-        corpus act name ("Bharatiya Nyaya Sanhita Act") is in scope;
-        anything else ("Hindu Marriage Act", "US Constitution", "Indian
-        Contract Act", "New York") is out of scope — the corpus cannot
-        ground it, so retrieval must fail closed rather than substitute
-        look-alike BNS sections. Document evidence is not affected: a
-        user's own upload may legitimately cite other statutes.
+        Corpus-derived (SRC-013): NO hardcoded list of statute names. A
+        statute keyword ("act", "code", ...) with an adjacent run of
+        name-like words names a statute; the run is checked against the
+        indexed acts' vocabulary (act names and short codes from chunk
+        metadata). A mention that shares a content word with the corpus
+        ("Bharatiya Nyaya Sanhita Act", "the BNSS Act", "under this act")
+        is in scope; any OTHER statute name — whether a famous one
+        ("Hindu Marriage Act") or an obscure one ("Rajasthan Rent Control
+        Act") — is out of scope, because the corpus cannot ground it and
+        retrieval must fail closed rather than substitute look-alike
+        sections (A4-011). Document evidence is not affected: a user's
+        own upload may legitimately cite other statutes.
         """
-        known = _FOREIGN_NAME_RE.search(query)
-        if known is not None:
-            return known.group(0)
-        jurisdiction = _FOREIGN_JURISDICTION_RE.search(query)
-        if jurisdiction is not None:
-            return f"{jurisdiction.group(0)} law"
-        match = _STATUTE_TITLE_RE.search(query)
-        if match is None:
-            return None
-        mentioned = set(re.findall(r"[a-z]+", match.group(1).lower()))
-        mentioned -= {"act", "code", "constitution", "amendment"}
-        if not mentioned:
-            return None
+        if self._foreign_jurisdiction_re is not None:
+            jurisdiction = self._foreign_jurisdiction_re.search(query)
+            if jurisdiction is not None:
+                return f"{jurisdiction.group(0)} law"
+        return self._statute_name_mention(query)
+
+    def _corpus_vocabulary(self) -> set[str]:
+        """Content-word vocabulary of the indexed acts (names + shorts)."""
+        words: set[str] = set()
         for act in self._store.act_names():
-            corpus_words = set(re.findall(r"[a-z]+", act.lower())) - {"act", "code", "2023"}
-            if mentioned & corpus_words:
-                return None
-        return match.group(1)
+            words.update(re.findall(r"[a-z]+", act.lower()))
+        words.update(short.lower() for short in self._store.act_shorts())
+        return words - {"act", "code", "2023"} | _CORPUS_NATIONALITY_WORDS
+
+    def _statute_name_mention(self, query: str) -> str | None:
+        """Adjacent-run statute-name detection, or None when in scope.
+
+        A name run is a contiguous span of at most ``_NAME_RUN_WINDOW``
+        alphabetic words hugging a statute keyword, optionally containing
+        interior connectives ("of", "and"). The mention counts only when
+        it carries >= 2 content words, or a single Capitalized one
+        ("the Penal Code"), and none of its content words (minus the
+        corpus nationality markers) appear in the corpus vocabulary.
+        """
+        tokens = query.replace("’", "'").split()
+        corpus_words = self._corpus_vocabulary()
+        for index, token in enumerate(tokens):
+            core = token.rstrip("\"'.,;:!?")
+            if not core.isalpha():
+                continue  # "Act's", "Acts," or quoted/hyphenated — not the bare keyword
+            word = core.lower()
+            if word not in _STATUTE_KEYWORDS:
+                continue
+            before = _name_run(tokens, index, backwards=True)
+            # Suffix-form names ("Hindu Marriage Act") put the name before
+            # the keyword; prefix-form names ("Code of Civil Procedure")
+            # are the only ones that put it after — and they always open
+            # with a connective. Requiring that stops ordinary predicates
+            # ("law punish theft") from being read as a name.
+            after: list[str] = []
+            if index + 1 < len(tokens):
+                nxt = tokens[index + 1].strip("\"'.,;:!?)(")
+                if nxt.lower() in _NAME_INTERIOR_WORDS:
+                    after = _name_run(tokens, index, backwards=False)
+            content = [w for w in (*before, *after) if w.lower() not in _NAME_INTERIOR_WORDS]
+            if not content:
+                continue
+            if len(content) == 1 and not content[0][:1].isupper():
+                # A lone lowercase word ("the act of murder") is not a name.
+                continue
+            non_nationality = [
+                w for w in content if w.lower() not in _CORPUS_NATIONALITY_WORDS
+            ]
+            if not non_nationality:
+                # Bare nationality ("under Indian law") — the corpus IS
+                # Indian law, so the mention is in scope.
+                continue
+            if any(w.lower() in corpus_words for w in non_nationality):
+                continue  # Shares vocabulary with an indexed act: in scope.
+            name = " ".join((*before, core, *after)).strip()
+            return name or core
+        return None
 
     def _relevance_factor(self, query: str, flt: MetadataFilter | None) -> float | None:
         """Semantic relevance in [0, 1], or None when unavailable.
@@ -390,7 +471,9 @@ class RetrievalService:
         if foreign is not None:
             # The question is about a statute the corpus cannot ground:
             # fail closed (A4-011) instead of substituting look-alike
-            # sections from the indexed act.
+            # sections from the indexed act. The evidence carries the
+            # indexed act names so the refusal can name the corpus that
+            # failed to ground the question.
             reasons.append(f"query names statute '{foreign}' which is not the indexed corpus")
             evidence = RetrievedEvidence(
                 query=query,
@@ -400,6 +483,7 @@ class RetrievalService:
                 sufficient=False,
                 confidence=0.0,
                 reasons=reasons,
+                indexed_acts=sorted(self._store.act_names()),
             )
             self._log(query, evidence)
             return evidence

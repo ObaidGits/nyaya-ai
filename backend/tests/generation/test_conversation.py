@@ -617,6 +617,33 @@ def test_reason_sentences_are_english_code_constants() -> None:
     )
 
 
+def test_refusal_reason_names_the_indexed_acts() -> None:
+    """With retrieval-supplied indexed_acts (2026-09 hardcoding fix), the
+    refusal names the acts actually indexed instead of hardcoded 'BNS
+    corpus' text — so the corpus boundary stays truthful when the corpus
+    changes."""
+    from app.generation.service import _refusal_reason_sentence
+    from app.retrieval.models import RetrievedEvidence, RetrievalRoute
+
+    evidence = RetrievedEvidence(
+        query="q",
+        route=RetrievalRoute.STATUTE,
+        results=[],
+        sufficient=False,
+        confidence=0.0,
+        reasons=[
+            "query names statute 'Rajasthan Rent Control Act' which is not the indexed corpus"
+        ],
+        indexed_acts=["Bharatiya Nagarik Suraksha Sanhita Act", "Bharatiya Nyaya Sanhita Act"],
+    )
+    sentence = _refusal_reason_sentence(evidence)
+    acts = "Bharatiya Nagarik Suraksha Sanhita Act, Bharatiya Nyaya Sanhita Act"
+    assert sentence == (
+        f"The indexed corpus ({acts}) does not cover Rajasthan Rent Control Act; this "
+        f"assistant answers from {acts} and your uploaded documents only."
+    )
+
+
 def test_new_york_foreign_statute_gate_note() -> None:
     """Documented handoff: the foreign-statute gate matches Title-case
     statute names. 'New York' alone (two capitalized words, no Act/Code/

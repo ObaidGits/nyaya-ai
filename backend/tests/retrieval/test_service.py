@@ -477,6 +477,73 @@ def test_indian_references_are_not_foreign(query: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Corpus-derived out-of-scope detection (2026-09 hardcoding fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What does the Arbitration and Conciliation Act say about appointments?",
+        "How is tenancy governed under the Rajasthan Rent Control Act?",
+        "what does the forest conservation act say?",
+        "What is the procedure under the Prevention of Corruption Act?",
+    ],
+)
+def test_any_unindexed_statute_refused_not_just_known_names(query: str) -> None:
+    """The gate holds NO hardcoded statute list: any statute name sharing
+    no vocabulary with the indexed acts fails closed — including names the
+    old list never contained. The refusal also carries the indexed act
+    names so it can state which corpus failed to ground the question."""
+    service = _service()
+    evidence = service.retrieve(query)
+    assert not evidence.sufficient, query
+    assert evidence.results == [], query
+    assert any("not the indexed corpus" in r for r in evidence.reasons), query
+    assert evidence.indexed_acts, query
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is the punishment for the act of murder?",
+        "What does the act of theft say?",
+        "What is the punishment for murder under this act?",
+        "What does the act say about murder?",
+        "What is the law on murder?",
+        "What does the Act's punishment for murder look like?",
+    ],
+)
+def test_generic_noun_uses_of_act_and_law_are_not_statute_names(query: str) -> None:
+    """Ordinary noun/possessive uses of "act"/"law" never trip the gate:
+    retrieval must run, not refuse."""
+    service = _service()
+    evidence = service.retrieve(query)
+    assert all("not the indexed corpus" not in r for r in evidence.reasons), query
+
+
+def test_indian_nationality_mention_is_in_scope() -> None:
+    """The corpus statutes ARE Indian law: a bare nationality mention
+    ("under Indian law") is in scope, while "Indian Penal Code" — which
+    has the content word "penal" — stays out."""
+    service = _service()
+    evidence = service.retrieve("What is the punishment for murder under Indian law?")
+    assert all("not the indexed corpus" not in r for r in evidence.reasons)
+    code = service.retrieve("What is the punishment for murder under the Indian Penal Code?")
+    assert any("not the indexed corpus" in r for r in code.reasons)
+
+
+def test_jurisdiction_list_is_deployment_config() -> None:
+    """Which jurisdictions count as foreign is configuration, not code."""
+    service = _service(foreign_jurisdictions=["gondor"])
+    refused = service.retrieve("What is the punishment for murder in Gondor?")
+    assert any("not the indexed corpus" in r for r in refused.reasons)
+    # california is no longer configured → not refused by the gate.
+    passthrough = service.retrieve("How does california law punish theft?")
+    assert all("not the indexed corpus" not in r for r in passthrough.reasons)
+
+
+# ---------------------------------------------------------------------------
 # Subsection narrowing on deterministic lookup (M3 audit)
 # ---------------------------------------------------------------------------
 

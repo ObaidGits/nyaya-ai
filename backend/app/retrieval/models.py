@@ -64,6 +64,10 @@ class RetrievedEvidence(BaseModel):
     sufficient: bool = True
     confidence: float = 1.0
     reasons: list[str] = Field(default_factory=list)
+    # Names of the acts indexed at retrieval time, so the refusal layer
+    # can state WHICH corpus could not ground the answer instead of a
+    # hardcoded corpus name (empty on hand-built evidence → legacy text).
+    indexed_acts: list[str] = Field(default_factory=list)
 
 
 class RetrievalError(Exception):

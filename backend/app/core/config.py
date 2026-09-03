@@ -130,6 +130,30 @@ class Settings(BaseSettings):
     # The sparse BM25 index and the deterministic section lookup always run
     # in-process over the JSONL corpus artifact either way.
     retrieval_dense_backend: str = Field(default="auto", pattern="^(auto|qdrant|in-process)$")
+    # Semantic-relevance confidence gate band (ARCHITECTURE §15): the dense
+    # retriever's top cosine is mapped onto a [0, 1] relevance factor
+    # between floor and saturation. Defaults are calibrated for
+    # BAAI/bge-base-en-v1.5; the hashing embedder's cosine scale differs,
+    # so the app wiring disables the gate for it (passes None).
+    retrieval_relevance_floor: float = Field(default=0.48, ge=0.0, le=1.0)
+    retrieval_relevance_saturation: float = Field(default=0.60, ge=0.0, le=1.0)
+    # Final evidence size after RRF fusion, and the statute-confidence floor
+    # below which a session's uploaded documents are also consulted.
+    retrieval_final_top_k: int = Field(default=10, gt=0)
+    retrieval_document_fallback_confidence: float = Field(default=0.35, ge=0.0, le=1.0)
+    # Foreign-jurisdiction seed list for the out-of-scope gate (comma-
+    # separated, case-insensitive). Geography cannot be derived from the
+    # corpus, so the places whose law the indexed statutes cannot ground
+    # are deployment config, not code: add or remove places here.
+    retrieval_foreign_jurisdictions: str = Field(
+        default=(
+            "new york, california, texas, florida, illinois, ohio, washington dc, "
+            "chicago, los angeles, boston, seattle, united states, united kingdom, "
+            "england, scotland, wales, ireland, london, canada, australia, pakistan, "
+            "bangladesh, china, japan, singapore, dubai, united arab emirates, "
+            "germany, france, netherlands, russia, malaysia, usa, uk"
+        )
+    )
 
     # --- Languages (multilingual support, DECISIONS.md D-077) -------------
     # Detection backend: "script" (default, zero dependencies) or

@@ -81,7 +81,16 @@ def _refusal_reason_sentence(evidence: RetrievedEvidence) -> str | None:
     for reason in reasons:
         match = _STATUTE_REASON_RE.search(reason)
         if match is not None:
-            statute = match.group(1).strip()
+            statute = re.sub(r"[^A-Za-z ]", "", match.group(1)).strip()
+            if evidence.indexed_acts:
+                # Truthful corpus boundary: name the acts actually indexed
+                # (retrieval-supplied) rather than a hardcoded corpus name,
+                # so the sentence stays correct when the corpus changes.
+                names = ", ".join(evidence.indexed_acts)
+                return (
+                    f"The indexed corpus ({names}) does not cover {statute}; this "
+                    f"assistant answers from {names} and your uploaded documents only."
+                )
             return (
                 f"The BNS corpus does not cover {statute}; this assistant answers from "
                 "the Bharatiya Nyaya Sanhita and your uploaded documents only."
