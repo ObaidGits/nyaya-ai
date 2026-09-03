@@ -226,6 +226,7 @@ services:
       - --storage.tsdb.retention.time=7d
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/metrics_token:/etc/prometheus/metrics_token:ro
       - prometheus_data:/prometheus
     ports:
       # Loopback only: metrics UI must not be publicly reachable.

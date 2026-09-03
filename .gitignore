@@ -43,3 +43,4 @@ deploy.log
 
 # Local evaluation run artifacts (results/<timestamp>.json)
 eval/results/
+monitoring/metrics_token
