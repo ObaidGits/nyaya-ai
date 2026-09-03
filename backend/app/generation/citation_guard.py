@@ -39,17 +39,31 @@ from pydantic import BaseModel, Field
 from app.documents.models import DocumentHit
 from app.retrieval.models import ScoredChunk
 
-# [BNS s.103(1)] / [BNSS s.197] — act short code, section, optional subsections
-CITATION_RE = re.compile(r"\[([A-Za-z]{2,6})\s+s\.(\d{1,3})((?:\(\d{1,3}\)){0,2})\]")
+# [BNS s.103(1)] / [BNSS s.197] — act short code, section, optional subsections.
+# Case-insensitive with an optional space after "s." so a model's
+# "[BNS S.103]" / "[BNS s. 103]" / "[bns s.103]" normalizes to the canonical
+# contract instead of escaping validation as plain prose (audit H4).
+CITATION_RE = re.compile(
+    r"\[([A-Za-z]{2,6})\s+[sS]\.?\s*(\d{1,3})(?!\d)((?:\s*\(\s*\d{1,3}\s*\)){0,2})\]",
+)
 
-# A bracket that LOOKS like a statute citation (act short code + "s.<digit>")
-# but does not match CITATION_RE exactly, e.g. "[BNS s.103 p.29-30]" — a
-# malformed label produced by the model. It cannot be validated, so leaving
-# it in place would let an unvalidated citation pass as evidence. Any such
-# bracket is treated as an invalid citation (sentence removed). The same
-# applies to parenthesized citation-shaped labels like "(BNSS s.234)".
-_MALFORMED_STATUTE_CITATION_RE = re.compile(r"\[([A-Za-z]{2,6})\s+s\.(\d{1,3})[^\]]*\]")
-_PAREN_STATUTE_CITATION_RE = re.compile(r"\(([A-Za-z]{2,6})\s+s\.(\d{1,3})[^\)]*\)")
+# A bracket that LOOKS like a statute citation (act-like token + section
+# number) but does not match the CITATION_RE contract, e.g. "[BNS s.103
+# p.29-30]", "[BNS sec.103]", "[BNS §103]", "[BNS 103]" — malformed labels
+# produced by the model. They cannot be validated, so leaving them in place
+# would let an unvalidated citation pass as evidence. Any such bracket is
+# treated as an invalid citation (sentence removed). The same applies to
+# parenthesized citation-shaped labels like "(BNSS s.234)". The act-like
+# token must be UPPERCASE so ordinary bracketed asides ("[Note 2]") are not
+# flagged; document citations (bare hex ids, the "Document <id>" form) are
+# scrubbed from the sentence before this scan so they are never mistaken
+# for statute labels.
+_MALFORMED_STATUTE_CITATION_RE = re.compile(
+    r"\[\s*([A-Z]{2,6})[\s.:§-]*(?:section|sec)?\.?\s*§?\s*(\d{1,3})[^\]]*\]"
+)
+_PAREN_STATUTE_CITATION_RE = re.compile(
+    r"\(([A-Za-z]{2,6})\s+[sS]\.?\s*(\d{1,3})[^\)]*\)"
+)
 
 # [Document d31f9c p.2] / [Document d31f9c] — user-document citations (A5-008).
 # Small models frequently drop the literal "Document" word or brace the id
@@ -98,7 +112,9 @@ _DIGIT_TRANSLATION = {
 # The model sometimes writes "section 103 of the Indian Penal Code" while the
 # evidence corpus is the BNS — a section number that exists in both statutes
 # but means different law. The short code each name maps to is compared
-# against the evidence's act set; a mismatch is a misattribution.
+# against the evidence's act set; a mismatch is a misattribution. The
+# Sanhita full names are included so "section 103 of the Bharatiya Nagarik
+# Suraksha Sanhita" cannot pass on BNS evidence (audit M5).
 _ACT_NAME_ALIASES: dict[str, str] = {
     "indian penal code": "IPC",
     "ipc": "IPC",
@@ -106,9 +122,15 @@ _ACT_NAME_ALIASES: dict[str, str] = {
     "crpc": "CrPC",
     "indian evidence act": "IEA",
     "indian penal sanhita": "IPS",
+    "bharatiya nagarik suraksha sanhita": "BNSS",
+    "nagarik suraksha sanhita": "BNSS",
+    "bharatiya nyaya sanhita": "BNS",
+    "nyaya sanhita": "BNS",
 }
 _ACT_NAME_RE = re.compile(
-    r"\b(indian penal code|ipc|code of criminal procedure|crpc|indian evidence act)\b",
+    r"\b(indian penal code|ipc|code of criminal procedure|crpc|indian evidence act"
+    r"|indian penal sanhita|bharatiya nagarik suraksha sanhita|nagarik suraksha sanhita"
+    r"|bharatiya nyaya sanhita|nyaya sanhita)\b",
     re.IGNORECASE,
 )
 
@@ -117,9 +139,10 @@ _ACT_NAME_RE = re.compile(
 # carry a validated citation or a prose reference to an evidenced section).
 # Indic equivalents cover the multilingual path (D-077).
 _LEGAL_CLAIM_RE = re.compile(
-    r"\b(punished|punishment|imprisonment|imprisoned|liable to|offence|offense|"
-    r"fine|sentence|imprisonment for life|death sentence)\b"
-    r"|दंड|सजा|कारावास|आजीवन|दोषी|अपराध|जुर्माना|দণ্ড|সাজা|কারাবাস|தண்டனை|சிறை",
+    r"\b(punished|punishment|punishable|imprisonment|imprisoned|liable to|offence|offense|"
+    r"fine|sentence|imprisonment for life|death sentence|bailable|cognizable|"
+    r"non-bailable|non-compoundable|compoundable)\b"
+    r"|दंड|दंडनीय|सजा|कारावास|आजीवन|दोषी|अपराध|जुर्माना|দণ্ড|সাজা|কারাবাস|தண்டனை|சிறை",
     re.IGNORECASE,
 )
 
@@ -132,6 +155,7 @@ _CLAIM_VOCABULARY = frozenset(
     {
         "punished",
         "punishment",
+        "punishable",
         "imprisonment",
         "imprisoned",
         "liable",
@@ -140,6 +164,11 @@ _CLAIM_VOCABULARY = frozenset(
         "fine",
         "sentence",
         "death",
+        "life",
+        "term",
+        "bailable",
+        "cognizable",
+        "compoundable",
     }
 )
 
@@ -396,7 +425,9 @@ def extract_citations(text: str) -> list[Citation]:
         Citation(
             act_short=match.group(1).upper(),
             section_number=match.group(2),
-            subsections=match.group(3) or "",
+            # "[BNS s. 103 (1)]" normalizes its subsection to "(1)" so the
+            # canonical label compares equal to the tight contract form.
+            subsections=re.sub(r"\s+", "", match.group(3) or ""),
         )
         for match in CITATION_RE.finditer(_normalize_brackets(text))
     ]
@@ -414,21 +445,27 @@ def extract_document_citations(text: str) -> list[DocumentCitation]:
         # label (not covered by _normalize_brackets). The braces are
         # formatting noise; the id itself is still fully validated below.
         document_id = document_id.strip("{}")
-        citations.append(DocumentCitation(document_id=document_id, page=int(page or 0) or None))
+        citations.append(
+            DocumentCitation(document_id=document_id, page=int(page) if page is not None else None)
+        )
     return citations
 
 
 def _malformed_statute_citations(sentence: str, valid: list[Citation]) -> list[Citation]:
     """Citation-shaped labels that do not match the exact citation contract.
 
-    ``[BNS s.103 p.29-30]`` looks like a statute citation but is not the
-    ``[BNS s.103]`` form, so it cannot be validated; it is reported as an
-    invalid citation rather than silently passing as prose.
+    ``[BNS s.103 p.29-30]``, ``[BNS sec.103]``, ``[BNS 103]`` look like
+    statute citations but are not the ``[BNS s.103]`` form, so they cannot
+    be validated; they are reported as invalid citations rather than
+    silently passing as prose. Document citation labels ("[Document <id>
+    p.1]", bare hex ids) are scrubbed first: an all-caps hex id must never
+    be mistaken for an act short code.
     """
     valid_labels = {citation.label for citation in valid}
+    scrubbed = DOCUMENT_CITATION_RE.sub(" ", sentence)
     malformed: list[Citation] = []
     for regex in (_MALFORMED_STATUTE_CITATION_RE, _PAREN_STATUTE_CITATION_RE):
-        for match in regex.finditer(sentence):
+        for match in regex.finditer(scrubbed):
             if CITATION_RE.fullmatch(match.group(0)):
                 continue  # exact contract form — not malformed
             citation = Citation(act_short=match.group(1).upper(), section_number=match.group(2))
@@ -470,6 +507,16 @@ def _has_section_number(text: str, section: str) -> bool:
 #: every citation is stripped as decorative.
 _LIST_ITEM_RE = re.compile(r"^\s*(?:[*+\-•]|\d{1,3}[.)])\s+")
 
+#: Fragments ending in a known abbreviation ("Mr. Smith", "v. Jones",
+#: "Rs. 500") must not have been split at the abbreviation's period: they
+#: are glued back to the fragment that follows before sentence-level
+#: validation runs (audit: "The fine is Rs. 500 under section 103." was
+#: shredded into "The fine is Rs." + "500 under section 103." and the
+#: claim half lost its citation).
+_ABBREV_END_RE = re.compile(
+    r"\b(?:Mr|Mrs|Ms|Dr|vs|v|No|Nos|Rs|Sr|Jr|St|etc|approx|s|sec)\.$"
+)
+
 
 def _split_sentences(text: str) -> list[str]:
     """Split into sentences, keeping terminal punctuation and trailing whitespace.
@@ -495,7 +542,6 @@ def _split_sentences(text: str) -> list[str]:
         r"(?<=[.!?।॥])(?<!\d[.)])\s+|(?=\n\s*(?:[*+\-•]|\d{1,3}[.)])\s)",
         text,
     )
-    parts = [p if p.strip() else p for p in parts]
     # Re-attach a list marker that was separated from its item: the
     # lookahead above must split BETWEEN items ("\n2. ..."), not detach a
     # marker from the item it starts ("1. [Document ...]" at the start of
@@ -511,7 +557,15 @@ def _split_sentences(text: str) -> list[str]:
             repaired[-1] = repaired[-1].rstrip() + " " + stripped + " "
             continue
         repaired.append(part)
-    return [p for p in repaired if p.strip()]
+    # Re-join fragments split at an abbreviation's period ("Mr." / "v." /
+    # "Rs."): the period belongs to the abbreviation, not the sentence.
+    joined: list[str] = []
+    for part in repaired:
+        if joined and _ABBREV_END_RE.search(joined[-1].rstrip()):
+            joined[-1] = joined[-1].rstrip() + " " + part.lstrip()
+            continue
+        joined.append(part)
+    return [p for p in joined if p.strip()]
 
 
 #: A fragment that is nothing but citation labels, e.g. "[BNS s.103]" or
@@ -780,6 +834,13 @@ def validate_citations(
     check = CitationCheck()
 
     kept: list[str] = []
+    # Whether any kept fragment carries actual text: an answer that is
+    # nothing but citation labels (a bullet list of labels with no prose)
+    # sanitizes to the empty string so the refusal path fires, instead of
+    # surviving as marker debris ("* *"). Any letter or digit counts —
+    # "Section 103" is real text even though both tokens fail the
+    # content-token filter.
+    content_seen = False
     sentences, label_only_labels = _sentence_stream(_normalize_brackets(answer))
     for position, (sentence, _starts_paragraph) in enumerate(sentences):
         act_name = _ACT_NAME_RE.search(sentence)
@@ -821,6 +882,7 @@ def validate_citations(
                 check.uncited_legal_claims.append(bare)
                 check.removed_sentences.append(sentence.strip())
                 continue
+            content_seen = content_seen or bool(re.search(r"[A-Za-z0-9]", bare))
             kept.append(gated)
             continue
 
@@ -842,12 +904,16 @@ def validate_citations(
             # An identity/capability sentence is not a legal claim: any
             # citation attached to it is decorative and is stripped.
             check.irrelevant_citations.extend(all_labels)
-            kept.append(_strip_labels(sentence, all_labels))
+            stripped_self = _strip_labels(sentence, all_labels)
+            content_seen = content_seen or bool(re.search(r"[A-Za-z0-9]", stripped_self))
+            kept.append(stripped_self)
             continue
 
         bare = _strip_labels(sentence, all_labels)
         content = _content_tokens(bare)
         indic_sentence = _has_indic_content(bare)
+        has_text = bool(re.search(r"[A-Za-z0-9]", bare))
+        content_seen = content_seen or bool(content) or indic_sentence or has_text
         if not content and not indic_sentence:
             # No substantive tokens left: the citation decorates an empty
             # sentence, so it supports nothing.
@@ -866,10 +932,14 @@ def validate_citations(
         # document NOT in the evidence still fails existence and is
         # removed with its sentence.
         relevant_statute += [
-            c for c in statute_citations if c not in relevant_statute and c.label in label_only_labels
+            c
+            for c in statute_citations
+            if c not in relevant_statute and c.label in label_only_labels
         ]
         relevant_document += [
-            d for d in document_citations if d not in relevant_document and d.label in label_only_labels
+            d
+            for d in document_citations
+            if d not in relevant_document and d.label in label_only_labels
         ]
         bridged = False
         if not relevant_statute and not relevant_document and indic_sentence:
@@ -908,7 +978,20 @@ def validate_citations(
             if citation.document_id not in check.cited_document_ids:
                 check.cited_document_ids.append(citation.document_id)
 
+    if not content_seen:
+        # Label-only answers carry no claim: sanitized to empty so the
+        # caller's no-citation refusal path takes over.
+        check.citations_removed = len(check.removed_sentences)
+        return "", check
     sanitized = " ".join(part.rstrip() + " " for part in kept).strip()
+    # Normalize variant statute labels ("[BNS S.103]", "[BNS s. 103]") to
+    # the canonical "[BNS s.103]" form so every downstream consumer sees
+    # one shape (same contract as the bare-document normalization below).
+    def _canonical_label(m: re.Match[str]) -> str:
+        subsections = re.sub(r"[^0-9()]", "", m.group(3) or "")
+        return f"[{m.group(1).upper()} s.{m.group(2)}{subsections}]"
+
+    sanitized = CITATION_RE.sub(_canonical_label, sanitized)
     sanitized = re.sub(r"\s{2,}", " ", sanitized)
     # Normalize bare document citations ("[{id} p.1]") to the canonical
     # "[Document <id> p.N]" contract form so every downstream consumer

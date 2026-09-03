@@ -211,10 +211,14 @@ def test_document_citation_unknown_document_is_removed() -> None:
 
 
 def test_missing_citations_leave_no_valid_citations() -> None:
+    # "punishable" is claim vocabulary (audit M4): a punishment claim with
+    # no citation and no evidenced section reference is an unsupported
+    # legal claim — removed so the refusal path fires (A4-016).
     answer = "Murder is punishable with death."
     _, check = validate_citations(answer, _evidence_chunks())
     assert not check.valid_citations
-    assert not check.removed_sentences  # nothing fabricated, simply uncited
+    assert check.removed_sentences == ["Murder is punishable with death."]
+    assert check.uncited_legal_claims == ["Murder is punishable with death."]
 
 
 def test_build_sources_carries_traceability() -> None:
@@ -543,3 +547,170 @@ def test_numbered_list_of_label_only_citations_is_kept() -> None:
     assert "p.1" in sanitized
     assert check.cited_document_ids
     assert not check.irrelevant_citations
+
+
+# ---------------------------------------------------------------------------
+# Citation label variants (audit H4): a bracket that LOOKS like a statute
+# citation can never survive as unvalidated prose
+# ---------------------------------------------------------------------------
+
+
+def test_citation_case_and_space_variants_normalize_and_validate() -> None:
+    """[BNS S.103], [BNS s. 103], [bns s.103] normalize to the canonical
+    contract and validate against the same evidence."""
+    evidence = _bns103_evidence()
+    for label in ("[BNS S.103]", "[BNS s. 103]", "[bns s.103]"):
+        sanitized, check = validate_citations(
+            f"Murder is punished with death {label}.", evidence
+        )
+        assert check.valid_citations, label
+        assert not check.removed_sentences, label
+        assert "[BNS s.103]" in sanitized, label
+
+
+def test_malformed_label_variants_are_removed() -> None:
+    """sec./§/bare-number citation shapes cannot be validated: the sentence
+    is removed rather than letting an unvalidated label pass as prose."""
+    evidence = _bns103_evidence()
+    for label in ("[BNS sec.103]", "[BNS §103]", "[BNS 103]", "[BNS s. 999]"):
+        sanitized, check = validate_citations(
+            f"Murder is punished with death {label}.", evidence
+        )
+        assert not check.valid_citations, label
+        assert check.removed_sentences, label
+        assert "Murder" not in sanitized, label
+
+
+def test_bracketed_asides_are_not_malformed_citations() -> None:
+    """Ordinary brackets with an uppercase-word + number are untouched; hex
+    document ids are never mistaken for statute labels."""
+    evidence = _bns103_evidence()
+    hits = [
+        DocumentHit(
+            document_id="abcdef1234567890",
+            text="Legal notice text about eviction.",
+            page_start=1,
+            page_end=2,
+            score=0.9,
+            chunk_id="c1",
+        )
+    ]
+    sanitized, check = validate_citations(
+        "The notice concerns eviction [Document abcdef1234567890 p.1]. "
+        "See the summary [Note 2] for details.",
+        evidence,
+        document_hits=hits,
+    )
+    assert not check.invalid_citations
+    assert "[Note 2]" in sanitized
+    assert check.cited_document_ids == ["abcdef1234567890"]
+
+
+# ---------------------------------------------------------------------------
+# Claim vocabulary (audit M4)
+# ---------------------------------------------------------------------------
+
+
+def test_punishable_claim_without_citation_is_removed() -> None:
+    evidence = _bns103_evidence()
+    sanitized, check = validate_citations(
+        "Cyber terrorism is punishable with death.", evidence
+    )
+    assert sanitized == ""
+    assert check.uncited_legal_claims == ["Cyber terrorism is punishable with death."]
+
+
+def test_sibling_citation_cannot_ground_cross_offence_claim() -> None:
+    """A theft claim is not grounded by the murder section's citation just
+    because both mention imprisonment for life: "life" is claim
+    vocabulary, so sibling grounding needs a substantive shared token."""
+    evidence = _bns103_evidence()
+    answer = (
+        "Theft is punishable with imprisonment for life. "
+        "This is the rule for murder [BNS s.103]."
+    )
+    sanitized, check = validate_citations(answer, evidence)
+    assert check.removed_sentences == ["Theft is punishable with imprisonment for life."]
+    assert "Theft" not in sanitized
+
+
+# ---------------------------------------------------------------------------
+# Prose act-name aliases (audit M5)
+# ---------------------------------------------------------------------------
+
+
+def test_bnss_full_name_in_bns_answer_is_misattribution() -> None:
+    evidence = _bns103_evidence()
+    sanitized, check = validate_citations(
+        "Under section 103 of the Bharatiya Nagarik Suraksha Sanhita the police may detain.",
+        evidence,
+    )
+    assert check.misattributed_act_sentences
+    assert sanitized == ""
+
+
+def test_bns_full_name_in_bns_answer_is_not_misattribution() -> None:
+    evidence = _bns103_evidence()
+    sanitized, check = validate_citations(
+        "Under the Bharatiya Nyaya Sanhita, murder is punished with death [BNS s.103].",
+        evidence,
+    )
+    assert not check.misattributed_act_sentences
+    assert "[BNS s.103]" in sanitized
+
+
+# ---------------------------------------------------------------------------
+# Page-zero document citations (audit M10)
+# ---------------------------------------------------------------------------
+
+
+def test_document_page_zero_is_invalid() -> None:
+    hits = [
+        DocumentHit(
+            document_id="d31f9c11",
+            text="Legal notice text about eviction.",
+            page_start=1,
+            page_end=2,
+            score=0.9,
+            chunk_id="c1",
+        )
+    ]
+    sanitized, check = validate_citations(
+        "The notice concerns eviction [Document d31f9c11 p.0].", [], document_hits=hits
+    )
+    assert check.invalid_document_citations == ["[Document d31f9c11 p.0]"]
+    assert sanitized == ""
+
+
+# ---------------------------------------------------------------------------
+# Abbreviation-aware sentence splitting (audit)
+# ---------------------------------------------------------------------------
+
+
+def test_abbreviation_periods_do_not_split_sentences() -> None:
+    evidence = _bns103_evidence()
+    sanitized, check = validate_citations(
+        "Mr. Smith v. Jones was decided in 2019. "
+        "The fine is Rs. 500 under section 103. [BNS s.103]",
+        evidence,
+    )
+    # The claim sentence keeps its citation; the case-name sentence is kept
+    # as ordinary prose.
+    assert check.valid_citations == [
+        check.valid_citations[0]
+    ]  # exactly one citation validated
+    assert "Rs. 500" in sanitized
+    assert "Mr. Smith v. Jones" in sanitized
+
+
+# ---------------------------------------------------------------------------
+# Label-only answers (audit: bullet debris)
+# ---------------------------------------------------------------------------
+
+
+def test_label_only_bullet_answer_sanitizes_to_empty() -> None:
+    evidence = _bns103_evidence()
+    sanitized, check = validate_citations(
+        "* [BNS s.103]\n* [BNS s.103]", evidence
+    )
+    assert sanitized == ""
