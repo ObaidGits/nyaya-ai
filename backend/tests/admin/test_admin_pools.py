@@ -223,6 +223,21 @@ class TestProviderPoolAPI:
         assert client.app.state.provider_pool_runtime.stt is not None
         assert client.app.state.provider_pool_runtime.tts is not None
 
+    def test_pool_save_never_drops_console_secrets(self, client: TestClient) -> None:
+        """Regression (2026-09-03 live incident): a pool save used to replace
+        the whole secrets section with pool-only keys, silently destroying
+        the console-entered provider key — every chat then failed."""
+        # Establish a console secret via the settings endpoint.
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "secrets": {"llm_api_key": "sk-console-key"}, "force": True},
+            headers=MUTATING,
+        )
+        client.put("/api/v1/admin/providers", json=_pool_payload(), headers=MUTATING)
+        persisted = client.app.state.admin_store.load()
+        assert persisted["secrets"]["llm_api_key"] == "sk-console-key"
+        assert persisted["secrets"]["pool:llm:groq-main"] == "gsk-pool-secret"
+
     def test_pool_persists_across_restart(self, client: TestClient, tmp_path: Path) -> None:
         client.put("/api/v1/admin/providers", json=_pool_payload(), headers=MUTATING)
         # "Restart": a brand-new app from the same settings path.

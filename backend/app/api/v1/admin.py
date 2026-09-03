@@ -879,8 +879,25 @@ async def put_providers(
                 )
 
     # -- secret key hygiene ---------------------------------------------------
-    for key in {*body.secrets, *body.clear_secrets}:
+    # New secrets must reference an entry in the submitted pools. Clearing is
+    # format-checked only: the entry being removed in this very request (or
+    # already gone) must still have its stale key removable.
+    from app.providers.models import POOL_SECRET_PREFIX
+
+    for key in body.secrets:
         if not _pool_secret_keys_ok(key, pools):
+            raise AppError(
+                f"Invalid pool secret key '{mask_secret(key) or '(empty)'}'.",
+                status_code=422,
+                code="PROVIDER_POOL_INVALID",
+            )
+    for key in body.clear_secrets:
+        parts = key.split(":", 2)
+        if (
+            len(parts) != 3
+            or not key.startswith(POOL_SECRET_PREFIX)
+            or parts[1] not in ("llm", "stt", "tts")
+        ):
             raise AppError(
                 f"Invalid pool secret key '{mask_secret(key) or '(empty)'}'.",
                 status_code=422,
@@ -888,12 +905,11 @@ async def put_providers(
             )
 
     # -- merge secrets (console wins; clear removes) ---------------------------
+    # Start from ALL persisted secrets (regular console secrets AND pool
+    # entry keys): a pool save must never drop the console-entered provider
+    # key — only the explicitly cleared keys are removed.
     persisted = store.load()
-    merged_secrets: dict[str, str] = {
-        k: v
-        for k, v in persisted["secrets"].items()
-        if k.startswith("pool:")
-    }
+    merged_secrets: dict[str, str] = dict(persisted["secrets"])
     merged_secrets.update({k: v for k, v in body.secrets.items() if v})
     for key in body.clear_secrets:
         merged_secrets.pop(key, None)
