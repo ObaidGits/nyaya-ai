@@ -41,6 +41,11 @@ class CloudProviderError(AppError):
     status_code = 503
     code = "LLM_PROVIDER_UNAVAILABLE"
 
+    #: True when the provider answered a definitive "no" (auth/model/request
+    #: rejection — HTTP 4xx semantics). The failover router cools these down
+    #: for much longer than transient 5xx/network failures.
+    permanent: bool = False
+
 
 # name -> (default base url, default model, display name). URLs/models are
 # the providers' documented official endpoints (verified against current
@@ -171,9 +176,11 @@ class OpenAICompatibleProvider(LLMProvider):
                         "cloud llm rejected request",
                         extra={"provider": self._provider, "status": status},
                     )
-                    raise CloudProviderError(
+                    _reject = CloudProviderError(
                         "The generation provider rejected the request."
-                    ) from None
+                    )
+                    _reject.permanent = True
+                    raise _reject from None
                 logger.warning(
                     "cloud llm server error",
                     extra={"provider": self._provider, "status": status},
@@ -290,9 +297,11 @@ class OpenAICompatibleProvider(LLMProvider):
                         "cloud llm rejected request (stream)",
                         extra={"provider": self._provider, "status": status},
                     )
-                    raise CloudProviderError(
+                    _reject = CloudProviderError(
                         "The generation provider rejected the request."
-                    ) from None
+                    )
+                    _reject.permanent = True
+                    raise _reject from None
                 logger.warning(
                     "cloud llm streaming failed",
                     extra={"provider": self._provider, "status": status},

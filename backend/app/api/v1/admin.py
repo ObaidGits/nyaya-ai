@@ -25,6 +25,7 @@ from app.core.errors import AppError
 from app.core.rate_limit import ADMIN_LOGIN_SCOPE, enforce_rate_limit
 from app.llm.base import ProviderHealthState
 from app.llm.registry import ProviderRegistry, UnknownProviderError
+from app.providers.models import ProviderEntryConfig, ProviderPoolConfig
 
 #: Brute-force budget for the credential check itself (M13): 5 attempts per
 #: client IP per minute. Applied BEFORE any credential comparison so both
@@ -162,15 +163,20 @@ def request_llm_providers() -> list[dict[str, Any]]:
 def _apply_settings(request: Request, new_settings: Settings) -> None:
     """Swap effective settings and rebuild the services that cache them.
 
-    The LLM provider is resolved per request (registry), so only the speech
-    service and the retrieval service (top-k / thresholds / corpus path) need
-    an explicit rebuild. The cached LLM health probe is dropped so the brain
-    status reflects the new provider immediately.
+    The LLM provider is resolved per request (registry or the provider
+    pool), so only the speech service and the retrieval service (top-k /
+    thresholds / corpus path) need an explicit rebuild. The cached LLM
+    health probe is dropped so the brain status reflects the new provider
+    immediately. Provider pools are rebuilt from the store so a pool whose
+    entries reference the shared ENV settings picks up changes too.
     """
-    from app.speech.service import create_speech_service
+    from app.providers.runtime import rebuild_pool_runtime
 
     request.app.state.settings = new_settings
-    request.app.state.speech_service = create_speech_service(new_settings)
+    store: AdminSettingsStore = request.app.state.admin_store
+    rebuild_pool_runtime(
+        request.app.state, store, new_settings, request.app.state.llm_registry
+    )
     retrieval = _build_retrieval(new_settings, request)
     request.app.state.retrieval_service = retrieval
     request.app.state.llm_health_cache = None
@@ -650,6 +656,293 @@ async def test_tts(request: Request, _: AdminDep) -> TestResult:
         latency_ms=int((time.monotonic() - start) * 1000),
         message=f"TTS provider returned {len(audio)} bytes of audio.",
     )
+
+
+# --- provider pools (failover, 2026-09) --------------------------------------------
+
+#: Provider names constructible in each pool (mirrors the builders).
+_STT_PROVIDER_NAMES: frozenset[str] = frozenset(
+    {"faster-whisper", "whisper", "indicconformer", "openai", "browser"}
+)
+_TTS_PROVIDER_NAMES: frozenset[str] = frozenset(
+    {"piper", "parler-tts", "openai", "browser"}
+)
+
+
+class PoolSaveRequest(BaseModel):
+    """Replace all pool configs (full-state PUT, mirrors /settings)."""
+
+    pools: dict[str, ProviderPoolConfig]
+    #: New/rotated per-entry API keys, keyed "pool:<name>:<entry_id>".
+    secrets: dict[str, str] = Field(default_factory=dict)
+    #: Secret keys to remove (fall back to none — pool entries have no
+    #: environment counterpart).
+    clear_secrets: list[str] = Field(default_factory=list)
+    #: Skip per-entry verification (offline setup escape hatch).
+    force: bool = False
+
+
+class PoolEntryTestRequest(BaseModel):
+    """Test a DRAFT entry's credentials before it is saved."""
+
+    pool: str = Field(pattern="^(llm|stt|tts)$")
+    entry: ProviderEntryConfig
+    api_key: str = ""
+
+
+def _pool_secret_keys_ok(key: str, pools: dict[str, ProviderPoolConfig]) -> bool:
+    from app.providers.models import POOL_SECRET_PREFIX
+
+    if not key.startswith(POOL_SECRET_PREFIX):
+        return False
+    parts = key.split(":", 2)
+    if len(parts) != 3:
+        return False
+    _, pool_name, entry_id = parts
+    pool = pools.get(pool_name)
+    return pool is not None and pool.entry(entry_id) is not None
+
+
+async def _verify_pool_entry(
+    request: Request, pool_name: str, entry: ProviderEntryConfig, api_key: str
+) -> tuple[bool, str]:
+    """One entry's credential/model verification (test-before-save).
+
+    LLM entries get the full classified probe with a chat round-trip
+    (D-096). Cloud speech entries ("openai") get a live round-trip; local
+    speech entries (piper/whisper/...) are verified by construction —
+    their credentials are validated on first use, and model weights are
+    deliberately NOT loaded during a settings save.
+    """
+    settings = cast("Settings", request.app.state.settings)
+    if pool_name == "llm":
+        from app.llm.pool import entry_settings
+
+        registry = cast("ProviderRegistry", request.app.state.llm_registry)
+        try:
+            provider = registry.create(
+                entry.provider, entry_settings(settings, entry, api_key)
+            )
+        except UnknownProviderError as exc:
+            return False, str(exc)
+        health = await provider.probe(verify_chat=True)
+        ok = health.state is ProviderHealthState.HEALTHY
+        detail = health.detail or ("chat round-trip verified" if ok else health.state.value)
+        return ok, f"{entry.provider}/{entry.model or health.model}: {detail}"
+
+    from app.speech.pool import build_speech_entry_provider
+
+    try:
+        provider = build_speech_entry_provider(settings, entry, api_key, pool_name)
+    except AppError as exc:
+        return False, exc.message
+    except Exception:
+        return False, f"The '{entry.provider}' {pool_name.upper()} provider could not be constructed."
+    if entry.provider == "openai":
+        try:
+            if pool_name == "tts":
+                await provider.synthesize("Test.", language="en")  # type: ignore[attr-defined]
+            else:
+                await provider.transcribe(  # type: ignore[attr-defined]
+                    _silence_wav(), mime_type="audio/wav", language=None
+                )
+        except AppError as exc:
+            if pool_name == "stt" and exc.code == "EMPTY_TRANSCRIPTION":
+                pass  # provider reached and ran — pipeline proven
+            else:
+                return False, exc.message
+        except Exception:
+            return False, f"The '{entry.provider}' {pool_name.upper()} provider test failed."
+    return True, f"{entry.provider}: constructed and reachable."
+
+
+def _pools_view(request: Request) -> dict[str, Any]:
+    """Truthful pool state: config + secret presence + runtime health."""
+    store = _store(request)
+    runtime = getattr(request.app.state, "provider_pool_runtime", None)
+    board = getattr(request.app.state, "provider_health_board", None)
+    configs = store.load_pool_configs()
+    pool_secrets = store.load_pool_secrets()
+    settings = cast("Settings", request.app.state.settings)
+    views: dict[str, Any] = {}
+    for name in ("llm", "stt", "tts"):
+        config = configs.get(name) or ProviderPoolConfig()
+        entries: list[dict[str, Any]] = []
+        for entry in config.entries:
+            health: dict[str, Any] = {"state": "untested"}
+            if board is not None:
+                state = board.snapshot(name).get(f"{name}:{entry.id}")
+                if state is not None:
+                    health = state.model_dump(mode="json")
+            entries.append(
+                {
+                    **entry.model_dump(mode="json"),
+                    "api_key_set": bool(pool_secrets.get(name, entry.id)),
+                    "health": health,
+                }
+            )
+        failover_active = (
+            runtime is not None and getattr(runtime, name, None) is not None
+        )
+        views[name] = {
+            "entries": entries,
+            "default_entry_id": config.default_entry_id,
+            "strategy": config.strategy.value,
+            # Honest mode line: pool mode only when the runtime actually
+            # built a failover wrapper for this capability.
+            "mode": "pool" if failover_active else "environment",
+        }
+    return {
+        "pools": views,
+        "registered_llm_providers": sorted(
+            cast("ProviderRegistry", request.app.state.llm_registry).available()
+        ),
+        "speech_stt_providers": sorted(_STT_PROVIDER_NAMES),
+        "speech_tts_providers": sorted(_TTS_PROVIDER_NAMES),
+        "env_fallback": {
+            "llm_provider": settings.llm_provider,
+            "llm_model": settings.llm_model,
+            "speech_stt_provider": settings.speech_stt_provider,
+            "speech_tts_provider": settings.speech_tts_provider,
+        },
+    }
+
+
+@router.get("/providers")
+async def get_providers(request: Request, _: AdminDep) -> dict[str, Any]:
+    return _pools_view(request)
+
+
+@router.post("/providers/test")
+async def test_pool_entry(
+    request: Request, _: AdminDep, body: PoolEntryTestRequest
+) -> TestResult:
+    start = time.monotonic()
+    ok, message = await _verify_pool_entry(
+        request, body.pool, body.entry, body.api_key
+    )
+    return TestResult(
+        success=ok,
+        latency_ms=int((time.monotonic() - start) * 1000),
+        message=message,
+    )
+
+
+@router.put("/providers")
+async def put_providers(
+    request: Request, _: AdminMutatingDep, body: PoolSaveRequest
+) -> dict[str, Any]:
+    store = _store(request)
+    settings = cast("Settings", request.app.state.settings)
+    registry = cast("ProviderRegistry", request.app.state.llm_registry)
+
+    # -- structural validation ------------------------------------------------
+    pools = {
+        name: config
+        for name, config in body.pools.items()
+        if name in ("llm", "stt", "tts")
+    }
+    for name, config in pools.items():
+        try:
+            config.validate_default()
+        except ValueError as exc:
+            raise AppError(
+                f"The {name.upper()} pool is invalid: {exc}",
+                status_code=422,
+                code="PROVIDER_POOL_INVALID",
+            ) from exc
+        ids = [entry.id for entry in config.entries]
+        if len(ids) != len(set(ids)):
+            raise AppError(
+                f"The {name.upper()} pool has duplicate entry ids.",
+                status_code=422,
+                code="PROVIDER_POOL_INVALID",
+            )
+        for entry in config.entries:
+            if name == "llm" and entry.provider not in registry.available():
+                raise AppError(
+                    f"Unknown LLM provider '{entry.provider}' in the {name} pool.",
+                    status_code=422,
+                    code="PROVIDER_POOL_INVALID",
+                )
+            if name == "stt" and entry.provider not in _STT_PROVIDER_NAMES:
+                raise AppError(
+                    f"Unknown STT provider '{entry.provider}' in the {name} pool.",
+                    status_code=422,
+                    code="PROVIDER_POOL_INVALID",
+                )
+            if name == "tts" and entry.provider not in _TTS_PROVIDER_NAMES:
+                raise AppError(
+                    f"Unknown TTS provider '{entry.provider}' in the {name} pool.",
+                    status_code=422,
+                    code="PROVIDER_POOL_INVALID",
+                )
+
+    # -- secret key hygiene ---------------------------------------------------
+    for key in {*body.secrets, *body.clear_secrets}:
+        if not _pool_secret_keys_ok(key, pools):
+            raise AppError(
+                f"Invalid pool secret key '{mask_secret(key) or '(empty)'}'.",
+                status_code=422,
+                code="PROVIDER_POOL_INVALID",
+            )
+
+    # -- merge secrets (console wins; clear removes) ---------------------------
+    persisted = store.load()
+    merged_secrets: dict[str, str] = {
+        k: v
+        for k, v in persisted["secrets"].items()
+        if k.startswith("pool:")
+    }
+    merged_secrets.update({k: v for k, v in body.secrets.items() if v})
+    for key in body.clear_secrets:
+        merged_secrets.pop(key, None)
+
+    # -- test-before-save: every enabled entry must verify (unless force) -----
+    if not body.force:
+        from app.providers.models import PoolSecrets
+
+        pool_secrets = PoolSecrets()
+        for key, value in merged_secrets.items():
+            _, pool_name, entry_id = key.split(":", 2)
+            pool_secrets.set(pool_name, entry_id, value)
+        failures: list[str] = []
+        for name, config in pools.items():
+            for entry in config.enabled_entries():
+                ok, message = await _verify_pool_entry(
+                    request, name, entry, pool_secrets.get(name, entry.id)
+                )
+                if not ok:
+                    failures.append(f"{name}:{entry.id} — {message}")
+        if failures:
+            raise AppError(
+                "Not saved — these pool entries did not verify:\n"
+                + "\n".join(failures)
+                + "\nThe previous provider configuration remains active. "
+                "Fix the entries and retry, or use 'Save anyway' to skip verification.",
+                status_code=422,
+                code="PROVIDER_POOL_VERIFY_FAILED",
+            )
+
+    # -- persist + rebuild ----------------------------------------------------
+    store.save(
+        persisted["settings"],
+        merged_secrets,
+        persisted.get("corpus") or {},
+        pools={name: config.model_dump(mode="json") for name, config in pools.items()},
+    )
+    from app.providers.runtime import rebuild_pool_runtime
+
+    rebuild_pool_runtime(request.app.state, store, settings, registry)
+    logger.info(
+        "admin provider pools updated",
+        extra={
+            "pools": {
+                name: len(config.entries) for name, config in pools.items()
+            }
+        },
+    )
+    return _pools_view(request)
 
 
 # --- system status ----------------------------------------------------------------

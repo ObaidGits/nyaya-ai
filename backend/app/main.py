@@ -160,6 +160,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.speech.service import create_speech_service
 
     app.state.speech_service = create_speech_service(settings)
+    # Provider pools (failover, 2026-09): persisted pool configs — if any —
+    # replace the single-provider path with failover wrappers. Empty pools
+    # leave everything above unchanged (ENV mode).
+    from app.providers.runtime import rebuild_pool_runtime
+
+    rebuild_pool_runtime(app.state, admin_store, settings, app.state.llm_registry)
     if settings.speech_preload:
         # D-079 latency: load STT/TTS weights at startup in the background so
         # the first speech request doesn't pay the model-load cost.

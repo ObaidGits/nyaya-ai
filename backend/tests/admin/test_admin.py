@@ -1297,7 +1297,7 @@ class TestPersistencePrecedence:
         from app.admin.store import AdminSettingsStore
 
         store = AdminSettingsStore("")
-        empty = {"settings": {}, "secrets": {}, "corpus": {}}
+        empty = {"settings": {}, "secrets": {}, "corpus": {}, "pools": {}}
         assert store.load() == {**empty, "secrets_unreadable": []}
         assert not store.secrets_persisted
         store.save(settings={"rate_limit_speech_per_minute": 3}, secrets={})

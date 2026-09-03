@@ -35,6 +35,10 @@ from cryptography.fernet import InvalidToken
 
 from app.admin.secretbox import KEY_FILE_NAME, SecretBox
 from app.core.config import Settings
+from app.providers.models import (
+    POOL_SECRET_PREFIX,
+    ProviderPoolConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +90,11 @@ SECRET_FIELDS: frozenset[str] = frozenset(
     }
 )
 
+#: Pool names persisted under the "provider_pools" section. Secrets for
+#: pool entries live in the encrypted section with "pool:<name>:<entry_id>"
+#: keys (same Fernet treatment as SECRET_FIELDS).
+POOL_NAMES: tuple[str, ...] = ("llm", "stt", "tts")
+
 
 class AdminSettingsStore:
     """JSON-backed persistence for admin-configurable settings."""
@@ -99,6 +108,10 @@ class AdminSettingsStore:
         # Fields whose stored ciphertext could not be decrypted with the
         # current master key. The stored data is preserved untouched.
         self.secrets_unreadable: list[str] = []
+        # Current pool configs (raw dicts, validated on use). Loaded from
+        # the file on first load(); kept in memory so an unrelated save
+        # (e.g. corpus activation) never drops them.
+        self._pools: dict[str, dict[str, Any]] | None = None
         # Master key: operator env value wins; otherwise a once-generated
         # key file NEXT TO the settings file (same persistent volume).
         key_path = self._path.parent / KEY_FILE_NAME if self._path.name else None
@@ -127,6 +140,7 @@ class AdminSettingsStore:
             "secrets": dict(self._runtime_secrets),
             "corpus": {},
             "secrets_unreadable": [],
+            "pools": {},
         }
         # Empty path (persistence disabled) or a directory: no stored state.
         if not self._path.name or not self._path.is_file():
@@ -142,6 +156,8 @@ class AdminSettingsStore:
             if key in EDITABLE_FIELDS
         }
         corpus = raw.get("corpus") if isinstance(raw.get("corpus"), dict) else {}
+        pools = self._parse_pools(raw.get("provider_pools"))
+        self._pools = pools
         stored = self._decrypt_stored(raw.get("secrets_encrypted"))
         legacy_secrets = {
             key: value
@@ -172,7 +188,35 @@ class AdminSettingsStore:
             "secrets": dict(self._runtime_secrets),
             "corpus": corpus,
             "secrets_unreadable": list(self.secrets_unreadable),
+            "pools": pools,
         }
+
+    def _parse_pools(self, raw_pools: Any) -> dict[str, dict[str, Any]]:
+        """Validate the file's provider_pools section.
+
+        Invalid pools are logged and skipped (environment single-provider
+        mode applies for that capability) — one malformed pool must never
+        block startup or the other pools.
+        """
+        if not isinstance(raw_pools, dict):
+            return {}
+        pools: dict[str, dict[str, Any]] = {}
+        for name in POOL_NAMES:
+            raw = raw_pools.get(name)
+            if raw is None:
+                continue
+            try:
+                config = ProviderPoolConfig.model_validate(raw)
+                config.validate_default()
+            except Exception:
+                logger.warning(
+                    "persisted '%s' provider pool is invalid; ignoring it "
+                    "(environment single-provider mode applies)",
+                    name,
+                )
+                continue
+            pools[name] = config.model_dump(mode="json")
+        return pools
 
     def _decrypt_stored(self, encrypted: Any) -> dict[str, str]:
         """Decrypt the file's ``secrets_encrypted`` section.
@@ -185,7 +229,8 @@ class AdminSettingsStore:
             return {}
         decrypted: dict[str, str] = {}
         for key, entry in encrypted.items():
-            if key not in SECRET_FIELDS or not isinstance(entry, dict):
+            is_known_secret = key in SECRET_FIELDS or key.startswith(POOL_SECRET_PREFIX)
+            if not is_known_secret or not isinstance(entry, dict):
                 continue
             token = str(entry.get("data") or "")
             if not token:
@@ -212,16 +257,24 @@ class AdminSettingsStore:
         settings: dict[str, Any],
         secrets: dict[str, Any],
         corpus: dict[str, Any] | None = None,
+        pools: dict[str, Any] | None = None,
     ) -> None:
-        """Persist whitelisted non-secret settings (+ corpus manifest) and
-        the console secrets as Fernet ciphertext, atomically.
+        """Persist whitelisted non-secret settings (+ corpus manifest), the
+        provider pool configs, and the console secrets (including per-entry
+        pool keys) as Fernet ciphertext, atomically.
 
         A store with an empty path skips the disk write (persistence
-        disabled); changes then apply in-memory only.
+        disabled); changes then apply in-memory only. When ``pools`` is not
+        given, the pools last seen by ``load()`` are carried over so an
+        unrelated save (corpus activation, history change) never drops them.
         """
         self._runtime_secrets = {
-            key: value for key, value in secrets.items() if key in SECRET_FIELDS and value
+            key: value
+            for key, value in secrets.items()
+            if value and (key in SECRET_FIELDS or key.startswith(POOL_SECRET_PREFIX))
         }
+        if pools is not None:
+            self._pools = self._parse_pools(pools)
         if not str(self._path) or not self._path.name:
             return
         clean_settings = {k: v for k, v in settings.items() if k in EDITABLE_FIELDS}
@@ -261,6 +314,7 @@ class AdminSettingsStore:
             "secrets": {},  # legacy plaintext section: always empty now
             "secrets_encrypted": encrypted,
             "corpus": corpus,
+            "provider_pools": self._pools or {},
         }
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(".tmp")
@@ -283,6 +337,24 @@ class AdminSettingsStore:
             return {}
         existing = raw.get("secrets_encrypted")
         return existing if isinstance(existing, dict) else {}
+
+    def load_pool_configs(self) -> dict[str, ProviderPoolConfig]:
+        """Validated pool configs by name (llm/stt/tts); empty = ENV mode."""
+        return {
+            name: ProviderPoolConfig.model_validate(raw)
+            for name, raw in self.load()["pools"].items()
+        }
+
+    def load_pool_secrets(self) -> "PoolSecrets":
+        """Per-entry API keys from the decrypted secrets section."""
+        from app.providers.models import PoolSecrets
+
+        pool_secrets = PoolSecrets()
+        for key, value in self.load()["secrets"].items():
+            if key.startswith(POOL_SECRET_PREFIX):
+                _prefix, pool, entry_id = key.split(":", 2)
+                pool_secrets.set(pool, entry_id, value)
+        return pool_secrets
 
     def apply_overrides(self, base: Settings) -> Settings:
         """Merge persisted values over the environment-provided settings.

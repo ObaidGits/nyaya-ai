@@ -32,7 +32,15 @@ def get_provider_registry(request: Request) -> ProviderRegistry:
 
 
 def get_llm_provider(request: Request) -> LLMProvider:
-    """Resolve the configured LLM provider (REQUIREMENTS.md LLM-002/LLM-003)."""
+    """Resolve the LLM provider (REQUIREMENTS.md LLM-002/LLM-003).
+
+    A configured provider pool takes precedence (failover across entries,
+    default entry first); with no pool — or an empty one — the unchanged
+    single-provider ENV path applies.
+    """
+    runtime = getattr(request.app.state, "provider_pool_runtime", None)
+    if runtime is not None and runtime.llm is not None:
+        return runtime.llm
     settings = cast(Settings, request.app.state.settings)
     registry = cast(ProviderRegistry, request.app.state.llm_registry)
     try:

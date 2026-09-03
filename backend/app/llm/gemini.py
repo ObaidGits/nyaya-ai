@@ -44,6 +44,10 @@ class GeminiProviderError(AppError):
     status_code = 503
     code = "LLM_PROVIDER_UNAVAILABLE"
 
+    #: See CloudProviderError.permanent — definitive 4xx rejections are
+    #: permanent and get a long failover cooldown.
+    permanent: bool = False
+
 
 class GeminiProvider(LLMProvider):
     """Concrete provider for Google Gemini."""
@@ -132,9 +136,11 @@ class GeminiProvider(LLMProvider):
                     # Google answers 400 (not 401) for a bad key — never
                     # transient.
                     logger.warning("gemini rejected request", extra={"status": status})
-                    raise GeminiProviderError(
+                    _reject = GeminiProviderError(
                         "The generation provider rejected the request."
-                    ) from None
+                    )
+                    _reject.permanent = True
+                    raise _reject from None
                 logger.warning("gemini server error", extra={"status": status})
                 raise GeminiProviderError(
                     "The generation provider is currently unavailable."
@@ -235,9 +241,11 @@ class GeminiProvider(LLMProvider):
                     raise LLMRateLimitError() from None
                 if 400 <= status < 500:
                     logger.warning("gemini rejected request (stream)", extra={"status": status})
-                    raise GeminiProviderError(
+                    _reject = GeminiProviderError(
                         "The generation provider rejected the request."
-                    ) from None
+                    )
+                    _reject.permanent = True
+                    raise _reject from None
                 logger.warning("gemini streaming failed", extra={"status": status})
                 raise GeminiProviderError(
                     "The generation provider is currently unavailable."
