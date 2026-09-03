@@ -85,6 +85,25 @@ describe('matchCitations', () => {
       expect(citation.source?.document_id).toBe('d31f9c')
     })
 
+    it('prefers the chunk whose page range covers the cited page', () => {
+      const multi: Source[] = [
+        { citation: 'Document abc', source_type: 'user_document', document_id: 'abc', text: 'pages five to seven', page_start: 5, page_end: 7 },
+        { citation: 'Document abc', source_type: 'user_document', document_id: 'abc', text: 'pages one to three', page_start: 1, page_end: 3 },
+      ]
+      const [citation] = matchCitations('Answer [Document abc p.2].', multi)
+      expect(citation.source?.page_start).toBe(1)
+      expect(citation.source?.page_end).toBe(3)
+      expect(citation.source?.text).toContain('one to three')
+    })
+
+    it('falls back to any same-document chunk when no page range covers the page', () => {
+      const multi: Source[] = [
+        { citation: 'Document abc', source_type: 'user_document', document_id: 'abc', text: 'only chunk', page_start: 5, page_end: 7 },
+      ]
+      const [citation] = matchCitations('Answer [Document abc p.2].', multi)
+      expect(citation.source?.document_id).toBe('abc')
+    })
+
     it('does not match a different document id', () => {
       const [citation] = matchCitations('Answer [Document other99].', docSources)
       expect(citation.source).toBeUndefined()

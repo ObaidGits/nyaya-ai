@@ -130,6 +130,47 @@ describe('ChatPanel', () => {
     expect(await screen.findByText('The chat service is currently unavailable.')).toBeTruthy()
   })
 
+  it('shows the error notice appended to a partially streamed answer', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (String(url).includes('/api/v1/documents')) {
+          return Promise.resolve(new Response('[]', { status: 200 }))
+        }
+        return Promise.resolve(
+          sseResponse([
+            'event: token\ndata: {"text": "Murder is punishable "}\n\n',
+            'event: error\ndata: {"code": "UPSTREAM_TIMEOUT", "message": "The model stopped responding mid-answer."}\n\n',
+          ]),
+        )
+      }),
+    )
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.type(screen.getByLabelText('Ask a legal question'), 'What is murder?')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    // Partial answer survives AND the mid-stream error text is visible.
+    expect(await screen.findByText(/Murder is punishable/)).toBeTruthy()
+    expect(await screen.findByText(/The model stopped responding mid-answer./)).toBeTruthy()
+  })
+
+  it('fires only one chat request for two rapid Enter presses', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    const textarea = screen.getByLabelText('Ask a legal question')
+    await user.type(textarea, 'hello')
+
+    // Two Enter keydowns back-to-back, before any re-render can flip
+    // the streaming state: the synchronous sendingRef must gate the second.
+    await user.keyboard('{Enter}{Enter}')
+
+    await screen.findByText(/Murder is punishable/)
+    const chatCalls = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url).includes('/api/v1/chat'))
+    expect(chatCalls).toHaveLength(1)
+  })
+
   it('keeps the persistent disclaimer in the panel chrome', () => {
     render(<Harness />)
     expect(screen.getByText('Not legal advice')).toBeTruthy()

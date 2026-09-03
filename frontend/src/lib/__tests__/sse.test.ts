@@ -56,6 +56,22 @@ describe('streamChat', () => {
     )
   })
 
+  it('parses frames with CRLF line endings (Windows-style transport)', async () => {
+    const cb = callbacks()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          'event: token\r\ndata: {"text": "hello"}\r\n\r\n',
+          'event: done\r\ndata: {"confidence": 0.9, "refused": false, "model": "stub", "citations": []}\r\n\r\n',
+        ]),
+      ),
+    )
+    await streamChat('sess', 'hi', [], cb, new AbortController().signal)
+    expect(cb.onToken).toHaveBeenCalledWith('hello')
+    expect(cb.onDone).toHaveBeenCalledWith({ confidence: 0.9, refused: false, model: 'stub', citations: [] })
+  })
+
   it('handles split frames across chunk boundaries', async () => {
     const cb = callbacks()
     vi.stubGlobal(

@@ -45,6 +45,10 @@ export function ChatPanel({
   const [streamingMessage, setStreamingMessage] = useState<ChatMessage | null>(null)
   const [streaming, setStreaming] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  // Synchronous send guard: `streaming` state updates on the next render, so
+  // two rapid Enters both read `streaming === false` and fire two requests.
+  // The ref is set before the first await in `send`, closing the race window.
+  const sendingRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Stick-to-bottom: autoscroll follows the stream only while the user is at
   // (or near) the bottom. Scrolling up to reread pauses it — the answer keeps
@@ -65,7 +69,8 @@ export function ChatPanel({
 
   const send = async (messageText: string, historyOverride?: ChatMessage[]) => {
     const text = messageText.trim()
-    if (!text || streaming) return
+    if (!text || sendingRef.current) return
+    sendingRef.current = true
 
     const userMessage: ChatMessage = {
       id: nextMessageId('u'),
@@ -123,6 +128,7 @@ export function ChatPanel({
       // composer stuck in the streaming state.
       error = { code: 'STREAM_FAILED', message: 'The response stream failed.' }
     } finally {
+      sendingRef.current = false
       abortRef.current = null
       setStreaming(false)
       setStreamingMessage(null)
@@ -130,7 +136,10 @@ export function ChatPanel({
 
     const final: ChatMessage = {
       ...assistant,
-      content: answer || error?.message || '',
+      // Mid-stream failure: keep the partial answer; MessageItem renders
+      // the error message as a visible red notice. Previously the error
+      // was dropped entirely once any token had landed.
+      content: answer,
       sources,
       refused,
       error,
@@ -279,7 +288,7 @@ export function ChatPanel({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()
-                      void send(input)
+                      if (!streaming) void send(input)
                     }
                   }}
                   rows={Math.min(4, Math.max(1, input.split('\n').length))}

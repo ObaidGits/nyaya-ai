@@ -71,12 +71,14 @@ export async function streamChat(
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      // Normalize CRLF → LF on append: SSE transports may use \r\n line
+      // endings, and \r\n\r\n frame separators would otherwise never match.
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
 
       // SSE frames are separated by a blank line.
       let separator = buffer.indexOf('\n\n')
       while (separator !== -1) {
-        const frame = buffer.slice(0, separator)
+        const frame = buffer.slice(0, separator).replace(/\r/g, '')
         buffer = buffer.slice(separator + 2)
         handleFrame(frame, callbacks)
         separator = buffer.indexOf('\n\n')

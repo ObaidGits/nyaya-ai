@@ -89,6 +89,16 @@ export function MessageItem({
               )}
             </div>
 
+            {message.error && (
+              <p
+                role="alert"
+                className="mt-2 flex items-start gap-1.5 rounded-lg border border-red-300/80 bg-red-50/70 px-2.5 py-1.5 text-xs text-red-800 dark:border-red-800/80 dark:bg-red-950/40 dark:text-red-300"
+              >
+                <AlertIcon className="mt-0.5 size-3.5 shrink-0" />
+                {message.error.message}
+              </p>
+            )}
+
             {message.refused && (
               <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-amber-300/80 bg-amber-50/70 px-2.5 py-1.5 text-xs text-amber-800 dark:border-amber-700/80 dark:bg-amber-950/40 dark:text-amber-300">
                 <AlertIcon className="mt-0.5 size-3.5 shrink-0" />

@@ -80,15 +80,28 @@ export function matchCitations(text: string, sources: Source[]): Citation[] {
     }
 
     if (!source) {
-      // Document citation (with or without page) → any source entry for
-      // the same document id; the payload carries page_start/page_end.
-      const docId = documentBase(key)
-      if (docId) {
-        source = sources.find(
+      // Document citation (with or without page) → source entry for the same
+      // document id, preferring the chunk whose page range COVERS the cited
+      // page (page_start <= citedPage <= page_end). A document often yields
+      // several chunk sources; id-only matching picked an arbitrary one.
+      const docMatch = key.match(/^Document\s+(\S+?)(?:\s+p\.(\d+))?$/i)
+      if (docMatch) {
+        const docId = docMatch[1]
+        const citedPage = docMatch[2] ? Number(docMatch[2]) : undefined
+        const docSources = sources.filter(
           (s) =>
             s.source_type === 'user_document' &&
             documentBase(citationKey(s.citation)) === docId,
         )
+        source = docSources.find(
+          (s) =>
+            citedPage !== undefined &&
+            typeof s.page_start === 'number' &&
+            typeof s.page_end === 'number' &&
+            s.page_start <= citedPage &&
+            citedPage <= s.page_end,
+        )
+        if (!source) source = docSources[0]
       }
     }
 
