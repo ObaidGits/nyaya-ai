@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from app.generation.prompt import SYSTEM_PROMPT, build_generation_request
 from app.generation.service import REFUSAL_RESPONSE, GenerationService
+from app.retrieval.models import ScoredChunk
 from tests.generation.fixtures import (
     GOOD_ANSWER,
     MIXED_ANSWER,
@@ -129,7 +130,7 @@ async def test_model_emitted_refusal_text_is_normalized() -> None:
     provider = ScriptedProvider([REFUSAL_RESPONSE])
     outcome = await GenerationService(provider).answer("question", make_evidence())
     assert outcome.refused
-    assert outcome.answer == REFUSAL_RESPONSE
+    assert outcome.answer.startswith(REFUSAL_RESPONSE)
 
 
 async def test_answer_with_no_grounded_sentence_refuses() -> None:
@@ -137,7 +138,7 @@ async def test_answer_with_no_grounded_sentence_refuses() -> None:
     provider = ScriptedProvider(["Theft is punishable with imprisonment [TS s.999]."] * 2)
     outcome = await GenerationService(provider).answer("question", make_evidence())
     assert outcome.refused
-    assert outcome.answer == REFUSAL_RESPONSE
+    assert outcome.answer.startswith(REFUSAL_RESPONSE)
 
 
 async def test_document_sources_only_for_cited_documents() -> None:
@@ -194,7 +195,7 @@ async def test_hedged_refusal_text_is_normalized() -> None:
     )
     outcome = await GenerationService(provider).answer("q?", make_evidence())
     assert outcome.refused is True
-    assert outcome.answer == "I don't know based on the available source material."
+    assert outcome.answer.startswith("I don't know based on the available source material.")
 
 
 async def test_answer_without_any_citation_refuses() -> None:
@@ -204,7 +205,7 @@ async def test_answer_without_any_citation_refuses() -> None:
     provider = ScriptedProvider(["Theft is punishable with imprisonment for a term of years."] * 2)
     outcome = await GenerationService(provider).answer("question", make_evidence())
     assert outcome.refused
-    assert outcome.answer == REFUSAL_RESPONSE
+    assert outcome.answer.startswith(REFUSAL_RESPONSE)
 
 
 def _provider_down_error() -> Exception:
@@ -279,7 +280,7 @@ async def test_first_attempt_refusal_still_refuses() -> None:
         "question", make_evidence(query="theft")
     )
     assert outcome.refused
-    assert outcome.answer == REFUSAL_RESPONSE
+    assert outcome.answer.startswith(REFUSAL_RESPONSE)
 
 
 async def test_regeneration_refusal_without_valid_prefix_refuses() -> None:
@@ -291,4 +292,53 @@ async def test_regeneration_refusal_without_valid_prefix_refuses() -> None:
     )
     outcome = await GenerationService(provider).answer("question", make_evidence())
     assert outcome.refused
-    assert outcome.answer == REFUSAL_RESPONSE
+    assert outcome.answer.startswith(REFUSAL_RESPONSE)
+
+
+def test_evidence_block_header_includes_subsection() -> None:
+    # Regression (2026-09-03): a narrowed chunk (e.g. s.2(11)) carried its
+    # subsection in metadata but the evidence header showed the bare section
+    # label [TS s.2] — the model could not tie the fragment to the asked
+    # subsection and refused. The header must carry the full form.
+    from tests.retrieval.fixtures import _chunk
+
+    narrowed = ScoredChunk(
+        chunk=_chunk(
+            "ts-s002-011",
+            "2",
+            "Definitions (part 12 of 40)",
+            "'good faith'.Nothing is said to be done or believed in 'good "
+            "faith' which is done or believed without due care and attention;",
+            subsection="(11)",
+        ),
+        rrf_score=1.0,
+    )
+    evidence = make_evidence(chunks=[narrowed], query="what is section 2(11)?")
+    request = build_generation_request("What is section 2(11)?", evidence.results)
+    assert "[TS s.2(11)]" in request.messages[-1].content
+
+
+def test_evidence_block_header_omits_subsection_when_absent() -> None:
+    evidence = make_evidence()
+    request = build_generation_request("What is the punishment for murder?", evidence.results)
+    text = request.messages[-1].content
+    # Chunk 001 carries no subsection → bare label; chunk 002 carries
+    # subsection (1) → full form (2026-09-03 subsection headers).
+    assert "[TS s.103]" in text
+    assert "[TS s.103(1)]" in text
+    assert "s.103(" not in text.replace("[TS s.103(1)]", "")
+
+
+async def test_model_refusal_carries_contextual_reason() -> None:
+    # Regression (2026-09-03): a model-emitted refusal (retrieval succeeded
+    # but the grounded model found no answer — e.g. bail, which lives in the
+    # BNSS, not the BNS corpus) returned the bare refusal line with no
+    # user-facing reason. It now carries the code-authored reason sentence.
+    provider = ScriptedProvider([REFUSAL_RESPONSE])
+    outcome = await GenerationService(provider).answer(
+        "What is bail under BNS?", make_evidence(query="what is bail under bns?")
+    )
+    assert outcome.refused
+    assert outcome.refusal_reason is not None
+    assert outcome.refusal_reason in outcome.answer
+    assert "different statute" in outcome.refusal_reason

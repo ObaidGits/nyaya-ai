@@ -129,6 +129,14 @@ class RetrievalService:
         confidence_threshold: float = 0.1,
         final_top_k: int = 10,
         document_confidence_threshold: float = 0.05,
+        # Statute confidence below which a session's documents are also
+        # consulted (§14 remediation, weak-evidence arm): the keyword router
+        # cannot enumerate every way a user references their upload, so a
+        # statute-routed question whose best BNS chunk is only marginally
+        # relevant (relevance factor under this floor) still gets the
+        # session's documents merged into the evidence rather than a
+        # refusal over irrelevant statute text.
+        document_fallback_confidence: float = 0.35,
         document_retrieval: DocumentRetrievalService | None = None,
         # Semantic-relevance gate band. The defaults are calibrated for
         # BAAI/bge-base-en-v1.5 cosine scores (see RELEVANCE_FLOOR). An
@@ -146,6 +154,7 @@ class RetrievalService:
         self._sparse_top_k = sparse_top_k
         self._rrf_k = rrf_k
         self._confidence_threshold = confidence_threshold
+        self._document_fallback_confidence = document_fallback_confidence
         self._final_top_k = final_top_k
         self._document_confidence_threshold = document_confidence_threshold
         self._document_retrieval = document_retrieval
@@ -210,8 +219,19 @@ class RetrievalService:
         # below its confidence threshold, still refuses honestly — the
         # fallback only rescues document-groundable questions, never
         # substitutes weak statute evidence for a refusal.
+        #
+        # Weak-evidence arm (2026-09-03): statute evidence can be formally
+        # sufficient (above the 0.1 gate) while its best chunk is only
+        # marginally relevant — the question really targets an uploaded
+        # document the router did not recognize ("How much rent arrears
+        # does the tenant owe?"). Below the fallback confidence the session
+        # documents are MERGED into the evidence (statute chunks stay), so
+        # the model can cite whichever corpus actually answers; a refusal
+        # over irrelevant statute text is never forced when the documents
+        # can ground the question.
+        weak_statute = evidence.confidence < self._document_fallback_confidence
         if (
-            not evidence.sufficient
+            (not evidence.sufficient or weak_statute)
             and session_id is not None
             and self._document_retrieval is not None
         ):
@@ -219,11 +239,24 @@ class RetrievalService:
                 query, resolved_route, intent, session_id, reasons
             )
             if document_evidence.sufficient:
-                document_evidence.route = resolved_route
-                document_evidence.reasons.append(
-                    "statute evidence insufficient; session documents retrieved"
-                )
-                return document_evidence
+                if not evidence.sufficient:
+                    document_evidence.route = resolved_route
+                    document_evidence.reasons.append(
+                        "statute evidence insufficient; session documents retrieved"
+                    )
+                    return document_evidence
+                if evidence.results:
+                    evidence.document_hits = document_evidence.document_hits
+                    evidence.sufficient = True
+                    evidence.reasons.append(
+                        "session document evidence merged with weak statute evidence"
+                    )
+                else:
+                    document_evidence.route = resolved_route
+                    document_evidence.reasons.append(
+                        "statute evidence empty; session documents retrieved"
+                    )
+                    return document_evidence
         return evidence
 
     def _document_evidence(

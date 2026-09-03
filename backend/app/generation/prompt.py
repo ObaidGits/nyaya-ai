@@ -58,7 +58,13 @@ STRICT RULES:
 
 def _evidence_block(scored: ScoredChunk) -> str:
     chunk = scored.chunk
-    header = f"[{chunk.act_short} s.{chunk.section_number}]"
+    # Subsection-aware label (D-017): a narrowed chunk (e.g. s.2(11)) carries
+    # its subsection in the header so the model can cite the full form
+    # [BNS s.2(11)] instead of guessing from the bare section label.
+    sub = ""
+    if chunk.subsection:
+        sub = f"({chunk.subsection.strip('()')})"
+    header = f"[{chunk.act_short} s.{chunk.section_number}{sub}]"
     title = f" - {chunk.section_title}" if chunk.section_title else ""
     pages = f"(pages {chunk.page_start}-{chunk.page_end})"
     return f"--- STATUTE EVIDENCE {header}{title} {pages}\n{chunk.text}"

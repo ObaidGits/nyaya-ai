@@ -377,7 +377,8 @@ def test_model_emitted_refusal_is_normalized() -> None:
 
     with TestClient(_app(ScriptedProvider([REFUSAL_RESPONSE]))) as test_client:
         events = _post(test_client, "What is the punishment for murder?")
-    assert _tokens(events) == REFUSAL_RESPONSE
+    # The refusal line plus the code-authored reason sentence (2026-09-03).
+    assert _tokens(events).startswith(REFUSAL_RESPONSE)
     done = events[-1][1]
     assert done["refused"] is True
     assert done["citations"] == []

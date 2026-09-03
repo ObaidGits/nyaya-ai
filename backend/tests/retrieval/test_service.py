@@ -503,3 +503,40 @@ def test_whole_section_lookup_unnarrowed() -> None:
     service = _service()
     evidence = service.retrieve("section 103 BNS")
     assert {r.chunk.chunk_id for r in evidence.results} == {"ts-s103-001", "ts-s103-002"}
+
+
+def test_weak_statute_evidence_merges_session_documents() -> None:
+    """Weak-evidence arm of the §14 fallback (2026-09-03): a statute-routed
+    question whose evidence is formally sufficient but only marginally
+    relevant ("How much rent arrears does the tenant owe?" scored 0.238
+    against irrelevant BNS chunks live) gets the session's documents
+    MERGED into the evidence — statute chunks stay, document hits ride
+    along — instead of forcing a refusal over irrelevant statute text."""
+    # Sufficient statute evidence, with the fallback confidence raised so
+    # the evidence is deterministically "weak" (the synthetic corpus's
+    # FakeDense path reports confidence 1.0; live BGE scores sit in the
+    # 0.24-0.37 band for these questions).
+    service = _service(
+        dense_mapping={"murder zzqqxx": ["ts-s103-001"]},
+        document_retrieval=_StubDocumentRetrieval([_doc_hit(0.9)]),
+        document_fallback_confidence=1.5,
+    )
+    evidence = service.retrieve("murder zzqqxx", session_id="sess-1")
+    assert evidence.sufficient
+    assert evidence.document_hits, "session documents must be merged in"
+    assert evidence.results, "statute chunks must be kept in the merge"
+    assert any("merged with weak statute evidence" in r for r in evidence.reasons)
+
+
+def test_weak_statute_evidence_without_documents_stays_statute_only() -> None:
+    """The weak arm cannot widen evidence on its own: no session documents
+    (or sub-threshold hits) means the statute evidence is returned as-is —
+    generation then refuses honestly per A4-012."""
+    service = _service(
+        dense_mapping={"murder zzqqxx": ["ts-s103-001"]},
+        document_retrieval=_StubDocumentRetrieval([_doc_hit(0.01)]),
+        document_confidence_threshold=0.1,
+    )
+    evidence = service.retrieve("murder zzqqxx", session_id="sess-1")
+    assert evidence.document_hits == []
+    assert evidence.results

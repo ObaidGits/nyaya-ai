@@ -59,7 +59,7 @@ CITATION_RE = re.compile(
 # scrubbed from the sentence before this scan so they are never mistaken
 # for statute labels.
 _MALFORMED_STATUTE_CITATION_RE = re.compile(
-    r"\[\s*([A-Z]{2,6})[\s.:§-]*(?:section|sec)?\.?\s*§?\s*(\d{1,3})[^\]]*\]"
+    r"\[\s*([A-Z]{2,6})[\s.:§-]*(?:section|sec\.?|s\.?)?[\s.:§-]*(\d{1,3})[^\]]*\]"
 )
 _PAREN_STATUTE_CITATION_RE = re.compile(
     r"\(([A-Za-z]{2,6})\s+[sS]\.?\s*(\d{1,3})[^\)]*\)"
@@ -843,8 +843,18 @@ def validate_citations(
     content_seen = False
     sentences, label_only_labels = _sentence_stream(_normalize_brackets(answer))
     for position, (sentence, _starts_paragraph) in enumerate(sentences):
+        # Document-grounded sentences may legitimately NAME other statutes
+        # ("the notice cites section 10 of the Indian Penal Code [Document
+        # d31f... p.2]") — the misattribution guard is about STATUTE
+        # evidence, so it only fires when no document citation rides the
+        # sentence.
+        carries_document_citation = bool(extract_document_citations(sentence))
         act_name = _ACT_NAME_RE.search(sentence)
-        if act_name and _ACT_NAME_ALIASES[act_name.group(0).lower()] not in index.acts:
+        if (
+            act_name
+            and not carries_document_citation
+            and _ACT_NAME_ALIASES[act_name.group(0).lower()] not in index.acts
+        ):
             # A named Act the evidence does not contain is a misattribution
             # even when the section number happens to exist in both
             # statutes (s.103 IPC ≠ s.103 BNS), with or without a citation.
@@ -882,7 +892,9 @@ def validate_citations(
                 check.uncited_legal_claims.append(bare)
                 check.removed_sentences.append(sentence.strip())
                 continue
-            content_seen = content_seen or bool(re.search(r"[A-Za-z0-9]", bare))
+            content_seen = content_seen or bool(
+                re.search(r"[A-Za-z0-9]", bare) or _has_indic_content(bare)
+            )
             kept.append(gated)
             continue
 
@@ -900,20 +912,37 @@ def validate_citations(
             continue
 
         all_labels = [c.label for c in statute_citations] + [d.label for d in document_citations]
-        if _self_referential(sentence):
-            # An identity/capability sentence is not a legal claim: any
-            # citation attached to it is decorative and is stripped.
-            check.irrelevant_citations.extend(all_labels)
-            stripped_self = _strip_labels(sentence, all_labels)
-            content_seen = content_seen or bool(re.search(r"[A-Za-z0-9]", stripped_self))
-            kept.append(stripped_self)
-            continue
-
         bare = _strip_labels(sentence, all_labels)
         content = _content_tokens(bare)
         indic_sentence = _has_indic_content(bare)
         has_text = bool(re.search(r"[A-Za-z0-9]", bare))
         content_seen = content_seen or bool(content) or indic_sentence or has_text
+
+        # Relevance FIRST, self-reference second (2026-09-03): the
+        # self-reference vocabulary ("we", "our", "assistant") appears in
+        # perfectly ordinary legal prose — "appointed as Assistant
+        # Engineer [Document d31f...]", "our client demands payment" — and
+        # stripping the citation from a sentence that DOES share content
+        # with its cited evidence destroyed grounded document answers
+        # (observed live: every writ-petition answer lost its citation and
+        # was refused as uncited). A citation is decorative only when the
+        # sentence supports it with no shared content; that is when the
+        # identity check decides.
+        relevant_statute = [c for c in statute_citations if index.statute_tokens(c) & content]
+        relevant_document = [d for d in document_citations if index.document_tokens(d) & content]
+
+        if _self_referential(sentence) and not relevant_statute and not relevant_document:
+            # An identity/capability sentence whose citation shares no
+            # content with the evidence: the citation is decorative and is
+            # stripped.
+            check.irrelevant_citations.extend(all_labels)
+            stripped_self = _strip_labels(sentence, all_labels)
+            content_seen = content_seen or bool(
+                re.search(r"[A-Za-z0-9]", stripped_self) or _has_indic_content(stripped_self)
+            )
+            kept.append(stripped_self)
+            continue
+
         if not content and not indic_sentence:
             # No substantive tokens left: the citation decorates an empty
             # sentence, so it supports nothing.
@@ -921,8 +950,9 @@ def validate_citations(
             kept.append(bare)
             continue
 
-        relevant_statute = [c for c in statute_citations if index.statute_tokens(c) & content]
-        relevant_document = [d for d in document_citations if index.document_tokens(d) & content]
+        # relevant_statute / relevant_document were computed above (before
+        # the self-reference check) — the label-only and cross-script
+        # waivers extend them here.
         # Label-only citations (from a trailing fragment or a citation list
         # bullet merged into this sentence) already passed existence and
         # page-range validation. Their claim is the merged sentence itself —

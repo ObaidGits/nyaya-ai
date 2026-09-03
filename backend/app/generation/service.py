@@ -103,6 +103,15 @@ def _refusal_for(language: LanguageCode | None) -> str:
     return REFUSAL_RESPONSES[language or _ENGLISH]
 
 
+#: Code-authored reason for a MODEL-emitted refusal (retrieval succeeded but
+#: the grounded model found no answer in the evidence — e.g. a procedural
+#: question such as bail, which lives in the BNSS, not the BNS corpus).
+_MODEL_REFUSAL_REASON = (
+    "The retrieved material does not contain the answer to this question; "
+    "it may be governed by a different statute or by your uploaded documents."
+)
+
+
 def _refusal_with_reason(refusal_text: str, reason: str | None) -> str:
     """Refusal line plus the reason sentence — both code-authored."""
     if reason is None:
@@ -317,9 +326,10 @@ class GenerationService:
                 )
                 REFUSALS.inc()
                 return GenerationOutcome(
-                    answer=refusal_text,
+                    answer=_refusal_with_reason(refusal_text, _MODEL_REFUSAL_REASON),
                     refused=True,
                     citations=check,
+                    refusal_reason=_MODEL_REFUSAL_REASON,
                     model=model,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,

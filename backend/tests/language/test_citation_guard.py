@@ -209,14 +209,53 @@ def test_indic_act_name_sentence_keeps_citation() -> None:
 
 
 def test_english_act_name_sentence_keeps_citation() -> None:
-    # Same collision in English: "Bharatiya Nyaya Sanhita" contains the
-    # brand word "Nyaya" — the standalone-brand self-reference match used
-    # to strip these citations too.
-    answer = "Section 103 of the Bharatiya Nyaya Sanhita deals with punishment [TS s.103]."
+    # Brand-word collision, English: a sentence that merely CONTAINS the
+    # word "Nyaya" (the assistant brand) is not a self-reference — the
+    # standalone-brand match used to strip these citations. Note the full
+    # act name "Bharatiya Nyaya Sanhita" is intentionally absent: with this
+    # synthetic TS corpus it is a statute the evidence does not contain
+    # (see test_foreign_act_name_sentence_is_misattribution).
+    answer = "The word Nyaya appears in the Sanhita's title; section 103 covers punishment [TS s.103]."
     sanitized, check = validate_citations(answer, _evidence())
     assert "[TS s.103]" in sanitized
     assert [c.label for c in check.valid_citations] == ["[TS s.103]"]
     assert not check.irrelevant_citations
+
+
+def test_foreign_act_name_sentence_is_misattribution() -> None:
+    # "Section 103 of the Bharatiya Nyaya Sanhita" against Test Sanhita
+    # evidence: the named statute is not in the evidence set, so the
+    # sentence is a misattribution and is removed — even though the cited
+    # section number exists (2026-09-03 alias addition made this explicit).
+    answer = "Section 103 of the Bharatiya Nyaya Sanhita deals with punishment [TS s.103]."
+    sanitized, check = validate_citations(answer, _evidence())
+    assert sanitized == ""
+    assert check.misattributed_act_sentences
+
+
+def test_document_citation_sentence_naming_foreign_act_is_kept() -> None:
+    # A document-grounded sentence may legitimately NAME another statute
+    # ("the notice cites section 10 of the Indian Penal Code"): the
+    # misattribution guard protects statute evidence, not document data
+    # (2026-09-03 regression: the alias addition started removing these).
+    from app.documents.models import DocumentHit
+
+    hits = [
+        DocumentHit(
+            chunk_id="d01-p0002-000",
+            document_id="d01",
+            text="The agreement is governed by section 10 of the Indian Penal Code.",
+            page_start=2,
+            page_end=2,
+        )
+    ]
+    answer = (
+        "The uploaded agreement is governed by section 10 of the Indian "
+        "Penal Code [Document d01 p.2]."
+    )
+    sanitized, check = validate_citations(answer, _evidence(), document_hits=hits)
+    assert "[Document d01 p.2]" in sanitized
+    assert not check.misattributed_act_sentences
 
 
 def test_script_pronoun_inside_larger_word_not_self_reference() -> None:
@@ -226,3 +265,55 @@ def test_script_pronoun_inside_larger_word_not_self_reference() -> None:
     sanitized, check = validate_citations(answer, _evidence())
     assert "[TS s.103]" in sanitized
     assert [c.label for c in check.valid_citations] == ["[TS s.103]"]
+
+
+def test_assistant_job_title_sentence_keeps_document_citation() -> None:
+    # Regression (2026-09-03, live): "appointed as Assistant Engineer"
+    # matched the \bassistant\b self-reference token, so every writ-petition
+    # answer lost its document citation and was refused as uncited. The
+    # self-reference check now only fires when the citation shares no
+    # content with the evidence (relevance-first ordering).
+    from app.documents.models import DocumentHit
+
+    hits = [
+        DocumentHit(
+            chunk_id="d01-p0001-000",
+            document_id="d01",
+            text=(
+                "WRIT PETITION. Petitioner: Ramesh Kumar. The petitioner "
+                "seeks a writ of mandamus directing the respondent to "
+                "regularise his appointment as Assistant Engineer."
+            ),
+            page_start=1,
+            page_end=1,
+        )
+    ]
+    answer = (
+        "The petitioner seeks a writ of mandamus to regularise his "
+        "appointment as Assistant Engineer [Document d01 p.1]."
+    )
+    sanitized, check = validate_citations(answer, _evidence(), document_hits=hits)
+    assert "[Document d01 p.1]" in sanitized
+    assert check.cited_document_ids == ["d01"]
+    assert not check.irrelevant_citations
+
+
+def test_first_person_document_quote_keeps_document_citation() -> None:
+    # Legal notices say "our client" — a document-grounded sentence quoting
+    # that must keep its citation ("we"/"our" are in the self-reference
+    # vocabulary but the sentence is about the document, not the assistant).
+    from app.documents.models import DocumentHit
+
+    hits = [
+        DocumentHit(
+            chunk_id="d01-p0001-000",
+            document_id="d01",
+            text="Under instructions from our client Mrs. Anita Desai, the tenant must vacate.",
+            page_start=1,
+            page_end=1,
+        )
+    ]
+    answer = "Under instructions from our client Mrs. Anita Desai, the tenant must vacate [Document d01 p.1]."
+    sanitized, check = validate_citations(answer, _evidence(), document_hits=hits)
+    assert "[Document d01 p.1]" in sanitized
+    assert check.cited_document_ids == ["d01"]
