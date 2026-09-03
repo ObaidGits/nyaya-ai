@@ -920,6 +920,10 @@ async def put_providers(
 
         pool_secrets = PoolSecrets()
         for key, value in merged_secrets.items():
+            # Regular console secrets (e.g. "llm_api_key") share the store;
+            # only pool-scoped keys are unpacked here.
+            if not key.startswith(POOL_SECRET_PREFIX):
+                continue
             _, pool_name, entry_id = key.split(":", 2)
             pool_secrets.set(pool_name, entry_id, value)
         failures: list[str] = []

@@ -238,6 +238,27 @@ class TestProviderPoolAPI:
         assert persisted["secrets"]["llm_api_key"] == "sk-console-key"
         assert persisted["secrets"]["pool:llm:groq-main"] == "gsk-pool-secret"
 
+    def test_pool_save_with_console_secret_and_verification_not_500(
+        self, client: TestClient
+    ) -> None:
+        """Regression (2026-09-03 live incident): the test-before-save loop
+        unpacked EVERY persisted secret as a pool-scoped key; a plain console
+        secret ("llm_api_key" — no colons) crashed the save with a 500 before
+        verification could even run. Verification may legitimately reject
+        unreachable entries (422), but a console secret must never crash."""
+        client.put(
+            "/api/v1/admin/settings",
+            json={"values": {}, "secrets": {"llm_api_key": "sk-console-key"}, "force": True},
+            headers=MUTATING,
+        )
+        r = client.put(
+            "/api/v1/admin/providers",
+            json=_pool_payload(force=False),
+            headers=MUTATING,
+        )
+        assert r.status_code != 500
+        assert "INTERNAL_ERROR" not in r.text
+
     def test_pool_persists_across_restart(self, client: TestClient, tmp_path: Path) -> None:
         client.put("/api/v1/admin/providers", json=_pool_payload(), headers=MUTATING)
         # "Restart": a brand-new app from the same settings path.
