@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { MessageItem } from './MessageItem'
 import { DocumentsPanel } from './DocumentsPanel'
+import { DocumentsSheet } from './DocumentsSheet'
 import { LanguageSelector } from './LanguageSelector'
 import { VoiceInput } from './VoiceInput'
-import { FileTextIcon, ScaleIcon, SendIcon, StopIcon } from './icons'
+import { FileTextIcon, PaperclipIcon, ScaleIcon, SendIcon, StopIcon } from './icons'
 import { useDocuments } from '../hooks/useDocuments'
 import { streamChat } from '../lib/sse'
 import type { Citation } from '../lib/citations'
@@ -44,6 +45,9 @@ export function ChatPanel({
   const [input, setInput] = useState('')
   const [streamingMessage, setStreamingMessage] = useState<ChatMessage | null>(null)
   const [streaming, setStreaming] = useState(false)
+  // Mobile documents bottom sheet (below lg the paperclip opens it; the
+  // desktop rail stays always-visible instead).
+  const [docsOpen, setDocsOpen] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   // Synchronous send guard: `streaming` state updates on the next render, so
   // two rapid Enters both read `streaming === false` and fire two requests.
@@ -174,15 +178,17 @@ export function ChatPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center justify-between border-b border-ink-200 px-4 py-2.5 dark:border-ink-800">
-        <div>
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-b border-ink-200 px-4 py-2.5 dark:border-ink-800">
+        <div className="min-w-0">
           <h2 className="font-serif text-base font-semibold leading-tight">Chatbot</h2>
-          <p className="text-xs text-ink-500 dark:text-ink-400">Answers grounded in retrieved sources</p>
+          <p className="hidden text-xs text-ink-500 sm:block dark:text-ink-400">
+            Answers grounded in retrieved sources
+          </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <LanguageSelector language={language} onChange={onLanguageChange} disabled={streaming} />
           <p
-            className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+            className="hidden rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 sm:inline-flex dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
             title="Answers are generated from retrieved source material and are not legal advice."
           >
             Not legal advice
@@ -190,11 +196,13 @@ export function ChatPanel({
         </div>
       </header>
 
-      {/* Explicit minmax(0,1fr) rows keep children bounded by the grid's
-          flex-1 height budget; auto rows would size to content and push the
-          page taller than the viewport. */}
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_300px] lg:grid-rows-[minmax(0,1fr)]">
-        <div className="flex min-h-0 flex-col">
+      {/* Single chat column below lg (messages + composer fill the height,
+          composer pinned at the true viewport bottom); the documents rail
+          joins as a right column at lg. The old mobile layout stacked a
+          240px documents band UNDER the composer, which crushed the message
+          list and buried the upload zone — see DocumentsSheet instead. */}
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <div className="flex min-h-0 flex-1 flex-col">
           <div
             ref={scrollRef}
             onScroll={onScroll}
@@ -262,17 +270,37 @@ export function ChatPanel({
           </div>
 
           <form
-            className="border-t border-ink-200 px-3 py-3 sm:px-4 dark:border-ink-800"
+            className="border-t border-ink-200 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4 dark:border-ink-800"
             onSubmit={(e) => {
               e.preventDefault()
               void send(input)
             }}
           >
             <div className="mx-auto w-full max-w-2xl">
-              <div className="flex items-end gap-2 rounded-2xl border border-ink-300 bg-white p-1.5 shadow-sm transition-colors focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500/20 dark:border-ink-700 dark:bg-ink-900">
+              <div className="flex items-end gap-1.5 rounded-2xl border border-ink-300 bg-white p-1.5 shadow-sm transition-colors focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500/20 dark:border-ink-700 dark:bg-ink-900">
                 <label htmlFor="chat-input" className="sr-only">
                   Ask a legal question
                 </label>
+                <button
+                  type="button"
+                  onClick={() => setDocsOpen(true)}
+                  aria-label={
+                    documents.documents.length > 0
+                      ? `Your documents (${documents.documents.length} uploaded)`
+                      : 'Upload documents'
+                  }
+                  className="relative inline-flex size-[44px] shrink-0 items-center justify-center rounded-xl text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-900 lg:hidden dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-100"
+                >
+                  <PaperclipIcon className="size-5" />
+                  {documents.documents.length > 0 && (
+                    <span
+                      className="absolute right-1 top-1 flex min-w-4 items-center justify-center rounded-full bg-brand-600 px-0.5 text-[10px] font-semibold leading-4 text-white"
+                      aria-hidden="true"
+                    >
+                      {documents.documents.length}
+                    </span>
+                  )}
+                </button>
                 <VoiceInput
                   sessionId={sessionId}
                   language={language}
@@ -292,6 +320,7 @@ export function ChatPanel({
                     }
                   }}
                   rows={Math.min(4, Math.max(1, input.split('\n').length))}
+                  enterKeyHint="send"
                   placeholder="Ask a legal question…"
                   className="max-h-40 min-h-[44px] flex-1 resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-ink-400"
                 />
@@ -324,7 +353,7 @@ export function ChatPanel({
         </div>
 
         <aside
-          className="flex max-h-60 min-h-0 flex-col border-t border-ink-200 lg:max-h-none lg:border-t-0 lg:border-l dark:border-ink-800"
+          className="hidden w-[300px] shrink-0 flex-col border-l border-ink-200 lg:flex dark:border-ink-800"
           aria-label="Uploaded documents"
         >
           <div className="flex items-center gap-2 px-3 pt-3 lg:pt-4">
@@ -336,6 +365,8 @@ export function ChatPanel({
           </div>
         </aside>
       </div>
+
+      <DocumentsSheet open={docsOpen} onClose={() => setDocsOpen(false)} store={documents} />
     </div>
   )
 }

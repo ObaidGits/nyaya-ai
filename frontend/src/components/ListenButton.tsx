@@ -104,7 +104,7 @@ export function ListenButton({ sessionId, text, language }: ListenButtonProps) {
         onClick={playing ? stop : () => void play()}
         disabled={loading}
         aria-label={loading ? 'Generating speech' : playing ? 'Stop playback' : 'Listen to answer'}
-        className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-800 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-ink-800 dark:hover:text-ink-200"
+        className="inline-flex min-h-9 min-w-9 items-center justify-center gap-1 rounded-md px-1.5 py-1 text-xs text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-800 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-ink-800 dark:hover:text-ink-200"
       >
         {loading ? (
           <span className="inline-block size-3.5 animate-pulse rounded-full bg-ink-400" aria-hidden="true" />

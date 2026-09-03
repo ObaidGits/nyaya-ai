@@ -13,8 +13,8 @@
   --color-ink-100: #edeae4;
   --color-ink-200: #dcd7cd;
   --color-ink-300: #c2bbac;
-  --color-ink-400: #9c937f;
-  --color-ink-500: #7d7361;
+  --color-ink-400: #766e5d;
+  --color-ink-500: #655d4d;
   --color-ink-600: #5f5748;
   --color-ink-700: #47413a;
   --color-ink-800: #2e2a26;
@@ -35,6 +35,7 @@
   --animate-rise: rise 0.22s ease-out both;
   --animate-drawer-in: drawer-in 0.22s ease-out both;
   --animate-fade-in: fade-in 0.18s ease-out both;
+  --animate-sheet-in: sheet-in 0.22s ease-out both;
   @keyframes rise {
     from {
       opacity: 0;
@@ -49,6 +50,16 @@
     from {
       opacity: 0;
       transform: translateX(16px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes sheet-in {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
     }
     to {
       opacity: 1;
@@ -71,6 +82,11 @@ html {
 
 html.dark {
   color-scheme: dark;
+  /* Muted-text tokens are darkened for AA on light surfaces; on dark
+     surfaces they flip back to the lighter values so dark:text-ink-400/500
+     keep ≥4.5:1 against ink-950/900. */
+  --color-ink-400: #9c937f;
+  --color-ink-500: #8f8674;
 }
 
 body {

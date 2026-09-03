@@ -78,7 +78,7 @@ export function DocumentsPanel({ store }: DocumentsPanelProps) {
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
-          className="mt-2 rounded-lg border border-ink-300 bg-white px-3 py-1.5 text-sm font-medium transition-colors hover:border-brand-400 hover:bg-brand-50 dark:border-ink-700 dark:bg-ink-900 dark:hover:border-brand-600 dark:hover:bg-ink-800"
+          className="mt-2 rounded-lg border border-ink-300 bg-white px-3 py-2.5 text-sm font-medium transition-colors hover:border-brand-400 hover:bg-brand-50 dark:border-ink-700 dark:bg-ink-900 dark:hover:border-brand-600 dark:hover:bg-ink-800"
         >
           Choose a file
         </button>
@@ -115,7 +115,7 @@ export function DocumentsPanel({ store }: DocumentsPanelProps) {
             type="button"
             onClick={store.dismissError}
             aria-label="Dismiss error"
-            className="shrink-0 rounded p-0.5 transition-colors hover:bg-red-100 dark:hover:bg-red-900/60"
+            className="inline-flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-red-100 dark:hover:bg-red-900/60"
           >
             <XIcon className="size-4" />
           </button>
@@ -132,7 +132,7 @@ export function DocumentsPanel({ store }: DocumentsPanelProps) {
             return (
               <li
                 key={doc.document_id}
-                className="rounded-xl border border-ink-200 bg-white p-3 text-sm transition-colors hover:border-brand-300 dark:border-ink-800 dark:bg-ink-900 dark:hover:border-brand-700"
+                className="rounded-xl border border-ink-200 bg-white p-3 text-sm transition-colors hover:border-brand-400 dark:border-ink-800 dark:bg-ink-900 dark:hover:border-brand-600"
               >
                 <div className="flex items-start gap-2.5">
                   <FileTextIcon className="mt-0.5 size-4 shrink-0 text-ink-400" />
@@ -143,7 +143,7 @@ export function DocumentsPanel({ store }: DocumentsPanelProps) {
                         type="button"
                         onClick={() => void store.remove(doc.document_id)}
                         aria-label={`Delete ${doc.filename}`}
-                        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ink-500 transition-colors hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-950/60 dark:hover:text-red-300"
+                        className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-ink-500 transition-colors hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-950/60 dark:hover:text-red-300 ml-1"
                       >
                         <TrashIcon className="size-3.5" />
                       </button>

@@ -78,7 +78,7 @@ export function Sidebar({
                     onChange={(e) => setDraftTitle(e.target.value)}
                     onBlur={() => commitRename(conversation.id)}
                     aria-label={`Rename ${conversation.title}`}
-                    className="min-w-0 flex-1 rounded-md border border-brand-500 bg-white px-2 py-1 text-sm ring-2 ring-brand-500/20 dark:border-brand-400 dark:bg-ink-900"
+                    className="min-w-0 flex-1 rounded-md border border-brand-500 bg-white px-2 py-1 text-sm outline-none ring-2 ring-brand-500/20 dark:border-brand-400 dark:bg-ink-900"
                   />
                 </form>
               ) : (
@@ -111,7 +111,7 @@ export function Sidebar({
                       setDraftTitle(conversation.title)
                     }}
                     aria-label={`Rename ${conversation.title}`}
-                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ink-500 opacity-0 transition-opacity hover:bg-ink-200/70 hover:text-ink-800 focus-visible:opacity-100 group-hover:opacity-100 dark:hover:bg-ink-700 dark:hover:text-ink-200"
+                    className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-ink-500 opacity-0 transition-opacity hover:bg-ink-200/70 hover:text-ink-800 focus-visible:opacity-100 group-hover:opacity-100 max-md:opacity-100 md:size-7 dark:hover:bg-ink-700 dark:hover:text-ink-200"
                   >
                     <PencilIcon className="size-3.5" />
                   </button>
@@ -130,7 +130,7 @@ export function Sidebar({
                         ? `Confirm delete ${conversation.title}`
                         : `Delete ${conversation.title}`
                     }
-                    className={`inline-flex size-7 shrink-0 items-center justify-center rounded-md transition-opacity focus-visible:opacity-100 group-hover:opacity-100 ${
+                    className={`inline-flex size-9 shrink-0 items-center justify-center rounded-md transition-opacity focus-visible:opacity-100 group-hover:opacity-100 max-md:opacity-100 md:size-7 ${
                       confirmDeleteId === conversation.id
                         ? 'bg-red-600 text-white opacity-100 dark:bg-red-500'
                         : 'text-ink-500 opacity-0 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-950/60 dark:hover:text-red-300'

@@ -1,6 +1,6 @@
 /** App shell: two primary panels (Chat / Forms), theme, conversations, session. */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { Sidebar } from './components/Sidebar'
 import { ChatPanel } from './components/ChatPanel'
@@ -11,6 +11,8 @@ import { SourceDrawer } from './components/SourceDrawer'
 import { BrainStatus } from './components/BrainStatus'
 import { ChatIcon, FileTextIcon, MenuIcon, MoonIcon, ScaleIcon, SunIcon } from './components/icons'
 import { getSessionId } from './lib/api'
+import { useFocusTrap } from './hooks/useFocusTrap'
+import { useScrollLock } from './hooks/useScrollLock'
 import { loadLanguage, saveLanguage } from './lib/languages'
 import type { Citation } from './lib/citations'
 import {
@@ -65,6 +67,33 @@ function MainApp() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   // Answer-language preference (D-077): "auto" or a supported code.
   const [language, setLanguage] = useState<string>(() => loadLanguage())
+
+  // Mobile sidebar drawer (a11y): trap focus, lock scroll, Escape closes,
+  // focus moves into the drawer on open and back to the toggle on close.
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const sidebarPanelRef = useFocusTrap<HTMLDivElement>(sidebarOpen)
+  useScrollLock(sidebarOpen)
+
+  useEffect(() => {
+    if (!sidebarOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSidebarOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [sidebarOpen])
+
+  useEffect(() => {
+    if (!sidebarOpen) return
+    const node = sidebarPanelRef.current
+    const first =
+      node?.querySelector<HTMLElement>('button, a[href], input, select, textarea') ?? null
+    ;(first ?? node)?.focus()
+    return () => {
+      menuButtonRef.current?.focus()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidebarOpen])
 
   useEffect(() => {
     saveLanguage(language)
@@ -137,8 +166,9 @@ function MainApp() {
       <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-ink-200 bg-white/85 px-3 backdrop-blur sm:px-4 dark:border-ink-800 dark:bg-ink-950/85">
         <div className="flex min-w-0 items-center gap-2">
           <button
+            ref={menuButtonRef}
             type="button"
-            className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-ink-600 transition-colors hover:bg-ink-100 hover:text-ink-900 md:hidden dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-100"
+            className="inline-flex size-11 shrink-0 items-center justify-center rounded-lg text-ink-600 transition-colors hover:bg-ink-100 hover:text-ink-900 md:hidden md:size-9 dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-100"
             onClick={() => setSidebarOpen((open) => !open)}
             aria-expanded={sidebarOpen}
             aria-label="Toggle conversations sidebar"
@@ -158,6 +188,13 @@ function MainApp() {
         <div
           role="tablist"
           aria-label="Primary panels"
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
+            event.preventDefault()
+            const next: Panel = panel === 'chat' ? 'forms' : 'chat'
+            setPanel(next)
+            document.getElementById(`tab-${next}`)?.focus()
+          }}
           className="flex gap-0.5 rounded-full border border-ink-200 bg-ink-100/80 p-0.5 dark:border-ink-800 dark:bg-ink-900"
         >
           {(
@@ -173,6 +210,7 @@ function MainApp() {
               id={`tab-${value}`}
               aria-selected={panel === value}
               aria-controls="main"
+              tabIndex={panel === value ? 0 : -1}
               onClick={() => setPanel(value)}
               className={`flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-medium transition-colors sm:px-3 ${
                 panel === value
@@ -194,7 +232,7 @@ function MainApp() {
             type="button"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-            className="inline-flex size-9 items-center justify-center rounded-lg text-ink-600 transition-colors hover:bg-ink-100 hover:text-ink-900 dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-100"
+            className="inline-flex size-11 items-center justify-center rounded-lg text-ink-600 transition-colors hover:bg-ink-100 hover:text-ink-900 md:size-9 dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-100"
           >
             {theme === 'dark' ? <SunIcon className="size-4.5" /> : <MoonIcon className="size-4.5" />}
           </button>
@@ -210,6 +248,10 @@ function MainApp() {
           />
         )}
         <div
+          ref={sidebarPanelRef}
+          role={sidebarOpen ? 'dialog' : undefined}
+          aria-modal={sidebarOpen ? true : undefined}
+          aria-label={sidebarOpen ? 'Conversations' : undefined}
           className={`${
             sidebarOpen
               ? 'absolute inset-x-0 top-0 bottom-0 z-30 w-72 animate-rise bg-ink-50 shadow-xl md:relative md:inset-auto md:z-auto md:w-64 md:animate-none md:shrink-0 md:border-r md:shadow-none dark:bg-ink-950'

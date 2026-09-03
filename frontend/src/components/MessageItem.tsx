@@ -42,7 +42,7 @@ export function MessageItem({
     return (
       <div className="flex animate-rise justify-end">
         <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand-700 px-4 py-2.5 text-white shadow-sm dark:bg-brand-500 dark:text-ink-950">
-          <p className="whitespace-pre-wrap">{message.content}</p>
+          <p className="break-words whitespace-pre-wrap">{message.content}</p>
         </div>
       </div>
     )
@@ -100,7 +100,10 @@ export function MessageItem({
             )}
 
             {message.refused && (
-              <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-amber-300/80 bg-amber-50/70 px-2.5 py-1.5 text-xs text-amber-800 dark:border-amber-700/80 dark:bg-amber-950/40 dark:text-amber-300">
+              <p
+                role="status"
+                className="mt-2 flex items-start gap-1.5 rounded-lg border border-amber-300/80 bg-amber-50/70 px-2.5 py-1.5 text-xs text-amber-800 dark:border-amber-700/80 dark:bg-amber-950/40 dark:text-amber-300"
+              >
                 <AlertIcon className="mt-0.5 size-3.5 shrink-0" />
                 The assistant refused to answer because the retrieved source material was
                 insufficient. Nothing was invented.
@@ -114,7 +117,7 @@ export function MessageItem({
                     key={citation.label}
                     type="button"
                     onClick={() => onSelectCitation(citation)}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-brand-300/80 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-800 transition-colors hover:border-brand-500 hover:bg-brand-100 dark:border-brand-700 dark:bg-brand-900/40 dark:text-brand-200 dark:hover:bg-brand-900"
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-brand-300/80 bg-brand-50 px-3 py-2 text-xs font-medium text-brand-800 transition-colors hover:border-brand-500 hover:bg-brand-100 dark:border-brand-700 dark:bg-brand-900/40 dark:text-brand-200 dark:hover:bg-brand-900"
                     aria-label={`Show source for ${citation.label}`}
                   >
                     {citation.source?.source_type === 'user_document' ? (
@@ -129,11 +132,11 @@ export function MessageItem({
             )}
           </div>
 
-          <div className="mt-1 flex gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+          <div className="mt-1 flex gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 max-md:opacity-100">
             <button
               type="button"
               onClick={copy}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-800 dark:hover:bg-ink-800 dark:hover:text-ink-200"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-md px-1.5 py-1 text-xs text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-800 dark:hover:bg-ink-800 dark:hover:text-ink-200"
               aria-label="Copy answer"
             >
               {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
@@ -150,7 +153,7 @@ export function MessageItem({
               <button
                 type="button"
                 onClick={onRegenerate}
-                className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-800 dark:hover:bg-ink-800 dark:hover:text-ink-200"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-md px-1.5 py-1 text-xs text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-800 dark:hover:bg-ink-800 dark:hover:text-ink-200"
                 aria-label="Regenerate answer"
               >
                 <RefreshIcon className="size-3.5" />

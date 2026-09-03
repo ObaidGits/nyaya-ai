@@ -127,7 +127,10 @@ export function ProvidersPanel() {
   }, [])
 
   useEffect(() => {
-    void load()
+    // Defer to a microtask so the effect body itself performs no
+    // synchronous setState (react-hooks/set-state-in-effect).
+    const timer = window.setTimeout(() => void load(), 0)
+    return () => window.clearTimeout(timer)
   }, [load])
 
   const dirty = useMemo(() => {

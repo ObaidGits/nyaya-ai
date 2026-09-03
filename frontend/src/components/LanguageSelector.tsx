@@ -26,7 +26,7 @@ export function LanguageSelector({ language, onChange, disabled }: LanguageSelec
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         title="Language for answers. Manual choice overrides auto detection."
-        className="max-w-[9.5rem] cursor-pointer rounded-full border border-ink-200 bg-white px-2.5 py-1 text-xs font-medium text-ink-700 outline-none transition-colors hover:border-ink-300 focus-visible:border-brand-500 focus-visible:ring-2 focus-visible:ring-brand-500/20 disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-none dark:border-ink-800 dark:bg-ink-900 dark:text-ink-300 dark:hover:border-ink-700"
+        className="max-w-[9.5rem] min-h-11 cursor-pointer rounded-full border border-ink-200 bg-white px-2.5 py-2.5 text-xs font-medium text-ink-700 outline-none transition-colors hover:border-ink-300 focus-visible:border-brand-500 focus-visible:ring-2 focus-visible:ring-brand-500/20 disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-none dark:border-ink-800 dark:bg-ink-900 dark:text-ink-300 dark:hover:border-ink-700"
       >
         {LANGUAGE_OPTIONS.map((option) => (
           <option key={option.value} value={option.value}>

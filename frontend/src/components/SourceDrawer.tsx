@@ -7,6 +7,7 @@
 import { useEffect, useRef } from 'react'
 import type { Citation } from '../lib/citations'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useScrollLock } from '../hooks/useScrollLock'
 import { BookOpenIcon, FileTextIcon, XIcon } from './icons'
 
 interface SourceDrawerProps {
@@ -17,9 +18,19 @@ interface SourceDrawerProps {
 export function SourceDrawer({ citation, onClose }: SourceDrawerProps) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const trapRef = useFocusTrap<HTMLElement>(Boolean(citation))
+  // Focus restore: return focus to the citation chip that opened the drawer.
+  const openerRef = useRef<HTMLElement | null>(null)
+
+  useScrollLock(Boolean(citation))
 
   useEffect(() => {
-    if (citation) closeRef.current?.focus()
+    if (citation) {
+      openerRef.current = document.activeElement as HTMLElement | null
+      closeRef.current?.focus()
+    } else {
+      openerRef.current?.focus?.()
+      openerRef.current = null
+    }
   }, [citation])
 
   useEffect(() => {
@@ -36,7 +47,7 @@ export function SourceDrawer({ citation, onClose }: SourceDrawerProps) {
   const isUserDocument = source?.source_type === 'user_document'
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end">
+    <div className="fixed inset-0 z-40 flex flex-col justify-end md:flex-row md:justify-end">
       <div
         className="absolute inset-0 animate-fade-in bg-ink-950/40"
         onClick={onClose}
@@ -47,8 +58,10 @@ export function SourceDrawer({ citation, onClose }: SourceDrawerProps) {
         role="dialog"
         aria-modal="true"
         aria-label={`Source for ${label}`}
-        className="relative flex h-full w-full max-w-md animate-drawer-in flex-col bg-white shadow-2xl dark:bg-ink-900"
+        className="relative flex max-h-[85dvh] w-full animate-sheet-in flex-col rounded-t-2xl bg-white shadow-2xl dark:bg-ink-900 md:h-full md:max-h-none md:max-w-md md:animate-drawer-in md:rounded-none"
       >
+        {/* Drag-handle affordance on the mobile sheet (visual only). */}
+        <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-ink-300 md:hidden dark:bg-ink-700" aria-hidden="true" />
         <header className="flex items-start justify-between gap-3 border-b border-ink-200 px-5 py-4 dark:border-ink-800">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-ink-400 dark:text-ink-500">
@@ -79,14 +92,14 @@ export function SourceDrawer({ citation, onClose }: SourceDrawerProps) {
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-ink-200 text-ink-600 transition-colors hover:bg-ink-100 hover:text-ink-900 dark:border-ink-700 dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-100"
+            className="inline-flex size-11 shrink-0 items-center justify-center rounded-lg border border-ink-200 text-ink-600 transition-colors hover:bg-ink-100 hover:text-ink-900 md:size-9 dark:border-ink-700 dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-100"
           >
             <XIcon className="size-4.5" />
           </button>
         </header>
 
         {source ? (
-          <div className="scroll-thin flex-1 space-y-5 overflow-y-auto px-5 py-4 text-sm">
+          <div className="scroll-thin flex-1 space-y-5 overflow-y-auto px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 text-sm md:pb-4">
             <dl className="space-y-2">
               {source.act && (
                 <div className="flex gap-3">

@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react'
 import { subscribe, type ToastItem } from '../lib/toast'
+import { XIcon } from './icons'
 
 const AUTO_DISMISS_MS = 6000
 
@@ -31,7 +32,7 @@ export function ToastHost() {
   return (
     <div
       aria-live="polite"
-      className="pointer-events-none fixed bottom-24 left-1/2 z-50 flex w-full max-w-sm -translate-x-1/2 flex-col gap-2 px-4"
+      className="pointer-events-none fixed left-1/2 z-50 flex w-full max-w-sm -translate-x-1/2 flex-col gap-2 px-4 top-16 bottom-auto sm:top-auto sm:bottom-24"
     >
       {items.map((item) => (
         <div
@@ -48,9 +49,9 @@ export function ToastHost() {
             type="button"
             aria-label="Dismiss notification"
             onClick={() => setItems((current) => current.filter((i) => i.id !== item.id))}
-            className="shrink-0 text-xs opacity-60 hover:opacity-100"
+            className="inline-flex min-h-9 min-w-9 shrink-0 items-center justify-center rounded-md text-xs transition-colors hover:bg-ink-100 dark:hover:bg-ink-800"
           >
-            ✕
+            <XIcon className="size-4.5" />
           </button>
         </div>
       ))}

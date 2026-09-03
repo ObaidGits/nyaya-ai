@@ -28,6 +28,7 @@ export function FormsPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<{ form: FormListItem; url: string } | null>(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
   const searchTimer = useRef<number | null>(null)
   const previewTrapRef = useFocusTrap<HTMLDivElement>(Boolean(preview))
 
@@ -74,13 +75,19 @@ export function FormsPanel() {
   }
 
   const openPreview = async (form: FormListItem) => {
-    const response = await fetch(formDownloadUrl(form.form_number))
-    if (!response.ok) {
-      setError('This form could not be previewed. Try downloading it instead.')
-      return
+    if (previewBusy) return
+    setPreviewBusy(true)
+    try {
+      const response = await fetch(formDownloadUrl(form.form_number))
+      if (!response.ok) {
+        setError('This form could not be previewed. Try downloading it instead.')
+        return
+      }
+      const blob = await response.blob()
+      setPreview({ form, url: URL.createObjectURL(blob) })
+    } finally {
+      setPreviewBusy(false)
     }
-    const blob = await response.blob()
-    setPreview({ form, url: URL.createObjectURL(blob) })
   }
 
   const closePreview = useCallback(() => {
@@ -119,7 +126,7 @@ export function FormsPanel() {
         </div>
         <a
           href={FORMS_ZIP_URL}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-700 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-brand-800 dark:bg-brand-500 dark:text-ink-950 dark:hover:bg-brand-400"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-700 px-3 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-brand-800 dark:bg-brand-500 dark:text-ink-950 dark:hover:bg-brand-400"
           download
         >
           <DownloadIcon className="size-4" />
@@ -138,7 +145,7 @@ export function FormsPanel() {
             type="search"
             placeholder="Search by title or number…"
             onChange={(e) => onQueryChange(e.target.value)}
-            className="w-full rounded-lg border border-ink-300 bg-white py-1.5 pl-9 pr-3 text-sm transition-colors focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none dark:border-ink-700 dark:bg-ink-900"
+            className="w-full rounded-lg border border-ink-300 bg-white py-2.5 pl-9 pr-3 text-sm transition-colors focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none dark:border-ink-700 dark:bg-ink-900"
           />
         </div>
         <fieldset className="flex items-center gap-0.5 rounded-full border border-ink-200 bg-ink-100/80 p-0.5 text-xs dark:border-ink-800 dark:bg-ink-900">
@@ -152,7 +159,7 @@ export function FormsPanel() {
           ).map(([value, label]) => (
             <label
               key={value}
-              className={`cursor-pointer rounded-full px-2.5 py-1 transition-colors ${
+              className={`cursor-pointer rounded-full px-2.5 py-2 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand-500/40 ${
                 filter === value
                   ? 'bg-white font-medium text-ink-900 shadow-sm dark:bg-ink-800 dark:text-ink-100'
                   : 'text-ink-600 hover:text-ink-900 dark:text-ink-300 dark:hover:text-ink-100'
@@ -193,7 +200,7 @@ export function FormsPanel() {
             </p>
           </div>
         )}
-        <ul className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3" role="list">
+        <ul className="mx-auto grid w-full max-w-6xl gap-2.5 sm:grid-cols-2 xl:grid-cols-3" role="list">
           {forms.map((form) => (
             <li
               key={form.form_number}
@@ -218,15 +225,16 @@ export function FormsPanel() {
                 <button
                   type="button"
                   onClick={() => void openPreview(form)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-ink-300 px-2.5 py-1 transition-colors hover:bg-ink-100 dark:border-ink-700 dark:hover:bg-ink-800"
+                  disabled={previewBusy}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-ink-300 px-2.5 py-2 transition-colors hover:bg-ink-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-ink-700 dark:hover:bg-ink-800"
                 >
                   <EyeIcon className="size-3.5" />
-                  Preview
+                  {previewBusy ? 'Loading…' : 'Preview'}
                 </button>
                 <a
                   href={formDownloadUrl(form.form_number)}
                   download={form.output_filename}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-brand-500 px-2.5 py-1 text-brand-700 transition-colors hover:bg-brand-50 dark:border-brand-500 dark:text-brand-300 dark:hover:bg-brand-900/40"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-brand-500 px-2.5 py-2 text-brand-700 transition-colors hover:bg-brand-50 dark:border-brand-500 dark:text-brand-300 dark:hover:bg-brand-900/40"
                 >
                   <DownloadIcon className="size-3.5" />
                   Download
@@ -250,7 +258,7 @@ export function FormsPanel() {
             role="dialog"
             aria-modal="true"
             aria-label={`Preview of Form ${preview.form.form_number}`}
-            className="relative flex h-full max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-ink-900"
+            className="relative mx-2 my-2 flex h-[92dvh] w-full max-w-none flex-col overflow-hidden rounded-xl bg-white shadow-2xl sm:mx-auto sm:my-auto sm:h-full sm:max-w-3xl sm:max-h-[85vh] dark:bg-ink-900"
           >
             <div className="flex items-center justify-between gap-2 border-b border-ink-200 px-4 py-2.5 dark:border-ink-800">
               <p className="min-w-0 truncate text-sm font-medium">
@@ -269,7 +277,7 @@ export function FormsPanel() {
             <iframe
               src={preview.url}
               title={`Form ${preview.form.form_number} preview`}
-              className="flex-1"
+              className="flex-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:pb-0"
             />
           </div>
         </div>
