@@ -15,15 +15,19 @@ import re
 
 from app.retrieval.models import RetrievalRoute, SectionIntent
 
-# "section 103", "section 103(1)", "s. 103", "sec. 103"
+# "section 103", "section 103(1)", "s. 103", "sec. 103". The trailing
+# (?!\d) guards reject truncated 4+ digit numbers ("BNS 1030" must not
+# resolve to section 103).
 _SECTION_RE = re.compile(
-    r"\b(?:section|sec\.?|s\.)\s*(\d{1,3})(?:\s*\(\s*(\d{1,3})\s*\))?",
+    r"\b(?:section|sec\.?|s\.)\s*(\d{1,3})(?!\d)(?:\s*\(\s*(\d{1,3})\s*\))?(?!\d)",
     re.IGNORECASE,
 )
 # "103 BNS" / "BNS 103" — identifier-style phrasing
-_ACT_NUMBER_RE = re.compile(r"\b(?:BNS|BNSS)\s*(\d{1,3})(?:\s*\(\s*(\d{1,3})\s*\))?", re.IGNORECASE)
+_ACT_NUMBER_RE = re.compile(
+    r"\b(?:BNS|BNSS)\s*(\d{1,3})(?!\d)(?:\s*\(\s*(\d{1,3})\s*\))?(?!\d)", re.IGNORECASE
+)
 _NUMBER_ACT_RE = re.compile(
-    r"\b(\d{1,3})(?:\s*\(\s*(\d{1,3})\s*\))?\s*(?:BNS|BNSS)\b", re.IGNORECASE
+    r"\b(\d{1,3})(?!\d)(?:\s*\(\s*(\d{1,3})\s*\))?(?!\d)\s*(?:BNS|BNSS)\b", re.IGNORECASE
 )
 _ACT_MENTION_RE = re.compile(r"\b(BNS|BNSS)\b", re.IGNORECASE)
 
@@ -42,34 +46,57 @@ _UNIT_FOLLOWER_RE = re.compile(
     r"|forms?|copies?|numbers?|articles?|clauses?)\b",
     re.IGNORECASE,
 )
+# Non-statute identifiers and currency amounts preceding a bare number:
+# "case no. 5", "page 12", "Rs 300", "$500". Currency symbols are not word
+# characters, so they sit outside the \b alternation.
 _NON_STATUTE_PRECEDER_RE = re.compile(
-    r"\b(?:case|number|no|nos|page|pg|form|fir|chapter|part|schedule|annexure"
-    r"|article|clause|sub|sl|serial)\s*\.?\s*$",
+    r"(?:\b(?:case|number|no|nos|page|pg|form|fir|chapter|part|schedule|annexure"
+    r"|article|clause|sub|sl|serial|rs|inr|usd)|[₹$€£])\s*\.?\s*$",
     re.IGNORECASE,
 )
 
 # Document nouns: artifacts a user may hold and ask about. Grouped so the
 # hint pattern and the procedural-exception patterns below stay in sync.
-_DOCUMENT_NOUN_RE = (
-    r"(?:documents?|docs?|notices?|agreements?|contracts?|letters?|complaints?"
-    r"|firs?|f\.i\.r\.|files?|pdfs?|petitions?|writs?|suits?|plaints?"
-    r"|affidavits?|judgements?|judgments?|deeds?|wills?)"
+# STRONG nouns are legalese that almost always mean the user's artifact
+# ("the writ petition", "what did the judgment hold") — a bare "the" is a
+# document hint. WEAK nouns double as ordinary English words with generic
+# statute meanings ("the notice period", "the documents required for
+# filing an FIR"), so they need a possessive/deictic determiner ("my
+# notice", "this agreement", "the uploaded FIR") to count as hints.
+_DOCUMENT_STRONG_NOUN_RE = (
+    r"(?:petitions?|writs?|suits?|plaints?|affidavits?|judgements?|judgments?|firs?|f\.i\.r\.)"
 )
-_DOCUMENT_DETERMINER_RE = r"(?:my|our|this|that|these|those|his|her|their|the|uploaded|attached)"
+_DOCUMENT_WEAK_NOUN_RE = (
+    r"(?:documents?|docs?|notices?|agreements?|contracts?|letters?|complaints?"
+    r"|files?|pdfs?|deeds?|wills?)"
+)
+_DOCUMENT_NOUN_RE = rf"(?:{_DOCUMENT_STRONG_NOUN_RE}|{_DOCUMENT_WEAK_NOUN_RE})"
+_DOCUMENT_DEICTIC_RE = r"(?:my|our|this|that|these|those|his|her|their|uploaded|attached)"
 
-# A document hint is a determiner + document noun ("my notice", "the
-# uploaded FIR"): the query references the user's own artifact.
+# A document hint is a deictic determiner + document noun ("my notice",
+# "the uploaded FIR") — or "the" + a strong artifact noun ("the
+# petition") — referencing the user's own artifact.
 _DOCUMENT_HINT_RE = re.compile(
-    rf"\b{_DOCUMENT_DETERMINER_RE}\s+(?:\w+\s+){{0,2}}{_DOCUMENT_NOUN_RE}\b",
+    rf"\b{_DOCUMENT_DEICTIC_RE}\s+(?:\w+\s+){{0,2}}{_DOCUMENT_NOUN_RE}\b"
+    rf"|\bthe\s+(?:\w+\s+){{0,2}}{_DOCUMENT_STRONG_NOUN_RE}\b",
     re.IGNORECASE,
 )
 
 # Procedural exceptions (routing audit, remediation C): a document noun is
 # NOT a document hint when it is the object of a filing verb ("file my
-# FIR", "lodged a complaint", "give notice") — that is procedure, asked of
-# the statute corpus, not a request to read an artifact.
+# FIR", "lodged a complaint", "draft a reply to the legal notice") — that
+# is procedure, asked of the statute corpus, not a request to read an
+# artifact. Up to two filler words and a second determiner/adjective are
+# allowed between the verb and the noun. The negative lookahead excludes
+# compound nouns where the -ing/-ed word is a MODIFIER, not a verb:
+# "filing date", "filing fees", "notice period" are attributes of an
+# artifact, not the act of filing one.
 _FILING_VERB_RE = re.compile(
     rf"\b(?:fil\w*|lodg\w*|register\w*|submi\w*|serv\w*|giv\w*|issu\w*|draft\w*|withdraw\w*)\s+"
+    rf"(?!dates?|fees?|procedure|process|requirements?|format|rules|timeline|period"
+    rf"|deadline|limitation)\s*"
+    rf"(?:an?\s+|the\s+|my\s+|our\s+|this\s+|that\s+|his\s+|her\s+|their\s+|any\s+|another\s+|no\s+)?"
+    rf"(?:\w+\s+){{0,2}}"
     rf"(?:an?\s+|the\s+|my\s+|our\s+|this\s+|that\s+|his\s+|her\s+|their\s+|any\s+|another\s+|no\s+)?"
     rf"(?:\w+\s+)?{_DOCUMENT_NOUN_RE}\b",
     re.IGNORECASE,
@@ -142,6 +169,10 @@ def detect_section_intent(query: str) -> SectionIntent | None:
     for pattern in (_SECTION_RE, _ACT_NUMBER_RE, _NUMBER_ACT_RE):
         match = pattern.search(query)
         if match:
+            # "s. 7.5 lakh": the explicit prefix is part of a decimal
+            # amount, not a section marker.
+            if _DECIMAL_TAIL_RE.match(query[match.end() :]):
+                continue
             section = match.group(1)
             subsection = match.group(2)
             act = None
@@ -162,7 +193,14 @@ def detect_section_intent(query: str) -> SectionIntent | None:
             continue
         if _DECIMAL_TAIL_RE.match(tail):
             continue
+        # Indian comma grouping ("2,00,000"): a group that continues with
+        # ",<digits>" or follows "<digits>," is part of a larger number,
+        # not a section.
+        if re.match(r"^\s*,\d", tail):
+            continue
         prefix = query[: match.start()]
+        if re.search(r"\d,\s*$", prefix):
+            continue
         if _NON_STATUTE_PRECEDER_RE.search(prefix):
             continue
         if _DECIMAL_PREFIX_RE.search(prefix):

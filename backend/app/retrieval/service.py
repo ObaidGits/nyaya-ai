@@ -71,6 +71,48 @@ _STATUTE_TITLE_RE = re.compile(
     r"(?:Act|Code|Constitution|Amendment))\b"
 )
 
+# Well-known non-corpus statutes and foreign jurisdictions, matched
+# case-insensitively. A Title-case-only pattern lets lowercase mentions
+# through ("what does the hindu marriage act say") and misses names whose
+# connective words are lowercase ("Code of Civil Procedure"); full-name
+# word-anchored matching avoids the generic act/code false positives that
+# forced Title case in the first place. Jurisdictions cover the
+# place-scoped question ("punishment for murder in New York") where no
+# statute is named at all: BNS is Indian law, so a foreign jurisdiction
+# means the corpus cannot ground the question.
+_FOREIGN_STATUTE_NAMES = (
+    "hindu marriage act",
+    "special marriage act",
+    "hindu succession act",
+    "dowry prohibition act",
+    "domestic violence act",
+    "indian contract act",
+    "indian penal code",
+    "code of civil procedure",
+    "code of criminal procedure",
+    "indian evidence act",
+    "consumer protection act",
+    "information technology act",
+    "transfer of property act",
+    "muslim personal law",
+)
+_FOREIGN_JURISDICTIONS = (
+    "new york", "california", "texas", "florida", "illinois", "ohio",
+    "washington dc", "chicago", "los angeles", "boston", "seattle",
+    "united states", "united kingdom", "england", "scotland", "wales",
+    "ireland", "london", "canada", "australia", "pakistan", "bangladesh",
+    "china", "japan", "singapore", "dubai", "united arab emirates",
+    "germany", "france", "netherlands", "russia", "malaysia", "usa", "uk",
+)
+_FOREIGN_NAME_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(name) for name in _FOREIGN_STATUTE_NAMES) + r")\b",
+    re.IGNORECASE,
+)
+_FOREIGN_JURISDICTION_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(place) for place in _FOREIGN_JURISDICTIONS) + r")\b",
+    re.IGNORECASE,
+)
+
 
 class RetrievalService:
     """Query → structured evidence, statute corpus only at this phase."""
@@ -245,15 +287,22 @@ class RetrievalService:
     def _foreign_statute(self, query: str) -> str | None:
         """Name of a statute the query asks about that is not the corpus.
 
-        Compares Title-case statute mentions against the indexed acts'
-        names (from chunk metadata, SRC-013). A mention that shares a
-        content word with the corpus act name ("Bharatiya Nyaya Sanhita
-        Act") is in scope; anything else ("Hindu Marriage Act", "US
-        Constitution", "Indian Contract Act") is out of scope — the corpus
-        cannot ground it, so retrieval must fail closed rather than
-        substitute look-alike BNS sections. Document evidence is not
-        affected: a user's own upload may legitimately cite other statutes.
+        Compares Title-case statute mentions and well-known foreign statute
+        / jurisdiction names against the indexed acts' names (from chunk
+        metadata, SRC-013). A mention that shares a content word with the
+        corpus act name ("Bharatiya Nyaya Sanhita Act") is in scope;
+        anything else ("Hindu Marriage Act", "US Constitution", "Indian
+        Contract Act", "New York") is out of scope — the corpus cannot
+        ground it, so retrieval must fail closed rather than substitute
+        look-alike BNS sections. Document evidence is not affected: a
+        user's own upload may legitimately cite other statutes.
         """
+        known = _FOREIGN_NAME_RE.search(query)
+        if known is not None:
+            return known.group(0)
+        jurisdiction = _FOREIGN_JURISDICTION_RE.search(query)
+        if jurisdiction is not None:
+            return f"{jurisdiction.group(0)} law"
         match = _STATUTE_TITLE_RE.search(query)
         if match is None:
             return None
@@ -338,6 +387,12 @@ class RetrievalService:
                     reasons.append(f"act {intent.act_short} not present in the indexed corpus")
             if flt is not None:
                 chunks = [c for c in chunks if self._store.matches(c, flt)]
+            if intent.subsection is not None:
+                # A lookup naming a subsection ("103(2)") prefers the
+                # chunks for that exact subsection; the whole-section
+                # chunks are the fallback when the corpus splits the
+                # section differently.
+                chunks = self._narrow_subsection(chunks, intent.subsection) or chunks
             lookup_results = [
                 ScoredChunk(chunk=chunk, source="lookup", rrf_score=1.0) for chunk in chunks
             ]
@@ -419,6 +474,23 @@ class RetrievalService:
         )
         self._log(query, evidence)
         return evidence
+
+    @staticmethod
+    def _narrow_subsection(chunks: list, subsection: str) -> list:
+        """Chunks for the exact subsection of a section lookup, may be [].
+
+        A chunk matches when its own subsection metadata equals the wanted
+        one, or when a whole-section chunk's text carries the inline
+        "(n)" marker. Chunks for a different subsection never match.
+        """
+        wanted = subsection.strip("()")
+        specific = []
+        for chunk in chunks:
+            same_sub = chunk.subsection and chunk.subsection.strip("()") == wanted
+            inline_marker = chunk.subsection is None and f"({wanted})" in chunk.text
+            if same_sub or inline_marker:
+                specific.append(chunk)
+        return specific
 
     def _confidence(self, results: list[ScoredChunk]) -> float:
         """Normalized RRF confidence: top score / theoretical max.

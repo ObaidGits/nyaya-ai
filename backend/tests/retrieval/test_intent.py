@@ -180,3 +180,88 @@ def test_colloquial_doc_noun_routes_document(query: str) -> None:
     its sufficiency threshold — so the document fallback never fired and
     the model refused on irrelevant statute chunks."""
     assert classify_route(query) == RetrievalRoute.DOCUMENT
+
+
+# ---------------------------------------------------------------------------
+# Intent false positives (H1/H2 audit): money and long numbers are not
+# section identifiers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "A steals a cycle worth Rs 300 to feed his starving children. Is he exempt?",
+        "The fine is Rs. 500 under BNS.",
+        "s. 7.5 lakh penalty",
+        "The compensation was ₹ 2,00,000. What section applies?",
+        "He paid $500 as damages. Which BNS section covers this?",
+    ],
+)
+def test_money_amounts_are_not_section_intents(query: str) -> None:
+    assert detect_section_intent(query) is None
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is the fine under BNS 1030?",
+        "What does section 1030 say?",
+        "Explain 9999 BNS",
+        "BNS 35600 punishment",
+    ],
+)
+def test_four_digit_numbers_are_not_truncated_sections(query: str) -> None:
+    """BNS has 358 sections: a 4+ digit number is never a section, and the
+    1-3 digit regex must not silently truncate "1030" to "103"."""
+    assert detect_section_intent(query) is None
+
+
+def test_explicit_section_forms_still_match_after_guards() -> None:
+    for query, section, subsection in (
+        ("What is section 103 BNS?", "103", None),
+        ("BNS 103(1) punishment?", "103", "1"),
+        ("what does 197 BNSS say about bail", "197", None),
+        ("Explain 103(1)", "103", "1"),
+    ):
+        intent = detect_section_intent(query)
+        assert intent is not None, query
+        assert intent.section_number == section, query
+        assert intent.subsection == subsection, query
+
+
+# ---------------------------------------------------------------------------
+# Weak determiner routing (H3 audit): bare "the" + generic noun is a
+# statute question, not a document reference
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is the notice period for terminating a tenancy?",
+        "What are the documents required for filing an FIR?",
+        "What is the agreement law in India?",
+        "the documents required for filing an FIR",
+    ],
+)
+def test_bare_the_with_weak_noun_routes_statute(query: str) -> None:
+    assert classify_route(query) == RetrievalRoute.STATUTE
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is the filing date in the writ petition?",
+        "What did the judgment hold?",
+        "the uploaded FIR",
+    ],
+)
+def test_strong_artifact_nouns_keep_document_route(query: str) -> None:
+    assert classify_route(query) == RetrievalRoute.DOCUMENT
+
+
+def test_draft_reply_to_notice_is_procedure() -> None:
+    """"Draft a reply to the legal notice" asks HOW to draft — statute
+    procedure — not what an uploaded notice contains."""
+    assert classify_route("draft a reply to the legal notice") == RetrievalRoute.STATUTE

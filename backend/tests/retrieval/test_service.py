@@ -433,3 +433,73 @@ def test_statute_route_fallback_keeps_foreign_statute_fail_closed() -> None:
     evidence = service.retrieve("What does the Hindu Marriage Act say?", session_id="sess-1")
     assert not evidence.sufficient
     assert evidence.document_hits == []
+
+
+# ---------------------------------------------------------------------------
+# Foreign statute gate: case-insensitivity + jurisdictions (M2 audit)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is the punishment of murder in New York?",
+        "What is the punishment for murder in new york?",
+        "How does california law punish theft?",
+        "what does the hindu marriage act say about divorce?",
+        "What are the sections of the Code of Civil Procedure for bailment?",
+    ],
+)
+def test_foreign_statute_gate_case_insensitive_and_jurisdictions(query: str) -> None:
+    """Lowercase statute names, connective-lowercase act names ("Code of
+    Civil Procedure"), and bare foreign jurisdictions ("murder in New
+    York") all fail closed with the not-the-indexed-corpus reason, so the
+    contextual refusal can say WHY (BNS does not cover New York law)."""
+    service = _service()
+    evidence = service.retrieve(query)
+    assert not evidence.sufficient, query
+    assert evidence.results == [], query
+    assert any("not the indexed corpus" in r for r in evidence.reasons), query
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is the punishment for murder in India?",
+        "What does the Bharatiya Nyaya Sanhita say about murder?",
+        "Is a notice period required under the Test Sanhita Act?",
+    ],
+)
+def test_indian_references_are_not_foreign(query: str) -> None:
+    service = _service()
+    evidence = service.retrieve(query)
+    assert all("not the indexed corpus" not in r for r in evidence.reasons), query
+
+
+# ---------------------------------------------------------------------------
+# Subsection narrowing on deterministic lookup (M3 audit)
+# ---------------------------------------------------------------------------
+
+
+def test_subsection_lookup_prefers_subsection_chunk() -> None:
+    """A lookup naming a subsection returns the chunks for that exact
+    subsection, not the whole section's other parts."""
+    service = _service()
+    evidence = service.retrieve("What does section 103(1) of BNS say?")
+    assert evidence.results
+    assert all(r.chunk.chunk_id == "ts-s103-002" for r in evidence.results)
+
+
+def test_subsection_lookup_falls_back_to_whole_section() -> None:
+    """No chunk for the named subsection (corpus splits the section
+    differently): the whole-section chunks ground the answer."""
+    service = _service()
+    evidence = service.retrieve("What does section 103(2) of BNS say?")
+    assert evidence.results
+    assert {r.chunk.chunk_id for r in evidence.results} == {"ts-s103-001", "ts-s103-002"}
+
+
+def test_whole_section_lookup_unnarrowed() -> None:
+    service = _service()
+    evidence = service.retrieve("section 103 BNS")
+    assert {r.chunk.chunk_id for r in evidence.results} == {"ts-s103-001", "ts-s103-002"}
