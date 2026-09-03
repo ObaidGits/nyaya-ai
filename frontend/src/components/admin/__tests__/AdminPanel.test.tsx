@@ -102,6 +102,23 @@ function stubAdmin(
         )
       }
       const defaults: Record<string, () => Response> = {
+        'GET /api/v1/admin/providers': () =>
+          jsonResponse({
+            pools: {
+              llm: { entries: [], default_entry_id: null, strategy: 'priority', mode: 'environment' },
+              stt: { entries: [], default_entry_id: null, strategy: 'priority', mode: 'environment' },
+              tts: { entries: [], default_entry_id: null, strategy: 'priority', mode: 'environment' },
+            },
+            registered_llm_providers: ['ollama', 'gemini', 'groq'],
+            speech_stt_providers: ['faster-whisper', 'browser'],
+            speech_tts_providers: ['piper', 'browser'],
+            env_fallback: {
+              llm_provider: 'ollama',
+              llm_model: 'llama3.1',
+              speech_stt_provider: 'faster-whisper',
+              speech_tts_provider: 'piper',
+            },
+          }),
         'GET /api/v1/admin/corpus': () =>
           jsonResponse({ status: 'ok', detail: 'active (environment-configured corpus)' }),
         'GET /api/v1/admin/memory': () =>
@@ -302,7 +319,7 @@ describe('AdminPanel settings', () => {
     ).toBeTruthy()
   })
 
-  it('marks a console-saved setting as overriding the env default (D-090)', async () => {
+  it('does not repeat the console-override hint under every field', async () => {
     stubAdmin({
       'GET /api/v1/admin/settings': () =>
         jsonResponse({
@@ -312,8 +329,10 @@ describe('AdminPanel settings', () => {
     })
     render(<Harness />)
     await screen.findByText('AI / LLM provider')
-    // Only the console-saved field shows the override notice (once).
-    expect(screen.getAllByText(/Saved in the admin console/).length).toBe(1)
+    // The per-field ENV-override helper text is gone (console values still
+    // override the environment — silently, without the repeated notice).
+    expect(screen.queryByText(/Saved in the admin console/)).toBeNull()
+    expect(screen.queryByText(/overrides the environment/)).toBeNull()
   })
 
   it('masks secrets and never displays stored values', async () => {

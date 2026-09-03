@@ -16,6 +16,7 @@ import { ADMIN_SECTIONS } from '../../lib/adminSchema'
 import { ApiError } from '../../lib/api'
 import { AdminLogin } from './AdminLogin'
 import { SettingsSectionCard } from './SettingsSectionCard'
+import { ProvidersPanel } from './ProvidersPanel'
 import { CorpusPanel } from './CorpusPanel'
 import { StatusPanel } from './StatusPanel'
 import { MemoryPanel } from './MemoryPanel'
@@ -187,7 +188,6 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
     Object.entries(view.secrets).map(([key, value]) => [key, value === 'set']),
   )
   const secretSources = view.secret_sources ?? {}
-  const valueSources = view.value_sources ?? {}
 
   return (
     <div className="min-h-dvh bg-ink-50 dark:bg-ink-950">
@@ -286,7 +286,6 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
             secrets={draftSecrets}
             secretSet={secretSet}
             secretSources={secretSources}
-            valueSources={valueSources}
             secretCleared={Object.fromEntries(clearedSecrets.map((key) => [key, true]))}
             secretsUnreadable={view.secrets_unreadable}
             providers={view.llm_providers}
@@ -295,6 +294,7 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
             onSecretClear={onSecretClear}
           />
         ))}
+        <ProvidersPanel />
         <CorpusPanel />
         <MemoryPanel />
         <StatusPanel />

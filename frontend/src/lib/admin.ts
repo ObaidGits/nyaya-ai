@@ -228,6 +228,100 @@ export async function fetchStatus(): Promise<SystemStatus> {
   return response.json()
 }
 
+// --- provider pools (failover) --------------------------------------------------
+
+export type PoolName = 'llm' | 'stt' | 'tts'
+
+/** Runtime circuit state for one entry (from the health board). */
+export interface PoolEntryHealth {
+  state: 'untested' | 'healthy' | 'cooling'
+  consecutive_failures?: number
+  last_error?: string
+  last_error_class?: string
+}
+
+export interface PoolEntry {
+  id: string
+  provider: string
+  label: string
+  model: string
+  base_url: string
+  enabled: boolean
+  priority: number
+  /** True when an encrypted API key is stored for this entry. */
+  api_key_set: boolean
+  health: PoolEntryHealth
+}
+
+export interface PoolView {
+  entries: PoolEntry[]
+  default_entry_id: string | null
+  strategy: 'priority' | 'round_robin'
+  /** "pool" when the runtime actually failovers; "environment" = ENV fallback. */
+  mode: 'pool' | 'environment'
+}
+
+export interface ProvidersView {
+  pools: Record<PoolName, PoolView>
+  registered_llm_providers: string[]
+  speech_stt_providers: string[]
+  speech_tts_providers: string[]
+  env_fallback: {
+    llm_provider: string
+    llm_model: string
+    speech_stt_provider: string
+    speech_tts_provider: string
+  }
+}
+
+export async function fetchProviders(): Promise<ProvidersView> {
+  const response = await adminFetch('/providers')
+  if (!response.ok) throw await parseError(response)
+  return response.json()
+}
+
+export interface UpdateProvidersOptions {
+  /** Pool secret keys to remove ("pool:<name>:<entry_id>"). */
+  clearSecrets?: string[]
+  /** Skip the per-entry verification gate (deliberate offline save). */
+  force?: boolean
+}
+
+/** Replace all pool configs. Secrets are keyed "pool:<name>:<entry_id>". */
+export async function updateProviders(
+  pools: Record<string, unknown>,
+  secrets: Record<string, string>,
+  options: UpdateProvidersOptions = {},
+): Promise<ProvidersView> {
+  const response = await adminFetch('/providers', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...ADMIN_MUTATING },
+    body: JSON.stringify({
+      pools,
+      secrets,
+      clear_secrets: options.clearSecrets ?? [],
+      force: options.force ?? false,
+    }),
+  })
+  if (!response.ok) throw await parseError(response)
+  return response.json()
+}
+
+/** Verify a draft entry's credentials before it is saved. */
+export async function testPoolEntry(
+  pool: PoolName,
+  entry: Omit<PoolEntry, 'api_key_set' | 'health'>,
+  apiKey: string,
+): Promise<TestResult> {
+  const response = await adminFetch('/providers/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...ADMIN_MUTATING },
+    body: JSON.stringify({ pool, entry, api_key: apiKey }),
+  })
+  if (!response.ok) throw await parseError(response)
+  return response.json()
+}
+
 export async function fetchCorpus(): Promise<CorpusManifest | DependencyStatus> {
   const response = await adminFetch('/corpus')
   if (!response.ok) throw await parseError(response)
