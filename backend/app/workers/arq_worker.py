@@ -62,7 +62,9 @@ def build_production_workspace(settings: Settings) -> tuple[DocumentWorkspace, R
 
     client = Redis.from_url(settings.redis_url, decode_responses=True)
     store = RedisDocumentStore(client)
-    index = RedisDocumentIndex(client)
+    index = RedisDocumentIndex(
+        client, ttl_seconds=settings.document_session_ttl_seconds
+    )
     # Same embedder construction as the API (D-011/D-012): document vectors
     # and API query vectors must share one embedding space, or document
     # retrieval silently returns zero hits.

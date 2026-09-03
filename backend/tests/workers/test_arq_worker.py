@@ -38,6 +38,9 @@ class FakePipeline:
     def delete(self, key: str) -> None:
         self._ops.append(("del", (key,), None))
 
+    def expire(self, key: str, seconds: int) -> None:
+        self._ops.append(("expire", (key, seconds), None))
+
     def execute(self) -> None:
         for op, args, _ in self._ops:
             if op == "hset":
@@ -52,6 +55,9 @@ class FakePipeline:
             elif op == "del":
                 (key,) = args
                 self._redis.delete(key)
+            elif op == "expire":
+                # Recorded for TTL assertions; no time-based behavior needed.
+                pass
         self._ops = []
 
 

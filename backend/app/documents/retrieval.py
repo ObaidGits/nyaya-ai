@@ -59,25 +59,19 @@ class DocumentRetrievalService:
         # Lexical pass over the same session-scoped texts: the index owns the
         # isolation (§21), so candidates are fetched through it, not globally.
         dense_scores = dict(dense_scored)
-        texts = {
-            chunk_id: text
-            for chunk_id, _score in dense_scored
-            if (text := self._index.get_text(session_id, chunk_id)) is not None
-        }
-        # Dense candidates alone are not enough for the lexical pass: every
-        # session chunk must be considered, or exact-match chunks outside the
-        # dense top-k can never surface (observed live: the suit's
-        # title-page chunk named both parties and was never retrieved).
-        for chunk_id in self._index.chunk_ids(session_id):
-            if chunk_id not in texts:
-                text = self._index.get_text(session_id, chunk_id)
-                if text is not None:
-                    texts[chunk_id] = text
+        # Lexical pass over the same session-scoped texts: the index owns the
+        # isolation (§21), so candidates are fetched through it, not globally.
+        # One batched fetch (single HGETALL on the Redis backend) instead of
+        # N sequential per-chunk round trips; every session chunk is
+        # considered, or exact-match chunks outside the dense top-k can never
+        # surface (observed live: the suit's title-page chunk named both
+        # parties and was never retrieved).
+        texts = self._index.texts(session_id)
         lexical_ranked = self._lexical_rank(query, texts)
         fused = self._rrf_fuse(dense_scored, lexical_ranked)
         hits: list[DocumentHit] = []
         for chunk_id, _fused_score in fused:
-            text = self._index.get_text(session_id, chunk_id)
+            text = texts.get(chunk_id)
             if text is None:
                 continue  # foreign or purged chunk: isolation holds
             document_id, page_start, page_end = _parse_chunk_id(chunk_id)

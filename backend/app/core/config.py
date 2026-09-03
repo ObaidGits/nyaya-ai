@@ -160,6 +160,10 @@ class Settings(BaseSettings):
     # User-document state backend: "memory" (dev/tests) or "redis" (production
     # worker path, D-030 — API and arq worker share the Redis store/index).
     documents_backend: str = Field(default="memory", pattern="^(memory|redis)$")
+    # Sliding TTL (seconds) on session document-index Redis keys (vectors,
+    # texts, doc-chunk maps). Default 7 days: user legal documents must not
+    # be retained forever in Redis; every upsert refreshes the TTL.
+    document_session_ttl_seconds: int = Field(default=604800, gt=0)
 
     # --- Speech (STT/TTS, DECISIONS.md D-079) -------------------------------
     # Providers are independently configurable and replaceable; defaults are

@@ -86,6 +86,18 @@ class DocumentIndex:
         """Every chunk id stored for the session (lexical candidate pool)."""
         raise NotImplementedError
 
+    def texts(self, session_id: str) -> dict[str, str]:
+        """All chunk texts of the session in one call (lexical batch fetch).
+
+        One round trip instead of N per-chunk lookups; the default here is
+        only a fallback for implementations that have not overridden it.
+        """
+        return {
+            chunk_id: text
+            for chunk_id in self.chunk_ids(session_id)
+            if (text := self.get_text(session_id, chunk_id)) is not None
+        }
+
 
 class DocumentWorkspace:
     """Everything an ingestion job needs, injectable for tests/arq."""
