@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from app.documents.chunker import MAX_CHUNK_CHARS, chunk_document_pages
 from app.documents.ingestion import DocumentWorkspace, _InMemoryDocumentIndex
 from app.documents.references import AMBIGUOUS_REASON, NO_SUCH_DOCUMENT_REASON
@@ -99,9 +98,7 @@ def test_long_page_splits_within_page() -> None:
     )
     assert len(chunks) > 1
     assert all(c.page_start == 5 and c.page_end == 5 for c in chunks)
-    assert [c.chunk_id for c in chunks] == [
-        f"d9-p0005-{seq:03d}" for seq in range(len(chunks))
-    ]
+    assert [c.chunk_id for c in chunks] == [f"d9-p0005-{seq:03d}" for seq in range(len(chunks))]
     assert all(len(c.text) <= MAX_CHUNK_CHARS for c in chunks)
     # No text silently lost across the split.
     joined = " ".join(c.text for c in chunks)
@@ -135,7 +132,7 @@ async def test_duplicate_upload_keeps_both_documents(tmp_path: Path) -> None:
 async def test_same_filename_different_content_stays_distinct(tmp_path: Path) -> None:
     """Identity is the document id, never the filename."""
     service, retrieval = make_stack(tmp_path)
-    old = await upload(service, "agreement.pdf", ["Old version: salary is Rs 10,000."])
+    await upload(service, "agreement.pdf", ["Old version: salary is Rs 10,000."])
     new = await upload(service, "agreement.pdf", ["New version: salary is Rs 90,000."])
     evidence = retrieval.retrieve(SESSION, "new version salary ninety thousand")
     assert evidence.hits[0].document_id == new
@@ -179,7 +176,9 @@ async def test_reference_scoped_retrieval_over_real_documents(tmp_path: Path) ->
 async def test_multi_document_reference_retrieves_both_sides(tmp_path: Path) -> None:
     """'Compare the first and second documents' grounds in both documents."""
     service, retrieval = make_stack(tmp_path)
-    first = await upload(service, "employment-agreement.pdf", ["Employer notice period is three months."])
+    first = await upload(
+        service, "employment-agreement.pdf", ["Employer notice period is three months."]
+    )
     second = await upload(service, "rental-agreement.pdf", ["Tenant notice period is thirty days."])
     await upload(service, "legal-demand-notice.pdf", ["Demand of Rs 5,00,000."])
     evidence = retrieval.retrieve(SESSION, "compare notice period first and second documents")

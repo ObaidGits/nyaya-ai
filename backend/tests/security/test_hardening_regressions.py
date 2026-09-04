@@ -154,9 +154,7 @@ def test_metrics_token_required_when_configured(monkeypatch: pytest.MonkeyPatch)
 def test_metrics_admin_cookie_grants_access() -> None:
     app = _admin_app()
     client = TestClient(app)
-    client.post(
-        "/api/v1/admin/login", json={"username": "admin", "password": "secret-password"}
-    )
+    client.post("/api/v1/admin/login", json={"username": "admin", "password": "secret-password"})
     response = client.get("/api/v1/metrics")
     assert response.status_code == 200
 
@@ -167,16 +165,13 @@ def test_metrics_admin_cookie_grants_access() -> None:
 def test_search_rate_limited_per_ip() -> None:
     """Budget fires before retrieval, so a 429 escapes even without a corpus
     configured (RETRIEVAL_NOT_CONFIGURED would otherwise mask it)."""
-    settings = Settings(
-        _env_file=None, llm_provider="stub", rate_limit_chat_per_minute=3
-    )
+    settings = Settings(_env_file=None, llm_provider="stub", rate_limit_chat_per_minute=3)
     app = create_app(settings=settings)
     app.state.llm_registry.register("stub", lambda _s: ScriptedProvider(["ok"] * 10))
     client = TestClient(app)
     headers = {"X-Session-Id": "search-session-1"}
     responses = [
-        client.post("/api/v1/search", json={"query": "murder"}, headers=headers)
-        for _ in range(4)
+        client.post("/api/v1/search", json={"query": "murder"}, headers=headers) for _ in range(4)
     ]
     # The first three hit the 503 (no corpus in this hermetic app) but pass
     # the budget gate; the fourth is denied by the limiter BEFORE retrieval.

@@ -272,7 +272,8 @@ def test_done_event_includes_document_citations() -> None:
     )
 
     class _DocRetrieval:
-        def retrieve(self, session_id: str, query: str, *, context_document_ids=None):  # pragma: no cover - shape
+        # pragma: no cover - shape
+        def retrieve(self, session_id: str, query: str, *, context_document_ids=None):
             from app.documents.models import DocumentEvidence
 
             return DocumentEvidence(

@@ -16,7 +16,7 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tests.documents.pdf_fixtures import make_pdf  # noqa: E402
+from tests.documents.pdf_fixtures import make_pdf
 
 BASE = "http://localhost:8000/api/v1"
 SESSION = f"docaudit-{int(time.time())}"
@@ -155,12 +155,19 @@ def main() -> None:
         f"{len(listed)} docs",
     )
 
-    def run(name: str, message: str, *, want: list[str], not_want: list[str] | None = None,
-            must_answer: bool = True, want_doc: str | None = None,
-            history: list[dict] | None = None) -> dict:
+    def run(
+        name: str,
+        message: str,
+        *,
+        want: list[str],
+        not_want: list[str] | None = None,
+        must_answer: bool = True,
+        want_doc: str | None = None,
+        history: list[dict] | None = None,
+    ) -> dict:
         time.sleep(30)  # provider pacing (Groq free tier rate-limits rapid calls)
         out = chat_retry(c, message, history)
-        lower = out["text"].lower().replace(" ", " ").replace("\xa0", " ")
+        lower = out["text"].lower().replace(" ", " ").replace("\xa0", " ")  # noqa: RUF001
         ok = True
         detail = ""
         if must_answer and (out["refused"] or not out["text"].strip()):
@@ -183,25 +190,29 @@ def main() -> None:
     out1 = run(
         "What is the notice period in the first document?",
         "What is the notice period in the first document?",
-        want=["three months"], not_want=["thirty days", "fifteen days"],
+        want=["three months"],
+        not_want=["thirty days", "fifteen days"],
         want_doc="employment",
     )
     run(
         "What does the second document say about the notice period?",
         "What does the second document say about the notice period?",
-        want=["thirty days"], not_want=["three months"],
+        want=["thirty days"],
+        not_want=["three months"],
         want_doc="rental",
     )
     run(
         "Summarize the latest document.",
         "Summarize the latest document.",
-        want=["5,00,000"], not_want=["TechNova", "24,000"],
+        want=["5,00,000"],
+        not_want=["TechNova", "24,000"],
         want_doc="demand",
     )
     run(
         "Summarize the first document.",
         "Summarize the first document.",
-        want=["Rahul Sharma"], not_want=["Priya Patel", "Verma"],
+        want=["Rahul Sharma"],
+        not_want=["Priya Patel", "Verma"],
         want_doc="employment",
     )
     run(
@@ -213,17 +224,22 @@ def main() -> None:
     run(
         "Check latest doc resolves the newest upload",
         "Check latest doc",
-        want=["demand"], not_want=["TechNova", "24,000"], want_doc="demand",
+        want=["demand"],
+        not_want=["TechNova", "24,000"],
+        want_doc="demand",
     )
     run(
         "Does the latest document demand payment within a deadline?",
         "Does the latest document contain a demand for payment?",
-        want=["fifteen days"], want_doc="demand",
+        want=["fifteen days"],
+        want_doc="demand",
     )
     run(
         "Which document mentions a security deposit?",
         "Which document mentions a security deposit?",
-        want=["rental"], not_want=["TechNova", "Verma"], want_doc="rental",
+        want=["rental"],
+        not_want=["TechNova", "Verma"],
+        want_doc="rental",
     )
     run(
         "Compare the first and second documents (both cited)",
@@ -244,7 +260,8 @@ def main() -> None:
     run(
         "Summarize the latest uploaded PDF",
         "Summarize the latest uploaded PDF",
-        want=["5,00,000"], want_doc="demand",
+        want=["5,00,000"],
+        want_doc="demand",
     )
     run(
         "Follow-up: 'the other document' with two remaining asks which one",
@@ -259,12 +276,14 @@ def main() -> None:
     run(
         "Answer present in only one document (salary)",
         "What is the monthly salary stated in the first document?",
-        want=["85,000"], want_doc="employment",
+        want=["85,000"],
+        want_doc="employment",
     )
     run(
         "No evidence: honest refusal (interest rate nowhere)",
         "What is the interest rate in the first document?",
-        want=[], must_answer=False,
+        want=[],
+        must_answer=False,
     )
 
     # --- formatting sanity --------------------------------------------------

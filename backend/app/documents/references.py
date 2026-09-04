@@ -30,8 +30,16 @@ _WORD_RE = re.compile(r"[a-z0-9]+")
 #: bound — deeper positions are unnatural language ("the eleventh document"
 #: is far more likely a misreference, caught by the range check).
 _ORDINALS = {
-    "first": 0, "second": 1, "third": 2, "fourth": 3, "fifth": 4,
-    "1st": 0, "2nd": 1, "3rd": 2, "4th": 3, "5th": 4,
+    "first": 0,
+    "second": 1,
+    "third": 2,
+    "fourth": 3,
+    "fifth": 4,
+    "1st": 0,
+    "2nd": 1,
+    "3rd": 2,
+    "4th": 3,
+    "5th": 4,
 }
 #: Newest upload, regardless of count.
 _LATEST = {"latest", "last", "newest", "final"}
@@ -47,8 +55,16 @@ _DEICTIC = {"that", "this", "the"}
 #: the weak determiner "the" pairs only with unambiguous container nouns.
 #: Stronger deixis ("that agreement") may name domain nouns too.
 _PURE_DOCUMENT_NOUNS = {
-    "document", "documents", "doc", "docs", "pdf", "pdfs", "file", "files",
-    "upload", "uploads",
+    "document",
+    "documents",
+    "doc",
+    "docs",
+    "pdf",
+    "pdfs",
+    "file",
+    "files",
+    "upload",
+    "uploads",
 }
 _DOMAIN_DOCUMENT_NOUNS = {"agreement", "contract", "notice", "petition"}
 
@@ -107,7 +123,9 @@ def resolve_document_references(
             all_ref = True
         elif token in _DEICTIC:
             nouns = (
-                _PURE_DOCUMENT_NOUNS if token == "the" else _PURE_DOCUMENT_NOUNS | _DOMAIN_DOCUMENT_NOUNS
+                _PURE_DOCUMENT_NOUNS
+                if token == "the"
+                else (_PURE_DOCUMENT_NOUNS | _DOMAIN_DOCUMENT_NOUNS)
             )
             if any(noun in tokens[index + 1 : index + 4] for noun in nouns):
                 # "that/this/the document" — determiner followed shortly by a
@@ -130,14 +148,14 @@ def resolve_document_references(
                 # several remaining it is genuinely ambiguous — clarify.
                 return DocumentReferenceResolution(
                     ambiguous=True,
-                    notes=notes + [f"other-reference complement has {len(complement)} documents"],
+                    notes=[*notes, f"other-reference complement has {len(complement)} documents"],
                 )
             return DocumentReferenceResolution(
-                ambiguous=True, notes=notes + ["other-reference complement is empty"]
+                ambiguous=True, notes=[*notes, "other-reference complement is empty"]
             )
         return DocumentReferenceResolution(
             ambiguous=True,
-            notes=notes + ["'other document' without conversation context"],
+            notes=[*notes, "'other document' without conversation context"],
         )
 
     if all_ref:
@@ -149,7 +167,7 @@ def resolve_document_references(
         if out_of_range and not any(p < len(documents) for p in positions):
             return DocumentReferenceResolution(
                 unresolved_reason=NO_SUCH_DOCUMENT_REASON,
-                notes=notes + [f"position(s) out of range: {out_of_range}"],
+                notes=[*notes, f"position(s) out of range: {out_of_range}"],
             )
         resolved = sorted(p for p in positions if p < len(documents))
         notes.append(f"positional reference(s): {resolved}")
@@ -169,7 +187,7 @@ def resolve_document_references(
             )
         return DocumentReferenceResolution(
             ambiguous=True,
-            notes=notes + [f"deictic reference with {len(documents)} documents"],
+            notes=[*notes, f"deictic reference with {len(documents)} documents"],
         )
 
     return DocumentReferenceResolution(document_ids=None, notes=notes)
@@ -199,10 +217,9 @@ def reference_free_query(query: str, documents: list[tuple[str, str]]) -> str:
             or token in _PREVIOUS
             or token in _PURE_DOCUMENT_NOUNS
             or (token in stem_tokens and len(token) >= 4)
-        ):
-            drop.add(index)
-        elif token in _DEICTIC and any(
-            noun in tokens[index + 1 : index + 4] for noun in _PURE_DOCUMENT_NOUNS
+        ) or (
+            token in _DEICTIC
+            and any(noun in tokens[index + 1 : index + 4] for noun in _PURE_DOCUMENT_NOUNS)
         ):
             drop.add(index)
     return " ".join(t for i, t in enumerate(tokens) if i not in drop)

@@ -459,7 +459,7 @@ def test_time_of_day_greetings_get_own_buckets(message: str, expected: str) -> N
 def test_morning_and_evening_replies_differ() -> None:
     """'Good Morning' and 'Good Evening' never share a reply: the reply
     mirrors the time of day the user greeted with."""
-    from app.generation.conversation import _MORNING_REPLIES, _EVENING_REPLIES
+    from app.generation.conversation import _EVENING_REPLIES, _MORNING_REPLIES
 
     assert set(_MORNING_REPLIES).isdisjoint(_EVENING_REPLIES)
     morning = conversational_reply("Good Morning")
@@ -515,7 +515,7 @@ class _ReasonService:
         session_id: str | None = None,
         document_context: list[str] | None = None,
     ) -> object:
-        from app.retrieval.models import RetrievedEvidence, RetrievalRoute
+        from app.retrieval.models import RetrievalRoute, RetrievedEvidence
 
         return RetrievedEvidence(
             query=query,
@@ -530,7 +530,9 @@ class _ReasonService:
 def test_refusal_with_foreign_statute_reason() -> None:
     events = _refusal_events(
         None,
-        _ReasonService(["query names statute 'New York Penal Code' which is not the indexed corpus"]),
+        _ReasonService(
+            ["query names statute 'New York Penal Code' which is not the indexed corpus"]
+        ),
         "What is the punishment of murder in New York?",
     )
     tokens = _tokens(events)
@@ -596,7 +598,7 @@ def test_reason_sentences_are_english_code_constants() -> None:
     punctuation, no prose) from the query. A reason with unrecognizable
     content yields no sentence at all."""
     from app.generation.service import _refusal_reason_sentence
-    from app.retrieval.models import RetrievedEvidence, RetrievalRoute
+    from app.retrieval.models import RetrievalRoute, RetrievedEvidence
 
     def _evidence(reasons: list[str]) -> RetrievedEvidence:
         return RetrievedEvidence(
@@ -625,7 +627,7 @@ def test_refusal_reason_names_the_indexed_acts() -> None:
     corpus' text — so the corpus boundary stays truthful when the corpus
     changes."""
     from app.generation.service import _refusal_reason_sentence
-    from app.retrieval.models import RetrievedEvidence, RetrievalRoute
+    from app.retrieval.models import RetrievalRoute, RetrievedEvidence
 
     evidence = RetrievedEvidence(
         query="q",
@@ -686,4 +688,3 @@ def test_different_greetings_through_api_yield_distinct_replies(
         for m in ("Good Morning", "Good Evening", "hello", "namaste", "Suprabhat")
     }
     assert len(replies) >= 3
-

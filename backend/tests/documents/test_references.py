@@ -17,8 +17,12 @@ D1, D2, D3 = (d[0] for d in DOCS)
 
 
 def test_ordinal_selectors() -> None:
-    assert resolve_document_references("notice period in the first document", DOCS).document_ids == [D1]
-    assert resolve_document_references("the second document notice period", DOCS).document_ids == [D2]
+    assert resolve_document_references(
+        "notice period in the first document", DOCS
+    ).document_ids == [D1]
+    assert resolve_document_references("the second document notice period", DOCS).document_ids == [
+        D2
+    ]
     assert resolve_document_references("3rd document", DOCS).document_ids == [D3]
 
 
@@ -41,7 +45,9 @@ def test_multiple_references_compare() -> None:
 
 
 def test_all_documents_reference() -> None:
-    assert resolve_document_references("notice periods in all my documents", DOCS).document_ids is None
+    assert (
+        resolve_document_references("notice periods in all my documents", DOCS).document_ids is None
+    )
 
 
 def test_no_reference_searches_all() -> None:
@@ -77,9 +83,7 @@ def test_deictic_ambiguous_with_multiple_documents() -> None:
 
 
 def test_deictic_resolved_from_conversation_context() -> None:
-    r = resolve_document_references(
-        "read that document again", DOCS, context_document_ids=[D2]
-    )
+    r = resolve_document_references("read that document again", DOCS, context_document_ids=[D2])
     assert r.document_ids == [D2]
 
 

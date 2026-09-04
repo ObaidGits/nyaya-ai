@@ -16,10 +16,8 @@ import pytest
 from app.core.config import Settings
 from app.llm.base import ProviderHealth, ProviderHealthState
 from app.main import create_app
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from tests.admin.test_admin import ADMIN, MUTATING, login, make_settings
+from tests.admin.test_admin import MUTATING, login, make_settings
 
 ENTRY_GROQ = {
     "id": "groq-main",
@@ -79,9 +77,7 @@ class TestProviderPoolAPI:
         assert client.app.state.provider_pool_runtime.llm is None
 
     def test_put_activates_pool_runtime(self, client: TestClient) -> None:
-        response = client.put(
-            "/api/v1/admin/providers", json=_pool_payload(), headers=MUTATING
-        )
+        response = client.put("/api/v1/admin/providers", json=_pool_payload(), headers=MUTATING)
         assert response.status_code == 200
         body = response.json()
         assert body["pools"]["llm"]["mode"] == "pool"
@@ -92,12 +88,8 @@ class TestProviderPoolAPI:
         metadata = client.app.state.provider_pool_runtime.llm.metadata()
         assert metadata.provider == "groq"
 
-    def test_secrets_encrypted_and_masked(
-        self, client: TestClient, tmp_path: Path
-    ) -> None:
-        response = client.put(
-            "/api/v1/admin/providers", json=_pool_payload(), headers=MUTATING
-        )
+    def test_secrets_encrypted_and_masked(self, client: TestClient, tmp_path: Path) -> None:
+        response = client.put("/api/v1/admin/providers", json=_pool_payload(), headers=MUTATING)
         assert response.status_code == 200
         # Never echoed.
         assert "gsk-pool-secret" not in response.text
@@ -114,9 +106,7 @@ class TestProviderPoolAPI:
 
     def test_unknown_llm_provider_rejected(self, client: TestClient) -> None:
         bad = _pool_payload()
-        bad["pools"]["llm"]["entries"] = [
-            {**ENTRY_GROQ, "provider": "nonexistent-cloud"}
-        ]
+        bad["pools"]["llm"]["entries"] = [{**ENTRY_GROQ, "provider": "nonexistent-cloud"}]
         response = client.put("/api/v1/admin/providers", json=bad, headers=MUTATING)
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "PROVIDER_POOL_INVALID"
@@ -180,9 +170,7 @@ class TestProviderPoolAPI:
         client.app.state.llm_registry = FakeRegistry()
         payload = _pool_payload()
         payload["force"] = False
-        response = client.put(
-            "/api/v1/admin/providers", json=payload, headers=MUTATING
-        )
+        response = client.put("/api/v1/admin/providers", json=payload, headers=MUTATING)
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "PROVIDER_POOL_VERIFY_FAILED"
         assert "groq-main" in response.json()["error"]["message"]
@@ -214,9 +202,7 @@ class TestProviderPoolAPI:
         payload["pools"]["tts"] = {
             "entries": [{"id": "browser-tts", "provider": "browser", "enabled": True}]
         }
-        response = client.put(
-            "/api/v1/admin/providers", json=payload, headers=MUTATING
-        )
+        response = client.put("/api/v1/admin/providers", json=payload, headers=MUTATING)
         assert response.status_code == 200
         assert response.json()["pools"]["stt"]["mode"] == "pool"
         assert response.json()["pools"]["tts"]["mode"] == "pool"
@@ -270,9 +256,7 @@ class TestProviderPoolAPI:
             by_id = {e["id"]: e for e in body["pools"]["llm"]["entries"]}
             assert by_id["groq-main"]["api_key_set"] is True
             # And the runtime routes to the persisted default.
-            assert (
-                fresh.app.state.provider_pool_runtime.llm.metadata().provider == "groq"
-            )
+            assert fresh.app.state.provider_pool_runtime.llm.metadata().provider == "groq"
 
     def test_health_snapshot_visible(self, client: TestClient) -> None:
         client.put("/api/v1/admin/providers", json=_pool_payload(), headers=MUTATING)

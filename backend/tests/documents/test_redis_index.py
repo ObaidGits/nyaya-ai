@@ -108,9 +108,7 @@ class BytesRedis(_BaseFakeRedis):
         self.hgetall_calls.append(key)
         raw = self.hash_store.get(key, {})
         return {
-            k.encode() if isinstance(k, str) else k: (
-                v.encode() if isinstance(v, str) else v
-            )
+            k.encode() if isinstance(k, str) else k: (v.encode() if isinstance(v, str) else v)
             for k, v in raw.items()
         }
 
@@ -243,9 +241,7 @@ class TestDeleteOrphanRecovery:
         assert index.delete(SESSION, "d1") == 1
         # d2 untouched despite the prefix-scan recovery path.
         assert index.get_text(SESSION, "d2-p1-000") == "keep me"
-        assert [cid for cid, _ in index.search(SESSION, [0.0, 1.0], top_k=5)] == [
-            "d2-p1-000"
-        ]
+        assert [cid for cid, _ in index.search(SESSION, [0.0, 1.0], top_k=5)] == ["d2-p1-000"]
 
     def test_delete_missing_document_still_returns_zero(self) -> None:
         fake = FakeRedis()

@@ -22,6 +22,7 @@ import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from app.ingestion.models import Chunk
 from app.retrieval.dense import DenseRetriever
 from app.retrieval.intent import classify_route, detect_section_intent
 from app.retrieval.models import (
@@ -87,13 +88,70 @@ _CORPUS_NATIONALITY_WORDS = {"india", "indian"}
 # murder" (no adjacent name words) and "punishment for murder under this
 # act" (run broken by "this") are never treated as statute names.
 _NAME_BREAK_WORDS = {
-    "the", "a", "an", "this", "that", "these", "those", "said", "it", "its",
-    "what", "which", "who", "whom", "whose", "how", "when", "where", "why",
-    "does", "do", "did", "is", "are", "was", "were", "can", "could", "would",
-    "should", "shall", "may", "might", "must", "will", "in", "on", "at", "to",
-    "for", "from", "by", "with", "under", "over", "about", "against", "into",
-    "my", "your", "our", "their", "his", "her", "say", "says", "tell", "ask",
-    "explain", "describe", "me", "please", "section", "sections",
+    "the",
+    "a",
+    "an",
+    "this",
+    "that",
+    "these",
+    "those",
+    "said",
+    "it",
+    "its",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "how",
+    "when",
+    "where",
+    "why",
+    "does",
+    "do",
+    "did",
+    "is",
+    "are",
+    "was",
+    "were",
+    "can",
+    "could",
+    "would",
+    "should",
+    "shall",
+    "may",
+    "might",
+    "must",
+    "will",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "from",
+    "by",
+    "with",
+    "under",
+    "over",
+    "about",
+    "against",
+    "into",
+    "my",
+    "your",
+    "our",
+    "their",
+    "his",
+    "her",
+    "say",
+    "says",
+    "tell",
+    "ask",
+    "explain",
+    "describe",
+    "me",
+    "please",
+    "section",
+    "sections",
 }
 _NAME_RUN_WINDOW = 4  # max words of name on either side of the keyword
 
@@ -102,12 +160,40 @@ _NAME_RUN_WINDOW = 4  # max words of name on either side of the keyword
 # derived signal exists for geography. The list is deployment config
 # (Settings.retrieval_foreign_jurisdictions), not a code-time truth.
 _DEFAULT_FOREIGN_JURISDICTIONS = (
-    "new york", "california", "texas", "florida", "illinois", "ohio",
-    "washington dc", "chicago", "los angeles", "boston", "seattle",
-    "united states", "united kingdom", "england", "scotland", "wales",
-    "ireland", "london", "canada", "australia", "pakistan", "bangladesh",
-    "china", "japan", "singapore", "dubai", "united arab emirates",
-    "germany", "france", "netherlands", "russia", "malaysia", "usa", "uk",
+    "new york",
+    "california",
+    "texas",
+    "florida",
+    "illinois",
+    "ohio",
+    "washington dc",
+    "chicago",
+    "los angeles",
+    "boston",
+    "seattle",
+    "united states",
+    "united kingdom",
+    "england",
+    "scotland",
+    "wales",
+    "ireland",
+    "london",
+    "canada",
+    "australia",
+    "pakistan",
+    "bangladesh",
+    "china",
+    "japan",
+    "singapore",
+    "dubai",
+    "united arab emirates",
+    "germany",
+    "france",
+    "netherlands",
+    "russia",
+    "malaysia",
+    "usa",
+    "uk",
 )
 
 
@@ -347,8 +433,7 @@ class RetrievalService:
             # An explicitly referenced document ("the first document") is
             # grounded by identity: a weak content match must not refuse a
             # question the user asked ABOUT that document.
-            evidence.reference_anchored
-            or confidence >= self._document_confidence_threshold
+            evidence.reference_anchored or confidence >= self._document_confidence_threshold
         )
         retrieved = RetrievedEvidence(
             query=query,
@@ -410,7 +495,7 @@ class RetrievalService:
         ("the Penal Code"), and none of its content words (minus the
         corpus nationality markers) appear in the corpus vocabulary.
         """
-        tokens = query.replace("’", "'").split()
+        tokens = query.replace("’", "'").split()  # noqa: RUF001
         corpus_words = self._corpus_vocabulary()
         for index, token in enumerate(tokens):
             core = token.rstrip("\"'.,;:!?")
@@ -436,9 +521,7 @@ class RetrievalService:
             if len(content) == 1 and not content[0][:1].isupper():
                 # A lone lowercase word ("the act of murder") is not a name.
                 continue
-            non_nationality = [
-                w for w in content if w.lower() not in _CORPUS_NATIONALITY_WORDS
-            ]
+            non_nationality = [w for w in content if w.lower() not in _CORPUS_NATIONALITY_WORDS]
             if not non_nationality:
                 # Bare nationality ("under Indian law") — the corpus IS
                 # Indian law, so the mention is in scope.
@@ -612,7 +695,7 @@ class RetrievalService:
         return evidence
 
     @staticmethod
-    def _narrow_subsection(chunks: list, subsection: str) -> list:
+    def _narrow_subsection(chunks: list[Chunk], subsection: str) -> list[Chunk]:
         """Chunks for the exact subsection of a section lookup, may be [].
 
         A chunk matches when its own subsection metadata equals the wanted

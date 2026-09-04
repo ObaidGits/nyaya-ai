@@ -22,7 +22,6 @@ from app.documents.ingestion import DocumentIndex
 from app.documents.models import DocumentEvidence, DocumentHit
 from app.documents.references import (
     DocumentReferenceResolution,
-    position_label,
     reference_free_query,
     resolve_document_references,
 )
@@ -98,18 +97,14 @@ class DocumentRetrievalService:
             reasons.append(resolution.unresolved_reason)
             return DocumentEvidence(hits=[], reasons=reasons)
         if documents and resolution.document_ids is not None:
-            missing = [
-                d for d in resolution.document_ids if d not in {doc for doc, _ in documents}
-            ]
+            missing = [d for d in resolution.document_ids if d not in {doc for doc, _ in documents}]
             if missing:
                 reasons.append(resolution.unresolved_reason or "referenced document missing")
                 return DocumentEvidence(hits=[], reasons=reasons)
 
         filter_ids = resolution.document_ids
         # Reference words carry no content signal: match on what remains.
-        match_query = (
-            reference_free_query(query, documents) if filter_ids is not None else query
-        )
+        match_query = reference_free_query(query, documents) if filter_ids is not None else query
         groups = [filter_ids] if filter_ids else [None]
         # Each referenced document gets the FULL budget: a comparison of two
         # documents must see both sides' key clauses, not one crowded out.

@@ -48,9 +48,7 @@ class ProviderEntryConfig(BaseModel):
     @classmethod
     def _valid_id(cls, value: str) -> str:
         if not _ENTRY_ID_RE.fullmatch(value):
-            raise ValueError(
-                "entry id must be a 1-64 char slug of a-z, 0-9 and '-'"
-            )
+            raise ValueError("entry id must be a 1-64 char slug of a-z, 0-9 and '-'")
         return value
 
     @field_validator("provider")
@@ -88,9 +86,7 @@ class ProviderPoolConfig(BaseModel):
         enabled = self.enabled_entries()
         by_priority = sorted(enabled, key=lambda e: (e.priority, e.id))
         if self.default_entry_id:
-            default = [
-                e for e in by_priority if e.id == self.default_entry_id
-            ]
+            default = [e for e in by_priority if e.id == self.default_entry_id]
             rest = [e for e in by_priority if e.id != self.default_entry_id]
             by_priority = default + rest
         if self.strategy == FailoverStrategy.ROUND_ROBIN and by_priority:
@@ -104,13 +100,9 @@ class ProviderPoolConfig(BaseModel):
             return
         entry = self.entry(self.default_entry_id)
         if entry is None:
-            raise ValueError(
-                f"default entry '{self.default_entry_id}' is not in the pool"
-            )
+            raise ValueError(f"default entry '{self.default_entry_id}' is not in the pool")
         if not entry.enabled:
-            raise ValueError(
-                f"default entry '{self.default_entry_id}' is disabled"
-            )
+            raise ValueError(f"default entry '{self.default_entry_id}' is disabled")
 
 
 class PoolSecrets(BaseModel):
@@ -122,7 +114,8 @@ class PoolSecrets(BaseModel):
     tts: dict[str, str] = Field(default_factory=dict)
 
     def get(self, pool: str, entry_id: str) -> str:
-        return getattr(self, pool, {}).get(entry_id, "")
+        bucket: dict[str, str] = getattr(self, pool)
+        return bucket.get(entry_id, "")
 
     def set(self, pool: str, entry_id: str, value: str) -> None:
         if not value:

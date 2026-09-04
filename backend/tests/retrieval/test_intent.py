@@ -139,6 +139,7 @@ def test_marathi_section_query_is_marathi() -> None:
 # Legal-artifact nouns (§14 remediation — live regression)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -262,6 +263,6 @@ def test_strong_artifact_nouns_keep_document_route(query: str) -> None:
 
 
 def test_draft_reply_to_notice_is_procedure() -> None:
-    """"Draft a reply to the legal notice" asks HOW to draft — statute
+    """ "Draft a reply to the legal notice" asks HOW to draft — statute
     procedure — not what an uploaded notice contains."""
     assert classify_route("draft a reply to the legal notice") == RetrievalRoute.STATUTE

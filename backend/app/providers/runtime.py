@@ -20,10 +20,12 @@ from typing import Any
 
 from app.admin.store import AdminSettingsStore
 from app.core.config import Settings
+from app.llm.base import LLMProvider
 from app.llm.pool import build_llm_failover_provider
 from app.llm.registry import ProviderRegistry
 from app.providers.health import HealthBoard
 from app.providers.models import ProviderPoolConfig
+from app.speech.base import STTProvider, TTSProvider
 from app.speech.pool import build_speech_failover
 
 logger = logging.getLogger(__name__)
@@ -38,9 +40,9 @@ class ProviderPoolRuntime:
         self,
         board: HealthBoard,
         configs: dict[str, ProviderPoolConfig],
-        llm: Any | None,
-        stt: Any | None,
-        tts: Any | None,
+        llm: LLMProvider | None,
+        stt: STTProvider | None,
+        tts: TTSProvider | None,
     ) -> None:
         self.board = board
         self.configs = configs
@@ -80,7 +82,9 @@ def rebuild_pool_runtime(
     if secrets is None:
         secrets = PoolSecrets()
 
-    llm = stt = tts = None
+    llm: LLMProvider | None = None
+    stt: STTProvider | None = None
+    tts: TTSProvider | None = None
     try:
         llm = build_llm_failover_provider(
             configs.get("llm") or _EMPTY_POOL, secrets, settings, registry, board
@@ -112,9 +116,7 @@ def rebuild_pool_runtime(
     if stt is None and tts is None:
         app_state.speech_service = create_speech_service(settings)
     else:
-        app_state.speech_service = SpeechService(
-            stt=stt, tts=tts, settings=settings
-        )
+        app_state.speech_service = SpeechService(stt=stt, tts=tts, settings=settings)
 
     logger.info(
         "provider pools built",

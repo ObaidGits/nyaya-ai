@@ -93,9 +93,7 @@ class RedisDocumentIndex(DocumentIndex):
             # chunks can be recovered by prefix scan instead of leaking.
             prefix = f"{document_id}-"
             chunk_ids = [
-                chunk_id
-                for chunk_id in self.texts(session_id)
-                if chunk_id.startswith(prefix)
+                chunk_id for chunk_id in self.texts(session_id) if chunk_id.startswith(prefix)
             ]
             if not chunk_ids:
                 return 0

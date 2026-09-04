@@ -14,9 +14,9 @@ tests.
 from __future__ import annotations
 
 import time
-from typing import Callable
+from collections.abc import Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class CircuitState(BaseModel):
@@ -98,10 +98,7 @@ class HealthBoard:
         if pool is None:
             return dict(self._states)
         prefix = f"{pool}:"
-        return {
-            key: value for key, value in self._states.items()
-            if key.startswith(prefix)
-        }
+        return {key: value for key, value in self._states.items() if key.startswith(prefix)}
 
     # -- internals ---------------------------------------------------
 

@@ -7,7 +7,6 @@ it can be exercised live; prints PASS/FAIL per scenario.
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 
@@ -46,7 +45,9 @@ def login() -> httpx.Client:
     return c
 
 
-def chat(c: httpx.Client | None = None, question: str = "What is the punishment for murder?") -> tuple[int, str]:
+def chat(
+    c: httpx.Client | None = None, question: str = "What is the punishment for murder?"
+) -> tuple[int, str]:
     cc = c or httpx.Client(base_url=BASE, timeout=120)
     session = f"failover-live-{int(time.time())}"
     r = cc.post(
@@ -89,7 +90,11 @@ def main() -> None:
         f"llm mode={providers['pools']['llm']['mode']}",
     )
     status, body = chat()
-    check("1: current provider working (baseline chat cites BNS)", answered(status, body), f"HTTP {status}")
+    check(
+        "1: current provider working (baseline chat cites BNS)",
+        answered(status, body),
+        f"HTTP {status}",
+    )
     time.sleep(4)
 
     # --- 3: multi-provider config + default respected -----------------------
@@ -111,7 +116,13 @@ def main() -> None:
     }
     r = put_pool(
         c,
-        {"llm": {"entries": [bogus, live_entry], "default_entry_id": "dead-primary", "strategy": "priority"}},
+        {
+            "llm": {
+                "entries": [bogus, live_entry],
+                "default_entry_id": "dead-primary",
+                "strategy": "priority",
+            }
+        },
         force=True,  # dead-primary is INTENTIONALLY unreachable (failover test)
     )
     check(
@@ -138,7 +149,8 @@ def main() -> None:
     check(
         "4: failed provider visible as cooling (truthful health)",
         dead.get("health", {}).get("state") == "cooling",
-        f"dead-primary health={dead.get('health', {}).get('state')} err={dead.get('health', {}).get('last_error_class')}",
+        f"dead-primary health={dead.get('health', {}).get('state')}"
+        f" err={dead.get('health', {}).get('last_error_class')}",
     )
     check(
         "4: fallback provider healthy",
@@ -178,7 +190,13 @@ def main() -> None:
     # --- restore working pool ------------------------------------------------
     r = put_pool(
         c,
-        {"llm": {"entries": [bogus, live_entry], "default_entry_id": "live-secondary", "strategy": "priority"}},
+        {
+            "llm": {
+                "entries": [bogus, live_entry],
+                "default_entry_id": "live-secondary",
+                "strategy": "priority",
+            }
+        },
         force=True,
     )
     check(
@@ -187,7 +205,9 @@ def main() -> None:
     )
     time.sleep(2)
     status, body = chat()
-    check("3: new default (live-secondary) serves directly", answered(status, body), f"HTTP {status}")
+    check(
+        "3: new default (live-secondary) serves directly", answered(status, body), f"HTTP {status}"
+    )
 
     c.close()
 
@@ -214,14 +234,17 @@ def main() -> None:
     check(
         "10: pool survives restart (mode=pool, entries intact)",
         providers["pools"]["llm"]["mode"] == "pool"
-        and {e["id"] for e in providers["pools"]["llm"]["entries"]} == {"dead-primary", "live-secondary"},
+        and {e["id"] for e in providers["pools"]["llm"]["entries"]}
+        == {"dead-primary", "live-secondary"},
         f"mode={providers['pools']['llm']['mode']}",
     )
     # (Encrypted-key persistence across restart is covered by the unit
     # test test_pool_persists_across_restart; this live pool deliberately
     # uses the keyless Ollama entry, so there is no key to carry over.)
     status, body = chat()
-    check("10: chat works after restart via persisted pool", answered(status, body), f"HTTP {status}")
+    check(
+        "10: chat works after restart via persisted pool", answered(status, body), f"HTTP {status}"
+    )
 
     # --- ENV fallback: remove pool entirely -----------------------------------
     r = put_pool(c, {})
@@ -231,7 +254,11 @@ def main() -> None:
     )
     time.sleep(2)
     status, body = chat()
-    check("14: ENV/console fallback still answers after pool removal", answered(status, body), f"HTTP {status}")
+    check(
+        "14: ENV/console fallback still answers after pool removal",
+        answered(status, body),
+        f"HTTP {status}",
+    )
 
     c.close()
 

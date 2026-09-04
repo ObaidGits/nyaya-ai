@@ -136,9 +136,7 @@ class GeminiProvider(LLMProvider):
                     # Google answers 400 (not 401) for a bad key — never
                     # transient.
                     logger.warning("gemini rejected request", extra={"status": status})
-                    _reject = GeminiProviderError(
-                        "The generation provider rejected the request."
-                    )
+                    _reject = GeminiProviderError("The generation provider rejected the request.")
                     _reject.permanent = True
                     raise _reject from None
                 logger.warning("gemini server error", extra={"status": status})
@@ -241,9 +239,7 @@ class GeminiProvider(LLMProvider):
                     raise LLMRateLimitError() from None
                 if 400 <= status < 500:
                     logger.warning("gemini rejected request (stream)", extra={"status": status})
-                    _reject = GeminiProviderError(
-                        "The generation provider rejected the request."
-                    )
+                    _reject = GeminiProviderError("The generation provider rejected the request.")
                     _reject.permanent = True
                     raise _reject from None
                 logger.warning("gemini streaming failed", extra={"status": status})

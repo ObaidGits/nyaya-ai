@@ -20,6 +20,9 @@ select = [
 # code structure; wrapping would mangle the strings.
 "app/language/conversation.py" = ["E501", "RUF001"]
 "app/language/service.py" = ["E501"]
+# Citation bracket normalization: docstring names the fullwidth bracket
+# variants (U+FF3B/U+FF3D) it must rewrite — the glyphs are the subject.
+"app/generation/citation_guard.py" = ["RUF002"]
 # Gazette fixtures mirror raw PDF text lines one-to-one; wrapping them
 # would blur the layout the tests reproduce.
 "tests/ingestion/test_parser.py" = ["E501"]

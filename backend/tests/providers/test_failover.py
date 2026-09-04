@@ -101,7 +101,7 @@ class TestClassification:
         assert classify_error(AppError("unavailable")) == ("transient", 60.0)
 
     def test_asyncio_timeout(self) -> None:
-        assert classify_error(asyncio.TimeoutError())[0] == "timeout"
+        assert classify_error(TimeoutError())[0] == "timeout"
 
 
 class TestFailoverRun:
@@ -171,13 +171,13 @@ class TestFailoverRun:
 
         # a is cooling (60 s base): next request must NOT touch it.
         primary._errors = []
-        result, entry_id = await router.run(lambda p: p.generate())
+        _result, entry_id = await router.run(lambda p: p.generate())
         assert entry_id == "b"
         assert providers["a"].calls == 1  # untouched
 
         # Cooldown expired: a is eligible again.
         clock.advance(61.0)
-        result, entry_id = await router.run(lambda p: p.generate())
+        _result, entry_id = await router.run(lambda p: p.generate())
         assert entry_id == "a"
         assert providers["a"].calls == 2
 
@@ -202,15 +202,21 @@ class TestFailoverRun:
     async def test_consecutive_failures_escalate_cooldown(self) -> None:
         clock = FakeClock()
         board = HealthBoard(clock=clock)
-        board.record_failure("llm", "a", error_class="transient", message="x", cooldown_seconds=60.0)
-        board.record_failure("llm", "a", error_class="transient", message="x", cooldown_seconds=60.0)
+        board.record_failure(
+            "llm", "a", error_class="transient", message="x", cooldown_seconds=60.0
+        )
+        board.record_failure(
+            "llm", "a", error_class="transient", message="x", cooldown_seconds=60.0
+        )
         state = board.snapshot("llm")["llm:a"]
         assert state.consecutive_failures == 2
         assert state.cooling_until == pytest.approx(1000.0 + 120.0, rel=0.01)
 
     async def test_success_clears_failure_history(self) -> None:
         board = HealthBoard()
-        board.record_failure("llm", "a", error_class="rate_limit", message="x", cooldown_seconds=30.0)
+        board.record_failure(
+            "llm", "a", error_class="rate_limit", message="x", cooldown_seconds=30.0
+        )
         board.record_success("llm", "a")
         state = board.snapshot("llm")["llm:a"]
         assert state.state == "healthy"
@@ -235,9 +241,7 @@ class TestFailoverRun:
             await router.run(lambda p: p.generate())
 
     async def test_round_robin_rotation_advances_on_success(self) -> None:
-        pool = make_pool(
-            [("a", 1, True), ("b", 2, True)], strategy=FailoverStrategy.ROUND_ROBIN
-        )
+        pool = make_pool([("a", 1, True), ("b", 2, True)], strategy=FailoverStrategy.ROUND_ROBIN)
         providers = {"a": FakeProvider("A"), "b": FakeProvider("B")}
         router = FailoverRouter("llm", pool, lambda e: providers[e.id], HealthBoard())
         _, first = await router.run(lambda p: p.generate())

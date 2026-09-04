@@ -61,9 +61,7 @@ CITATION_RE = re.compile(
 _MALFORMED_STATUTE_CITATION_RE = re.compile(
     r"\[\s*([A-Z]{2,6})[\s.:§-]*(?:section|sec\.?|s\.?)?[\s.:§-]*(\d{1,3})[^\]]*\]"
 )
-_PAREN_STATUTE_CITATION_RE = re.compile(
-    r"\(([A-Za-z]{2,6})\s+[sS]\.?\s*(\d{1,3})[^\)]*\)"
-)
+_PAREN_STATUTE_CITATION_RE = re.compile(r"\(([A-Za-z]{2,6})\s+[sS]\.?\s*(\d{1,3})[^\)]*\)")
 
 # [Document d31f9c p.2] / [Document d31f9c] — user-document citations (A5-008).
 # Small models frequently drop the literal "Document" word or brace the id
@@ -424,15 +422,10 @@ def _normalize_brackets(text: str) -> str:
     citation regex, the answer validates as citation-free, and a fully
     grounded answer is refused.
     """
-    for opener, closer in (("【", "】"), ("［", "］"), ("｢", "｣"), ("⁅", "⁆")):
+    for opener, closer in (("【", "】"), ("［", "］"), ("｢", "｣"), ("⁅", "⁆")):  # noqa: RUF001
         if opener in text:
             text = text.replace(opener, "[").replace(closer, "]")
-    return (
-        text.replace("[{", "[")
-        .replace("}]", "]")
-        .replace("[ ", "[")
-        .replace(" ]", "]")
-    )
+    return text.replace("[{", "[").replace("}]", "]").replace("[ ", "[").replace(" ]", "]")
 
 
 def extract_citations(text: str) -> list[Citation]:
@@ -529,9 +522,7 @@ _LIST_ITEM_RE = re.compile(r"^\s*(?:[*+\-•]|\d{1,3}[.)])\s+")
 #: validation runs (audit: "The fine is Rs. 500 under section 103." was
 #: shredded into "The fine is Rs." + "500 under section 103." and the
 #: claim half lost its citation).
-_ABBREV_END_RE = re.compile(
-    r"\b(?:Mr|Mrs|Ms|Dr|vs|v|No|Nos|Rs|Sr|Jr|St|etc|approx|s|sec)\.$"
-)
+_ABBREV_END_RE = re.compile(r"\b(?:Mr|Mrs|Ms|Dr|vs|v|No|Nos|Rs|Sr|Jr|St|etc|approx|s|sec)\.$")
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -566,10 +557,7 @@ def _split_sentences(text: str) -> list[str]:
     repaired: list[str] = []
     for part in parts:
         stripped = part.strip()
-        if (
-            repaired
-            and re.fullmatch(r"(?:[*+\-•]|\d{1,3}[.)])", stripped)
-        ):
+        if repaired and re.fullmatch(r"(?:[*+\-•]|\d{1,3}[.)])", stripped):
             repaired[-1] = repaired[-1].rstrip() + " " + stripped + " "
             continue
         repaired.append(part)
@@ -1030,6 +1018,7 @@ def validate_citations(
         check.citations_removed = len(check.removed_sentences)
         return "", check
     sanitized = " ".join(part.rstrip() + " " for part in kept).strip()
+
     # Normalize variant statute labels ("[BNS S.103]", "[BNS s. 103]") to
     # the canonical "[BNS s.103]" form so every downstream consumer sees
     # one shape (same contract as the bare-document normalization below).
@@ -1042,7 +1031,7 @@ def validate_citations(
     # Narrow no-break / no-break spaces (models emit them inside numbers and
     # names, "Rs 85,000") render fine but break plain-text token checks and
     # copy-paste; they are display-equivalent to a plain space.
-    sanitized = sanitized.replace(" ", " ").replace("\xa0", " ")
+    sanitized = sanitized.replace(" ", " ").replace("\xa0", " ")  # noqa: RUF001
     # Normalize bare document citations ("[{id} p.1]") to the canonical
     # "[Document <id> p.N]" contract form so every downstream consumer
     # (frontend chips, eval) sees one shape.

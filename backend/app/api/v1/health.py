@@ -137,10 +137,10 @@ async def llm_health(request: Request) -> LlmHealthResponse:
     # callers. Set SHOW_PROVIDER_DETAILS=true|false to override either way.
     import os
 
-    show_details = os.environ.get("SHOW_PROVIDER_DETAILS", "").strip().lower()
-    if not show_details:
-        show_details = "false" if request.app.state.settings.is_production else "true"
-    show_details = show_details in ("1", "true", "yes")
+    raw = os.environ.get("SHOW_PROVIDER_DETAILS", "").strip().lower()
+    if not raw:
+        raw = "false" if request.app.state.settings.is_production else "true"
+    show_details = raw in ("1", "true", "yes")
     try:
         provider = get_llm_provider(request)
     except Exception:

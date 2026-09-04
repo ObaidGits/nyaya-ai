@@ -174,9 +174,7 @@ def _apply_settings(request: Request, new_settings: Settings) -> None:
 
     request.app.state.settings = new_settings
     store: AdminSettingsStore = request.app.state.admin_store
-    rebuild_pool_runtime(
-        request.app.state, store, new_settings, request.app.state.llm_registry
-    )
+    rebuild_pool_runtime(request.app.state, store, new_settings, request.app.state.llm_registry)
     retrieval = _build_retrieval(new_settings, request)
     request.app.state.retrieval_service = retrieval
     request.app.state.llm_health_cache = None
@@ -664,9 +662,7 @@ async def test_tts(request: Request, _: AdminDep) -> TestResult:
 _STT_PROVIDER_NAMES: frozenset[str] = frozenset(
     {"faster-whisper", "whisper", "indicconformer", "openai", "browser"}
 )
-_TTS_PROVIDER_NAMES: frozenset[str] = frozenset(
-    {"piper", "parler-tts", "openai", "browser"}
-)
+_TTS_PROVIDER_NAMES: frozenset[str] = frozenset({"piper", "parler-tts", "openai", "browser"})
 
 
 class PoolSaveRequest(BaseModel):
@@ -720,9 +716,7 @@ async def _verify_pool_entry(
 
         registry = cast("ProviderRegistry", request.app.state.llm_registry)
         try:
-            provider = registry.create(
-                entry.provider, entry_settings(settings, entry, api_key)
-            )
+            provider = registry.create(entry.provider, entry_settings(settings, entry, api_key))
         except UnknownProviderError as exc:
             return False, str(exc)
         health = await provider.probe(verify_chat=True)
@@ -733,17 +727,19 @@ async def _verify_pool_entry(
     from app.speech.pool import build_speech_entry_provider
 
     try:
-        provider = build_speech_entry_provider(settings, entry, api_key, pool_name)
+        speech_provider = build_speech_entry_provider(settings, entry, api_key, pool_name)
     except AppError as exc:
         return False, exc.message
     except Exception:
-        return False, f"The '{entry.provider}' {pool_name.upper()} provider could not be constructed."
+        return False, (
+            f"The '{entry.provider}' {pool_name.upper()} provider could not be constructed."
+        )
     if entry.provider == "openai":
         try:
             if pool_name == "tts":
-                await provider.synthesize("Test.", language="en")  # type: ignore[attr-defined]
+                await speech_provider.synthesize("Test.", language="en")  # type: ignore[attr-defined]
             else:
-                await provider.transcribe(  # type: ignore[attr-defined]
+                await speech_provider.transcribe(  # type: ignore[attr-defined]
                     _silence_wav(), mime_type="audio/wav", language=None
                 )
         except AppError as exc:
@@ -781,9 +777,7 @@ def _pools_view(request: Request) -> dict[str, Any]:
                     "health": health,
                 }
             )
-        failover_active = (
-            runtime is not None and getattr(runtime, name, None) is not None
-        )
+        failover_active = runtime is not None and getattr(runtime, name, None) is not None
         views[name] = {
             "entries": entries,
             "default_entry_id": config.default_entry_id,
@@ -814,13 +808,9 @@ async def get_providers(request: Request, _: AdminDep) -> dict[str, Any]:
 
 
 @router.post("/providers/test")
-async def test_pool_entry(
-    request: Request, _: AdminDep, body: PoolEntryTestRequest
-) -> TestResult:
+async def test_pool_entry(request: Request, _: AdminDep, body: PoolEntryTestRequest) -> TestResult:
     start = time.monotonic()
-    ok, message = await _verify_pool_entry(
-        request, body.pool, body.entry, body.api_key
-    )
+    ok, message = await _verify_pool_entry(request, body.pool, body.entry, body.api_key)
     return TestResult(
         success=ok,
         latency_ms=int((time.monotonic() - start) * 1000),
@@ -837,11 +827,7 @@ async def put_providers(
     registry = cast("ProviderRegistry", request.app.state.llm_registry)
 
     # -- structural validation ------------------------------------------------
-    pools = {
-        name: config
-        for name, config in body.pools.items()
-        if name in ("llm", "stt", "tts")
-    }
+    pools = {name: config for name, config in body.pools.items() if name in ("llm", "stt", "tts")}
     for name, config in pools.items():
         try:
             config.validate_default()
@@ -924,7 +910,7 @@ async def put_providers(
             # only pool-scoped keys are unpacked here.
             if not key.startswith(POOL_SECRET_PREFIX):
                 continue
-            _, pool_name, entry_id = key.split(":", 2)
+            _prefix, pool_name, entry_id = key.split(":", 2)
             pool_secrets.set(pool_name, entry_id, value)
         failures: list[str] = []
         for name, config in pools.items():
@@ -956,11 +942,7 @@ async def put_providers(
     rebuild_pool_runtime(request.app.state, store, settings, registry)
     logger.info(
         "admin provider pools updated",
-        extra={
-            "pools": {
-                name: len(config.entries) for name, config in pools.items()
-            }
-        },
+        extra={"pools": {name: len(config.entries) for name, config in pools.items()}},
     )
     return _pools_view(request)
 

@@ -14,6 +14,7 @@ from app.core.errors import LLMProviderNotConfiguredError
 from app.core.health import CheckRegistry
 from app.llm.base import LLMProvider
 from app.llm.registry import ProviderRegistry, UnknownProviderError
+from app.providers.runtime import ProviderPoolRuntime
 
 
 def get_app_settings(request: Request) -> Settings:
@@ -38,7 +39,7 @@ def get_llm_provider(request: Request) -> LLMProvider:
     default entry first); with no pool — or an empty one — the unchanged
     single-provider ENV path applies.
     """
-    runtime = getattr(request.app.state, "provider_pool_runtime", None)
+    runtime: ProviderPoolRuntime | None = getattr(request.app.state, "provider_pool_runtime", None)
     if runtime is not None and runtime.llm is not None:
         return runtime.llm
     settings = cast(Settings, request.app.state.settings)

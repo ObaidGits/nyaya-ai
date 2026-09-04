@@ -10,6 +10,7 @@ fall back to the unchanged single-provider ENV path.
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 from pydantic import SecretStr
@@ -40,9 +41,7 @@ logger = logging.getLogger(__name__)
 _OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 
 
-def entry_settings(
-    base: Settings, entry: ProviderEntryConfig, api_key: str
-) -> Settings:
+def entry_settings(base: Settings, entry: ProviderEntryConfig, api_key: str) -> Settings:
     """Effective Settings for one pool entry.
 
     Same semantics as the admin console draft: an entry-specified base_url
@@ -91,9 +90,7 @@ class FailoverLLMProvider(LLMProvider):
     ) -> None:
         self._config = config
         self._providers = providers
-        self._router = FailoverRouter(
-            "llm", config, self._resolve, board, policy
-        )
+        self._router = FailoverRouter("llm", config, self._resolve, board, policy)
         self._board = board
         #: Entry that served the most recent request ("unknown" before
         #: the first request) — surfaced to admin/metrics, never guessed.
@@ -105,22 +102,18 @@ class FailoverLLMProvider(LLMProvider):
     # -- LLMProvider contract ---------------------------------------
 
     async def generate(self, request: GenerationRequest) -> GenerationResult:
-        result, entry_id = await self._router.run(
-            lambda provider: provider.generate(request)
-        )
+        result, entry_id = await self._router.run(lambda provider: provider.generate(request))
         self.last_entry_id = entry_id
         return result
 
-    def stream(self, request: GenerationRequest):
+    def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
         return self._stream(request)
 
-    async def _stream(self, request: GenerationRequest):
+    async def _stream(self, request: GenerationRequest) -> AsyncIterator[str]:
         # FailoverRouter.stream does not report which entry won; after
         # consumption the health board's success recording is the
         # authoritative signal for last_entry_id (observability only).
-        router_stream = self._router.stream(
-            lambda provider: provider.stream(request)
-        )
+        router_stream = self._router.stream(lambda provider: provider.stream(request))
         try:
             async for chunk in router_stream:
                 yield chunk
@@ -138,12 +131,8 @@ class FailoverLLMProvider(LLMProvider):
     def metadata(self) -> ProviderMetadata:
         ordered = self._config.ordered_entries()
         if not ordered:
-            return ProviderMetadata(
-                provider="pool", model="(empty pool)", supports_streaming=True
-            )
-        primary = self._providers.get(
-            ordered[0].id
-        )
+            return ProviderMetadata(provider="pool", model="(empty pool)", supports_streaming=True)
+        primary = self._providers.get(ordered[0].id)
         if primary is None:
             return ProviderMetadata(
                 provider="pool", model="(unresolvable)", supports_streaming=True
@@ -179,14 +168,10 @@ class FailoverLLMProvider(LLMProvider):
                 model="(empty pool)",
                 detail="no enabled entries",
             )
-        healthy = next(
-            (s for s in states if s.state == ProviderHealthState.HEALTHY), None
-        )
+        healthy = next((s for s in states if s.state == ProviderHealthState.HEALTHY), None)
         if healthy is not None:
             return healthy
-        detail = "; ".join(
-            f"{s.provider}/{s.model}: {s.detail or s.state.value}" for s in states
-        )
+        detail = "; ".join(f"{s.provider}/{s.model}: {s.detail or s.state.value}" for s in states)
         return ProviderHealth(
             state=states[0].state,
             provider=states[0].provider,
@@ -212,12 +197,8 @@ def build_llm_failover_provider(
     providers: dict[str, LLMProvider] = {}
     for entry in config.enabled_entries():
         try:
-            entry_settings_obj = entry_settings(
-                settings, entry, secrets.get("llm", entry.id)
-            )
-            providers[entry.id] = registry.create(
-                entry.provider, entry_settings_obj
-            )
+            entry_settings_obj = entry_settings(settings, entry, secrets.get("llm", entry.id))
+            providers[entry.id] = registry.create(entry.provider, entry_settings_obj)
         except Exception:
             logger.exception(
                 "llm pool entry unbuildable, skipping",

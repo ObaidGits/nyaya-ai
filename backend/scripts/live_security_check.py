@@ -15,7 +15,7 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tests.documents.pdf_fixtures import make_pdf  # noqa: E402
+from tests.documents.pdf_fixtures import make_pdf
 
 BASE = "http://localhost:8000/api/v1"
 OWNER = f"secowner-{int(time.time())}"
@@ -77,9 +77,7 @@ def chat(c: httpx.Client, session: str, message: str) -> dict:
 
 def main() -> None:
     c = httpx.Client(base_url=BASE, timeout=180)
-    secret_doc = upload(
-        c, OWNER, "confidential-agreement.pdf", [INJECTION]
-    )
+    secret_doc = upload(c, OWNER, "confidential-agreement.pdf", [INJECTION])
 
     # 1. Cross-session isolation: intruder cannot see/status/delete/query.
     s = c.get(f"/documents/{secret_doc}/status", headers={"X-Session-Id": INTRUDER})
@@ -114,7 +112,9 @@ def main() -> None:
 
     # 4. Lifecycle: re-upload same filename (new id), delete, then query.
     time.sleep(4)
-    second = upload(c, OWNER, "confidential-agreement.pdf", ["Different content: rent is Rs 10,000."])
+    second = upload(
+        c, OWNER, "confidential-agreement.pdf", ["Different content: rent is Rs 10,000."]
+    )
     check("re-upload same filename -> new document id", second != secret_doc)
     r = c.delete(f"/documents/{second}", headers={"X-Session-Id": OWNER})
     check("delete own document -> 204/200", r.status_code in (200, 204), str(r.status_code))

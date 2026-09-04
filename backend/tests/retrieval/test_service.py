@@ -165,7 +165,9 @@ class _StubDocumentRetrieval:
     def __init__(self, hits: list[DocumentHit]) -> None:
         self._hits = hits
 
-    def retrieve(self, session_id: str, query: str, *, context_document_ids=None) -> DocumentEvidence:
+    def retrieve(
+        self, session_id: str, query: str, *, context_document_ids=None
+    ) -> DocumentEvidence:
         return DocumentEvidence(hits=self._hits)
 
 
@@ -413,8 +415,11 @@ def test_statute_route_no_fallback_when_documents_weak() -> None:
 def test_statute_route_no_fallback_when_statute_sufficient() -> None:
     """Sufficient statute evidence never triggers document retrieval: the
     fallback must not widen retrieval for in-scope statute questions."""
+
     class _Fails:
-        def retrieve(self, session_id: str, query: str, *, context_document_ids=None) -> DocumentEvidence:
+        def retrieve(
+            self, session_id: str, query: str, *, context_document_ids=None
+        ) -> DocumentEvidence:
             raise AssertionError("document retrieval must not run")
 
     service = _service(document_retrieval=_Fails())

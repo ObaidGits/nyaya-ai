@@ -215,7 +215,9 @@ def test_english_act_name_sentence_keeps_citation() -> None:
     # act name "Bharatiya Nyaya Sanhita" is intentionally absent: with this
     # synthetic TS corpus it is a statute the evidence does not contain
     # (see test_foreign_act_name_sentence_is_misattribution).
-    answer = "The word Nyaya appears in the Sanhita's title; section 103 covers punishment [TS s.103]."
+    answer = (
+        "The word Nyaya appears in the Sanhita's title; section 103 covers punishment [TS s.103]."
+    )
     sanitized, check = validate_citations(answer, _evidence())
     assert "[TS s.103]" in sanitized
     assert [c.label for c in check.valid_citations] == ["[TS s.103]"]
@@ -313,7 +315,10 @@ def test_first_person_document_quote_keeps_document_citation() -> None:
             page_end=1,
         )
     ]
-    answer = "Under instructions from our client Mrs. Anita Desai, the tenant must vacate [Document d01 p.1]."
+    answer = (
+        "Under instructions from our client Mrs. Anita Desai, the tenant must vacate"
+        " [Document d01 p.1]."
+    )
     sanitized, check = validate_citations(answer, _evidence(), document_hits=hits)
     assert "[Document d01 p.1]" in sanitized
     assert check.cited_document_ids == ["d01"]

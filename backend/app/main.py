@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
+from starlette.routing import BaseRoute
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.admin.store import AdminSettingsStore
@@ -246,7 +247,7 @@ def _build_route_label_map(app: FastAPI) -> dict[int, str]:
 
     labels: dict[int, str] = {}
 
-    def walk(routes: list, prefix: str) -> None:
+    def walk(routes: list[BaseRoute], prefix: str) -> None:
         for route in routes:
             kind = type(route).__name__
             if kind == "_IncludedRouter":  # FastAPI >= 0.116 lazy include
@@ -256,8 +257,10 @@ def _build_route_label_map(app: FastAPI) -> dict[int, str]:
                 walk(inner, prefix + str(getattr(context, "prefix", "") or ""))
             elif hasattr(route, "routes"):  # Mount-like
                 walk(list(route.routes), prefix + str(getattr(route, "path", "") or ""))
-            elif getattr(route, "path", None):
-                labels[id(route)] = f"{prefix}{route.path}"
+            else:
+                path = getattr(route, "path", None)
+                if path:
+                    labels[id(route)] = f"{prefix}{path}"
 
     walk(list(app.routes), "")
     return labels
@@ -423,9 +426,7 @@ def _build_documents(
             client = redis_module.Redis.from_url(settings.redis_url, decode_responses=True)
             client.ping()
             store = RedisDocumentStore(client)
-            index = RedisDocumentIndex(
-                client, ttl_seconds=settings.document_session_ttl_seconds
-            )
+            index = RedisDocumentIndex(client, ttl_seconds=settings.document_session_ttl_seconds)
             workspace = DocumentWorkspace(store, index, embedder)
             runner = ArqJobRunner(settings.redis_url)
         except Exception:

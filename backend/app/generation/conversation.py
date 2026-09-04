@@ -38,16 +38,13 @@ _GREETING_REPLIES: tuple[str, ...] = (
     "Hello there! I'm Nyaya. Bring me a question about the law, "
     "or a legal document you want to ask about.",
     "Hi! I'm Nyaya. What law question can I help with today?",
-    "Hey! I'm Nyaya. Ask me a question about the law, "
-    "or upload a legal document to dig into.",
-    "Greetings! I'm Nyaya. A law question or an uploaded document — "
-    "either works.",
+    "Hey! I'm Nyaya. Ask me a question about the law, or upload a legal document to dig into.",
+    "Greetings! I'm Nyaya. A law question or an uploaded document — either works.",
 )
 _MORNING_REPLIES: tuple[str, ...] = (
     "Good morning! I'm Nyaya. Ask me a question about the law, "
     "or upload a legal document to ask questions about it.",
-    "Good morning! I'm Nyaya — ready for your law questions, "
-    "or a document you want to ask about.",
+    "Good morning! I'm Nyaya — ready for your law questions, or a document you want to ask about.",
     "Morning! I'm Nyaya. What law question is on your mind?",
 )
 _AFTERNOON_REPLIES: tuple[str, ...] = (
@@ -59,8 +56,7 @@ _AFTERNOON_REPLIES: tuple[str, ...] = (
 _EVENING_REPLIES: tuple[str, ...] = (
     "Good evening! I'm Nyaya. Ask me a question about the law, "
     "or upload a legal document to ask questions about it.",
-    "Good evening! I'm Nyaya — ready when you are, with a law question "
-    "or a document.",
+    "Good evening! I'm Nyaya — ready when you are, with a law question or a document.",
     "Evening! I'm Nyaya. What law question can I answer for you?",
 )
 _THANKS_REPLIES: tuple[str, ...] = (
@@ -128,9 +124,7 @@ _REPLIES: dict[str, str] = {
 # Time-of-day greetings (English and romanized Hindi/Marathi) get their
 # own buckets so the reply can mirror the time of day.
 _PHRASES: dict[str, frozenset[str]] = {
-    "greeting": frozenset(
-        {"hi", "hello", "hey", "namaste", "namaskar", "namaskaar", "namaskaram"}
-    ),
+    "greeting": frozenset({"hi", "hello", "hey", "namaste", "namaskar", "namaskaar", "namaskaram"}),
     "greeting_morning": frozenset({"good morning", "suprabhat", "shubh prabhat"}),
     "greeting_afternoon": frozenset({"good afternoon", "shubh dopahar"}),
     "greeting_evening": frozenset({"good evening", "shubh sandhya"}),

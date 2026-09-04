@@ -37,6 +37,7 @@ from app.admin.secretbox import KEY_FILE_NAME, SecretBox
 from app.core.config import Settings
 from app.providers.models import (
     POOL_SECRET_PREFIX,
+    PoolSecrets,
     ProviderPoolConfig,
 )
 
@@ -345,10 +346,8 @@ class AdminSettingsStore:
             for name, raw in self.load()["pools"].items()
         }
 
-    def load_pool_secrets(self) -> "PoolSecrets":
+    def load_pool_secrets(self) -> PoolSecrets:
         """Per-entry API keys from the decrypted secrets section."""
-        from app.providers.models import PoolSecrets
-
         pool_secrets = PoolSecrets()
         for key, value in self.load()["secrets"].items():
             if key.startswith(POOL_SECRET_PREFIX):

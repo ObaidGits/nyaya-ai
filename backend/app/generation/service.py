@@ -106,10 +106,7 @@ def _refusal_reason_sentence(evidence: RetrievedEvidence) -> str | None:
             )
     for reason in reasons:
         if "document reference does not match any uploaded document" in reason:
-            return (
-                "That reference does not match any of the documents uploaded in "
-                "this session."
-            )
+            return "That reference does not match any of the documents uploaded in this session."
     for reason in reasons:
         if any(marker in reason for marker in _NO_SESSION_REASONS):
             return "No documents are uploaded in this session. Upload a document and ask again."

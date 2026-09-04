@@ -10,7 +10,7 @@ ENV/browser behavior untouched.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal, cast, overload
 
 from pydantic import SecretStr
 
@@ -48,8 +48,8 @@ def _entry_settings(
     if entry.base_url:
         updates[fields[2]] = entry.base_url
     if api_key:
-        updates["speech_stt_api_key" if "stt" in fields[0] else "speech_tts_api_key"] = (
-            SecretStr(api_key)
+        updates["speech_stt_api_key" if "stt" in fields[0] else "speech_tts_api_key"] = SecretStr(
+            api_key
         )
     return base.model_copy(update=updates)
 
@@ -77,16 +77,14 @@ class FailoverSTT(STTProvider):
         self._router = FailoverRouter("stt", config, self._resolve, board, policy)
         self.last_entry_id: str | None = None
 
-    def _resolve(self, entry: ProviderEntryConfig) -> object:
+    def _resolve(self, entry: ProviderEntryConfig) -> STTProvider:
         return self._providers[entry.id]
 
     async def transcribe(
         self, data: bytes, *, mime_type: str, language: str | None
     ) -> TranscriptionResult:
         result, entry_id = await self._router.run(
-            lambda provider: provider.transcribe(
-                data, mime_type=mime_type, language=language
-            )
+            lambda provider: provider.transcribe(data, mime_type=mime_type, language=language)
         )
         self.last_entry_id = entry_id
         return result
@@ -106,7 +104,7 @@ class FailoverTTS(TTSProvider):
         self._router = FailoverRouter("tts", config, self._resolve, board, policy)
         self.last_entry_id: str | None = None
 
-    def _resolve(self, entry: ProviderEntryConfig) -> object:
+    def _resolve(self, entry: ProviderEntryConfig) -> TTSProvider:
         return self._providers[entry.id]
 
     async def synthesize(self, text: str, *, language: str) -> SynthesisResult:
@@ -117,14 +115,36 @@ class FailoverTTS(TTSProvider):
         return result
 
 
+@overload
 def build_speech_failover(
-    kind: "str",
+    kind: Literal["stt"],
     config: ProviderPoolConfig,
     secrets: PoolSecrets,
     settings: Settings,
     board: HealthBoard,
     policy: FailoverPolicy | None = None,
-) -> object | None:
+) -> STTProvider | None: ...
+
+
+@overload
+def build_speech_failover(
+    kind: Literal["tts"],
+    config: ProviderPoolConfig,
+    secrets: PoolSecrets,
+    settings: Settings,
+    board: HealthBoard,
+    policy: FailoverPolicy | None = None,
+) -> TTSProvider | None: ...
+
+
+def build_speech_failover(
+    kind: str,
+    config: ProviderPoolConfig,
+    secrets: PoolSecrets,
+    settings: Settings,
+    board: HealthBoard,
+    policy: FailoverPolicy | None = None,
+) -> STTProvider | TTSProvider | None:
     """Build the STT or TTS failover wrapper; ``None`` when pool is empty.
 
     ``kind`` is "stt" or "tts". Local model providers (whisper etc.) load
@@ -145,7 +165,8 @@ def build_speech_failover(
             )
     if not providers:
         return None
-    wrapper_class = FailoverSTT if kind == "stt" else FailoverTTS
-    return wrapper_class(
-        config, providers, board, policy  # type: ignore[arg-type]
-    )
+    if kind == "stt":
+        stt_providers = cast("dict[str, STTProvider]", providers)
+        return FailoverSTT(config, stt_providers, board, policy)
+    tts_providers = cast("dict[str, TTSProvider]", providers)
+    return FailoverTTS(config, tts_providers, board, policy)

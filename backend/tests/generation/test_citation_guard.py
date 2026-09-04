@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.documents.models import DocumentHit
 from app.generation.citation_guard import (
     build_sources,
     extract_citations,
     validate_citations,
 )
-from app.documents.models import DocumentHit
 from app.ingestion.models import Chunk
 from app.retrieval.models import ScoredChunk
 from tests.generation.fixtures import GOOD_ANSWER, MIXED_ANSWER, UNCITED_ANSWER, make_evidence
@@ -560,9 +560,7 @@ def test_citation_case_and_space_variants_normalize_and_validate() -> None:
     contract and validate against the same evidence."""
     evidence = _bns103_evidence()
     for label in ("[BNS S.103]", "[BNS s. 103]", "[bns s.103]"):
-        sanitized, check = validate_citations(
-            f"Murder is punished with death {label}.", evidence
-        )
+        sanitized, check = validate_citations(f"Murder is punished with death {label}.", evidence)
         assert check.valid_citations, label
         assert not check.removed_sentences, label
         assert "[BNS s.103]" in sanitized, label
@@ -573,9 +571,7 @@ def test_malformed_label_variants_are_removed() -> None:
     is removed rather than letting an unvalidated label pass as prose."""
     evidence = _bns103_evidence()
     for label in ("[BNS sec.103]", "[BNS §103]", "[BNS 103]", "[BNS s. 999]"):
-        sanitized, check = validate_citations(
-            f"Murder is punished with death {label}.", evidence
-        )
+        sanitized, check = validate_citations(f"Murder is punished with death {label}.", evidence)
         assert not check.valid_citations, label
         assert check.removed_sentences, label
     assert "\u202f" not in sanitized
@@ -613,9 +609,7 @@ def test_bracketed_asides_are_not_malformed_citations() -> None:
 
 def test_punishable_claim_without_citation_is_removed() -> None:
     evidence = _bns103_evidence()
-    sanitized, check = validate_citations(
-        "Cyber terrorism is punishable with death.", evidence
-    )
+    sanitized, check = validate_citations("Cyber terrorism is punishable with death.", evidence)
     assert sanitized == ""
     assert check.uncited_legal_claims == ["Cyber terrorism is punishable with death."]
 
@@ -626,8 +620,7 @@ def test_sibling_citation_cannot_ground_cross_offence_claim() -> None:
     vocabulary, so sibling grounding needs a substantive shared token."""
     evidence = _bns103_evidence()
     answer = (
-        "Theft is punishable with imprisonment for life. "
-        "This is the rule for murder [BNS s.103]."
+        "Theft is punishable with imprisonment for life. This is the rule for murder [BNS s.103]."
     )
     sanitized, check = validate_citations(answer, evidence)
     assert check.removed_sentences == ["Theft is punishable with imprisonment for life."]
@@ -696,9 +689,7 @@ def test_abbreviation_periods_do_not_split_sentences() -> None:
     )
     # The claim sentence keeps its citation; the case-name sentence is kept
     # as ordinary prose.
-    assert check.valid_citations == [
-        check.valid_citations[0]
-    ]  # exactly one citation validated
+    assert check.valid_citations == [check.valid_citations[0]]  # exactly one citation validated
     assert "Rs. 500" in sanitized
     assert "Mr. Smith v. Jones" in sanitized
 
@@ -710,9 +701,7 @@ def test_abbreviation_periods_do_not_split_sentences() -> None:
 
 def test_label_only_bullet_answer_sanitizes_to_empty() -> None:
     evidence = _bns103_evidence()
-    sanitized, check = validate_citations(
-        "* [BNS s.103]\n* [BNS s.103]", evidence
-    )
+    sanitized, _check = validate_citations("* [BNS s.103]\n* [BNS s.103]", evidence)
     assert sanitized == ""
 
 

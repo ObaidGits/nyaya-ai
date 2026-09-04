@@ -176,9 +176,7 @@ class OpenAICompatibleProvider(LLMProvider):
                         "cloud llm rejected request",
                         extra={"provider": self._provider, "status": status},
                     )
-                    _reject = CloudProviderError(
-                        "The generation provider rejected the request."
-                    )
+                    _reject = CloudProviderError("The generation provider rejected the request.")
                     _reject.permanent = True
                     raise _reject from None
                 logger.warning(
@@ -297,9 +295,7 @@ class OpenAICompatibleProvider(LLMProvider):
                         "cloud llm rejected request (stream)",
                         extra={"provider": self._provider, "status": status},
                     )
-                    _reject = CloudProviderError(
-                        "The generation provider rejected the request."
-                    )
+                    _reject = CloudProviderError("The generation provider rejected the request.")
                     _reject.permanent = True
                     raise _reject from None
                 logger.warning(

@@ -27,15 +27,13 @@ import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import cast
 
 from app.core.errors import AppError, LLMRateLimitError, LLMTimeoutError
 from app.providers.health import HealthBoard
 from app.providers.models import ProviderEntryConfig, ProviderPoolConfig
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 #: Minimum per-attempt time budget once the deadline is nearly spent.
 _ATTEMPT_FLOOR_SECONDS = 1.0
@@ -78,7 +76,7 @@ def classify_error(exc: BaseException) -> tuple[str, float]:
     return "unknown", 60.0
 
 
-class FailoverRouter:
+class FailoverRouter[P]:
     """Routes one capability's requests across its pool with failover.
 
     ``resolver`` maps an entry config to the live provider instance
@@ -91,7 +89,7 @@ class FailoverRouter:
         self,
         pool_name: str,
         config: ProviderPoolConfig,
-        resolver: Callable[[ProviderEntryConfig], object],
+        resolver: Callable[[ProviderEntryConfig], P],
         board: HealthBoard,
         policy: FailoverPolicy | None = None,
     ) -> None:
@@ -104,9 +102,9 @@ class FailoverRouter:
 
     # -- public API --------------------------------------------------
 
-    async def run(
+    async def run[T](
         self,
-        invoke: Callable[[object], Awaitable[T]],
+        invoke: Callable[[P], Awaitable[T]],
     ) -> tuple[T, str]:
         """Invoke ``invoke`` against entries in failover order.
 
@@ -144,7 +142,7 @@ class FailoverRouter:
                 )
             except asyncio.CancelledError:
                 raise
-            except BaseException as exc:  # noqa: BLE001 - classified below
+            except BaseException as exc:
                 self._record(entry_id, exc)
                 last_error = exc
                 logger.warning(
@@ -165,7 +163,7 @@ class FailoverRouter:
 
     def stream(
         self,
-        open_stream: Callable[[object], AsyncIterator[str]],
+        open_stream: Callable[[P], AsyncIterator[str]],
     ) -> AsyncIterator[str]:
         """Failover variant for token streams.
 
@@ -177,7 +175,7 @@ class FailoverRouter:
 
     async def _stream(
         self,
-        open_stream: Callable[[object], AsyncIterator[str]],
+        open_stream: Callable[[P], AsyncIterator[str]],
     ) -> AsyncIterator[str]:
         candidates = self._ordered_candidates()
         if not candidates:
@@ -202,7 +200,7 @@ class FailoverRouter:
                     yield chunk
             except asyncio.CancelledError:
                 raise
-            except BaseException as exc:  # noqa: BLE001 - classified below
+            except BaseException as exc:
                 self._record(entry_id, exc)
                 last_error = exc
                 if emitted:
@@ -226,13 +224,10 @@ class FailoverRouter:
 
     # -- internals ---------------------------------------------------
 
-    def _ordered_candidates(self) -> list[tuple[str, object]]:
+    def _ordered_candidates(self) -> list[tuple[str, P]]:
         """(entry_id, provider) pairs in try-order, cooldown-aware."""
         ordered = self._config.ordered_entries(self._rotation)
-        available = [
-            e for e in ordered
-            if self._board.is_available(self._pool_name, e.id)
-        ]
+        available = [e for e in ordered if self._board.is_available(self._pool_name, e.id)]
         if not available:
             # Every enabled entry is cooling: pick the one that failed
             # longest ago (its cooldown is closest to expiring) rather
@@ -241,16 +236,12 @@ class FailoverRouter:
 
             def _least_recent(entry: ProviderEntryConfig) -> float:
                 state = states.get(f"{self._pool_name}:{entry.id}")
-                return (
-                    state.last_failure_at
-                    if state and state.last_failure_at is not None
-                    else 0.0
-                )
+                return state.last_failure_at if state and state.last_failure_at is not None else 0.0
 
             available = sorted(ordered, key=_least_recent)
         return [(e.id, self._resolve(e)) for e in available]
 
-    def _resolve(self, entry: ProviderEntryConfig) -> object:
+    def _resolve(self, entry: ProviderEntryConfig) -> P:
         try:
             return self._resolver(entry)
         except Exception as exc:
@@ -258,7 +249,7 @@ class FailoverRouter:
             # (unknown name, invalid config): record and let run() see a
             # fresh error for this entry by re-raising lazily.
             self._record(entry.id, exc)
-            return _UnresolvableEntry(entry.id, exc)
+            return cast("P", _UnresolvableEntry(entry.id, exc))
 
     def _record(self, entry_id: str, exc: BaseException) -> None:
         error_class, cooldown = classify_error(exc)

@@ -276,9 +276,7 @@ async def test_first_attempt_refusal_still_refuses() -> None:
     """A refusal on the FIRST attempt (nothing valid preserved) stays a
     refusal: the preservation path must only rescue guarded answers."""
     provider = ScriptedProvider([REFUSAL_RESPONSE])
-    outcome = await GenerationService(provider).answer(
-        "question", make_evidence(query="theft")
-    )
+    outcome = await GenerationService(provider).answer("question", make_evidence(query="theft"))
     assert outcome.refused
     assert outcome.answer.startswith(REFUSAL_RESPONSE)
 
