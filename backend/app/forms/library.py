@@ -71,7 +71,13 @@ class FormsLibrary:
     def list_forms(
         self, *, query: str | None = None, needs_review: bool | None = None
     ) -> list[FormListItem]:
-        """List forms, optionally filtered by title/number query and review flag."""
+        """List forms, optionally filtered by title/number query and review flag.
+
+        A query filters by title/number AND ranks the survivors by
+        relevance: exact number match first, then phrase containment,
+        then word-order proximity, then the raw number of query tokens
+        present. Without a query the manifest order is preserved.
+        """
         items = [
             FormListItem(
                 form_number=form.form_number,
@@ -87,7 +93,14 @@ class FormsLibrary:
         if needs_review is not None:
             items = [item for item in items if item.needs_review == needs_review]
         if query:
-            items = [item for item in items if self._matches(item, query)]
+            scored = [
+                (score, index, item)
+                for index, item in enumerate(items)
+                if (score := self._match_score(item, query)) is not None
+            ]
+            # Stable sort: rank first, manifest position breaks ties.
+            scored.sort(key=lambda entry: (-entry[0], entry[1]))
+            items = [item for _, _, item in scored]
         return items
 
     def get_metadata(self, form_number: int) -> FormMetadata:
@@ -156,22 +169,53 @@ class FormsLibrary:
         return self._forms_dir / filename
 
     @staticmethod
-    def _matches(item: FormListItem, query: str) -> bool:
-        """Case-insensitive match on title, number, and slug tokens."""
+    def _match_score(item: FormListItem, query: str) -> int | None:
+        """Relevance score for ``query`` against one form; None = no match.
+
+        Matching is AND over the query's content tokens (stopwords like
+        "the"/"to" drop from BOTH sides, so "bond to keep the" requires
+        bond+keep, not merely "bond" as the old ANY-token match did).
+        Scoring favors: exact form number > full phrase containment >
+        tokens in their queried order > more distinct matched tokens.
+        """
         needle = query.strip().lower()
         if not needle:
-            return True
+            return 0
         if str(item.form_number) == needle:
-            return True
+            return 1_000_000
         haystack = f"{item.title} {slugify_title(item.title)}".lower()
         if needle in haystack:
-            return True
-        tokens = {
+            return 500_000
+        query_tokens = [t for t in re.split(r"[^a-z0-9]+", needle) if t]
+        content_tokens = {t for t in query_tokens if t not in _SEARCH_STOPWORDS}
+        if not content_tokens:
+            # Stopword-only query ("the"): fall back to raw token overlap.
+            content_tokens = set(query_tokens)
+        haystack_tokens = {
             token
             for token in re.split(r"[^a-z0-9]+", haystack)
             if token and token not in _SEARCH_STOPWORDS
         }
-        return bool(tokens & set(re.split(r"[^a-z0-9]+", needle)))
+        if not content_tokens <= haystack_tokens:
+            return None
+        score = 100 * len(content_tokens)
+        # Word order: do the matched tokens appear in the queried order
+        # (as a subsequence) in the title? "keep the peace" beats forms
+        # that merely contain both words scattered.
+        positions: dict[str, list[int]] = {}
+        for index, token in enumerate(t for t in re.split(r"[^a-z0-9]+", item.title.lower()) if t):
+            positions.setdefault(token, []).append(index)
+        cursor = -1
+        ordered = True
+        for token in [t for t in query_tokens if t in content_tokens]:
+            candidates = [p for p in positions.get(token, []) if p > cursor]
+            if not candidates:
+                ordered = False
+                break
+            cursor = min(candidates)
+        if ordered:
+            score += 50
+        return score
 
 
 def build_forms_library(root: str | Path) -> FormsLibrary | None:

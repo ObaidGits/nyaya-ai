@@ -68,6 +68,32 @@ def test_forms_search_filters_by_title(client: TestClient) -> None:
     assert [f["form_number"] for f in response.json()] == [3]
 
 
+def test_forms_search_requires_all_content_tokens(client: TestClient) -> None:
+    """AND semantics: every content word must appear; one shared word is not a match.
+
+    Regression for the ANY-token bug where "bond to keep the" also
+    returned every form merely containing "bond" (e.g. Form 1/4).
+    """
+    response = client.get("/api/v1/forms/search", params={"q": "summons warrant"})
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_forms_search_ranks_exact_phrase_first(client: TestClient) -> None:
+    """The form whose title IS the query phrase outranks forms that merely contain the words."""
+    response = client.get("/api/v1/forms/search", params={"q": "notice for appearance"})
+    assert response.status_code == 200
+    forms = response.json()
+    assert [f["form_number"] for f in forms] == [1]
+
+
+def test_forms_search_ranks_word_order_above_token_scatter(client: TestClient) -> None:
+    """Query tokens in queried order (subsequence) rank above scattered matches."""
+    response = client.get("/api/v1/forms/search", params={"q": "accused person summons"})
+    assert response.status_code == 200
+    assert [f["form_number"] for f in response.json()] == [2]
+
+
 def test_forms_search_by_number(client: TestClient) -> None:
     response = client.get("/api/v1/forms/search", params={"q": "2"})
     assert response.status_code == 200
